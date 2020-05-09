@@ -84,6 +84,8 @@ import Unsafe.Coerce
 import qualified Data.Text.IO                                       as T
 import Prelude                                                      hiding ( (!!), sum )
 
+import Data.Array.Accelerate.Pretty ()  -- Show (Acc (Array _ _))
+
 
 -- Program execution
 -- -----------------
@@ -94,7 +96,10 @@ run :: (HasCallStack, Sugar.Arrays a) => Smart.Acc a -> a
 run a = unsafePerformIO execute
   where
     !acc    = convertAcc a
+    -- Without debug mode, we have:
+    --   execute = toArr <$> evaluate (evalOpenAcc acc Empty)
     execute = do
+      -- putStrLn ("Interpreter: running: " ++ show a)
       Debug.dumpGraph $!! acc
       Debug.dumpSimplStats
       res <- phase "execute" Debug.elapsed $ evaluate $ evalOpenAcc acc Empty
@@ -999,7 +1004,7 @@ evalOpenExp pexp env aenv =
     ShapeSize shr sh            -> size shr (evalE sh)
     Foreign _ _ f e             -> evalOpenFun f Empty Empty $ evalE e
     Coerce t1 t2 e              -> evalCoerceScalar t1 t2 (evalE e)
-    ForwardDiff _               -> $internalError "evalPreOpenExp" "ForwardDiff unimplemented in Interpreter"
+    ForwardDiff _               -> internalError "evalPreOpenExp" "ForwardDiff unimplemented in Interpreter"
 
 
 -- Coercions
