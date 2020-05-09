@@ -77,6 +77,8 @@ import Text.Printf                                                  ( printf )
 import Unsafe.Coerce
 import Prelude                                                      hiding ( (!!), sum )
 
+import Data.Array.Accelerate.Pretty ()  -- Show (Acc (Array _ _))
+
 
 -- Program execution
 -- -----------------
@@ -87,7 +89,10 @@ run :: (HasCallStack, Sugar.Arrays a) => Smart.Acc a -> a
 run a = unsafePerformIO execute
   where
     !acc    = convertAcc a
+    -- Without debug mode, we have:
+    --   execute = toArr <$> evaluate (evalOpenAcc acc Empty)
     execute = do
+      -- putStrLn ("Interpreter: running: " ++ show a)
       D.dumpGraph $!! acc
       D.dumpSimplStats
       res <- phase "execute" D.elapsed $ evaluate $ evalOpenAcc acc Empty
