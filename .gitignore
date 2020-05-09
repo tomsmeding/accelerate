@@ -15,3 +15,5 @@
 /docs/_build
 *.hi
 *.o
+
+ast-docs.html
