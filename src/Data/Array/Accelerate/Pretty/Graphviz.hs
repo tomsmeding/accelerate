@@ -542,4 +542,4 @@ fvOpenExp env aenv = fv
     fv (Cond p t e)             = concat [ fv p, fv t, fv e ]
     fv (While p f x)            = concat [ fvF p, fvF f, fv x ]
     fv (Coerce _ _ e)           = fv e
-
+    fv (ForwardDiff e)          = fv e

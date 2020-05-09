@@ -242,6 +242,7 @@ simplifyOpenExp env = first getAny . cvtE
       Foreign tp ff f e         -> Foreign tp ff <$> first Any (simplifyOpenFun EmptyExp f) <*> cvtE e
       While p f x               -> While <$> cvtF env p <*> cvtF env f <*> cvtE x
       Coerce t1 t2 e            -> Coerce t1 t2 <$> cvtE e
+      ForwardDiff e             -> ForwardDiff <$> cvtE e
 
     cvtE' :: Gamma env' env' aenv -> OpenExp env' aenv e' -> (Any, OpenExp env' aenv e')
     cvtE' env' = first Any . simplifyOpenExp env'
@@ -561,6 +562,7 @@ summariseOpenExp = (terms +~ 1) . goE
         ShapeSize _ sh        -> travE sh
         PrimApp f x           -> travPrimFun f +++ travE x
         Coerce _ _ e          -> travE e
+        ForwardDiff e         -> travE e
 
     travPrimFun :: PrimFun f -> Stats
     travPrimFun = (ops +~ 1) . goF

@@ -406,6 +406,7 @@ prettyOpenExp ctx env aenv exp =
     LinearIndex arr ix    -> ppF2 (Operator "!!"         Infix L 9) (ppA arr) (ppE ix)
     Coerce _ tp x         -> ppF1 (Operator (withTypeRep tp "coerce") App L 10) (ppE x)
     Undef tp              -> withTypeRep tp "undef"
+    ForwardDiff x         -> ppF1 (Operator (withTypeRep (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) "forwardDiff") App L 10) (ppE x)
 
   where
     ppE :: OpenExp env aenv e -> Context -> Adoc
