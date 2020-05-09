@@ -1,0 +1,1 @@
+--clear --reverse-errors --no-height-limit --command="stack ghci --ghci-options=-fno-code --ghci-options=-fno-break-on-exception --ghci-options=-fno-break-on-error --ghci-options=-v1 --ghci-options=-ferror-spans --ghci-options=-fdiagnostics-color=always --ghci-options=-j"
