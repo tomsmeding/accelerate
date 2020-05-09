@@ -645,6 +645,10 @@ data OpenExp env aenv t where
                 -> OpenExp env aenv a
                 -> OpenExp env aenv b
 
+  -- Take the forward automatic derivative of the expression
+  ForwardDiff   :: PreOpenExp acc env aenv Float
+                -> PreOpenExp acc env aenv Float
+
 -- |Primitive constant values
 --
 data PrimConst ty where
@@ -1088,6 +1092,7 @@ rnfOpenExp topExp =
     Shape a                   -> rnfArrayVar a
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
+    ForwardDiff e             -> rnfE e
 
 rnfExpVar :: ExpVar env t -> ()
 rnfExpVar = rnfVar rnfScalarType
@@ -1308,6 +1313,7 @@ liftOpenExp pexp =
     Shape a                   -> [|| Shape $$(liftArrayVar a) ||]
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
+    ForwardDiff e             -> [|| ForwardDiff $$(liftE e) ||]
 
 liftELeftHandSide :: ELeftHandSide t env env' -> Q (TExp (ELeftHandSide t env env'))
 liftELeftHandSide = liftLeftHandSide liftScalarType
@@ -1452,4 +1458,3 @@ showExpOp LinearIndex{}     = "LinearIndex"
 showExpOp Shape{}           = "Shape"
 showExpOp ShapeSize{}       = "ShapeSize"
 showExpOp Coerce{}          = "Coerce"
-
