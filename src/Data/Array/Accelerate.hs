@@ -368,6 +368,9 @@ module Data.Array.Accelerate (
   -- *** Flow control
   (?), match, cond, while, iterate,
 
+  -- *** Automatic differentiation
+  gradientE,
+
   -- *** Scalar reduction
   sfoldl,
 

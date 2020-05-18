@@ -308,7 +308,7 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
       ShapeSize shr sh          -> ShapeSize shr <$> shrinkE sh
       Foreign repr ff f e       -> Foreign repr ff <$> shrinkF f <*> shrinkE e
       Coerce t1 t2 e            -> Coerce t1 t2 <$> shrinkE e
-      ForwardDiff e             -> ForwardDiff <$> shrinkE e
+      GradientE tp t f e        -> GradientE tp t <$> shrinkF f <*> shrinkE e
 
     shrinkF :: HasCallStack => OpenFun env aenv t -> (Any, OpenFun env aenv t)
     shrinkF = first Any . shrinkFun
@@ -510,7 +510,7 @@ usesOfExp range = countE
       ShapeSize _ sh            -> countE sh
       Foreign _ _ _ e           -> countE e
       Coerce _ _ e              -> countE e
-      ForwardDiff e             -> countE e
+      GradientE _ _ f e         -> usesOfFun range f <> countE e
 
 usesOfFun :: VarsRange env -> OpenFun env aenv f -> Count
 usesOfFun range (Lam lhs f) = usesOfFun (weakenVarsRange lhs range) f
@@ -599,7 +599,7 @@ usesOfPreAcc withShape countAcc idx = count
         | otherwise              -> 0
       Foreign _ _ _ e            -> countE e
       Coerce _ _ e               -> countE e
-      ForwardDiff e             -> countE e
+      GradientE _ _ f e          -> countE e  + countF f
 
     countME :: Maybe (OpenExp env aenv e) -> Int
     countME = maybe 0 countE

@@ -172,7 +172,7 @@ inlineVars lhsBound expr bound
       ShapeSize shr e1    -> ShapeSize shr <$> travE e1
       Undef t             -> Just $ Undef t
       Coerce t1 t2 e1     -> Coerce t1 t2 <$> travE e1
-      ForwardDiff e       -> ForwardDiff <$> travE e
+      GradientE tp t f e1 -> GradientE tp t <$> travF f <*> travE e1
 
       where
         travE :: OpenExp env1 aenv s -> Maybe (OpenExp env2 aenv s)
@@ -572,7 +572,7 @@ rebuildOpenExp v av@(ReindexAvar reindex) exp =
     ShapeSize shr sh    -> ShapeSize shr   <$> rebuildOpenExp v av sh
     Foreign tp ff f e   -> Foreign tp ff f <$> rebuildOpenExp v av e
     Coerce t1 t2 e      -> Coerce t1 t2    <$> rebuildOpenExp v av e
-    ForwardDiff e       -> ForwardDiff     <$> rebuildOpenExp k v av e
+    GradientE tp t f e  -> GradientE tp t  <$> rebuildFun v av f      <*> rebuildOpenExp v av e
 
 {-# INLINEABLE rebuildFun #-}
 rebuildFun

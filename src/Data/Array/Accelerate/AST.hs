@@ -615,6 +615,13 @@ data OpenExp env aenv t where
                 -> OpenExp env aenv dim
                 -> OpenExp env aenv Int
 
+  -- Take the automatic derivative of the expression
+  GradientE     :: TupleType t
+                -> ScalarType e
+                -> PreOpenFun acc env aenv (t -> e)
+                -> PreOpenExp acc env aenv t
+                -> PreOpenExp acc env aenv (((), e), t)
+
   -- Unsafe operations (may fail or result in undefined behaviour)
   -- An unspecified bit pattern
   Undef         :: ScalarType t
@@ -1069,7 +1076,7 @@ rnfOpenExp topExp =
     Shape a                   -> rnfArrayVar a
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
-    ForwardDiff e             -> rnfE e
+    GradientE tp t f e        -> rnfTupleType tp `seq` rnfScalarType t `seq` rnfF f `seq` rnfE e
 
 rnfExpVar :: ExpVar env t -> ()
 rnfExpVar = rnfVar rnfScalarType
@@ -1279,7 +1286,7 @@ liftOpenExp pexp =
     Shape a                   -> [|| Shape $$(liftArrayVar a) ||]
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
-    ForwardDiff e             -> [|| ForwardDiff $$(liftE e) ||]
+    GradientE tp t f e        -> [|| GradientE $$(liftTupleType tp) $$(liftScalarType t) $$(liftF f) $$(liftE e) ||]
 
 liftELeftHandSide :: ELeftHandSide t env env' -> Q (TExp (ELeftHandSide t env env'))
 liftELeftHandSide = liftLeftHandSide liftScalarType
@@ -1423,3 +1430,4 @@ showExpOp LinearIndex{}     = "LinearIndex"
 showExpOp Shape{}           = "Shape"
 showExpOp ShapeSize{}       = "ShapeSize"
 showExpOp Coerce{}          = "Coerce"
+showExpOp GradientE{}       = "GradientE"

@@ -597,6 +597,24 @@ test-suite nofib-interpreter
         -with-rtsopts=-A128M
         -with-rtsopts=-n4M
 
+test-suite tom-test
+  type:                 exitcode-stdio-1.0
+  default-language:     Haskell2010
+  hs-source-dirs:       test/tom
+  main-is:              Main.hs
+
+  build-depends:
+          base                          >= 4.10
+        , accelerate
+
+  ghc-options:
+        -O2
+        -Wall
+        -threaded
+        -rtsopts
+        -with-rtsopts=-A128M
+        -with-rtsopts=-n4M
+
 source-repository head
   Type:                 git
   Location:             git://github.com/AccelerateHS/accelerate.git

@@ -88,6 +88,9 @@ module Data.Array.Accelerate.Language (
   acond, awhile,
   cond,  while,
 
+  -- * Automatic differentiation
+  gradientE,
+
   -- * Array operations with a scalar result
   (!), (!!), shape, size, shapeSize,
 
@@ -118,7 +121,7 @@ import Data.Array.Accelerate.Classes.Integral
 import Data.Array.Accelerate.Classes.Num
 import Data.Array.Accelerate.Classes.Ord
 
-import Prelude                                                      ( ($), (.), Maybe(..), Char )
+import Prelude                                                      ( ($), (.), Maybe(..), Char, error )
 
 
 -- $setup
@@ -1339,6 +1342,20 @@ while c f (Exp e) =
   mkExp $ While @(EltR e) (eltR @e)
             (mkCoerce' . unExp . c . Exp)
             (unExp . f . Exp) e
+
+
+-- Automatic Differentiation
+-- -------------------------
+
+gradientE :: forall t e. (Elt t, Elt e)
+          => (Exp t -> Exp e)
+          -> Exp t
+          -> Exp (e, t)
+gradientE f (Exp e) = exp $ GradientE @(EltRepr t) @(EltRepr e) (eltType @t) (restrictScalars (eltType @e)) (unExp . f . Exp) e
+  where
+    restrictScalars :: TupleType a -> ScalarType a
+    restrictScalars (TupRsingle s) = s
+    restrictScalars _ = error "Function under operator gradientE must return scalar"
 
 
 -- Array operations with a scalar result
