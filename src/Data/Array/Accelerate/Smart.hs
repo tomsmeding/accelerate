@@ -579,6 +579,12 @@ data PreSmartExp acc exp t where
                 -> exp x
                 -> PreSmartExp acc exp y
 
+  GradientE     :: TupleType t
+                -> ScalarType e
+                -> (SmartExp t -> exp e)
+                -> exp t
+                -> PreSmartExp acc exp (((), e), t)
+
   Undef         :: ScalarType t
                 -> PreSmartExp acc exp t
 
