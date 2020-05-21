@@ -615,7 +615,9 @@ data OpenExp env aenv t where
                 -> OpenExp env aenv dim
                 -> OpenExp env aenv Int
 
-  -- Take the automatic derivative of the expression
+  -- Take the automatic derivative of the expression (of type F^n -> F, for some scalar type F)
+  -- Note the return type of this operator; (((), e), t) is the representation
+  -- type of (e', t'), if e and t are the representation types of e' and t'.
   GradientE     :: TupleType t
                 -> ScalarType e
                 -> PreOpenFun acc env aenv (t -> e)
