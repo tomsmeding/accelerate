@@ -110,6 +110,8 @@ convertExp (Evar (Var rep idx)) =
 convertExp Nil = Nil
 convertExp (Pair e1 e2) = Pair (convertExp e1) (convertExp e2)
 convertExp (Shape arr) = Shape (convertAcc arr)
+convertExp (Index arr dim) = Index (convertAcc arr) (convertExp dim)
+-- convertExp (GradientE func arg) = undefined
 convertExp e =
   $internalError "Tom.convertExp" ("Cannot convert Exp node <" ++ showPreExpOp e ++ ">")
 
