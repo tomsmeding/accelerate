@@ -615,12 +615,13 @@ data OpenExp env aenv t where
                 -> OpenExp env aenv dim
                 -> OpenExp env aenv Int
 
-  -- Take the automatic derivative of the expression (of type F^n -> F, for some scalar type F)
+  -- Take the automatic derivative of the expression (of type F^n -> F, for some scalar type F).
+  -- Note that the function under the gradient operator must be closed, i.e. not have free variables.
   -- Note the return type of this operator; (((), e), t) is the representation
   -- type of (e', t'), if e and t are the representation types of e' and t'.
   GradientE     :: TupleType t
                 -> ScalarType e
-                -> PreOpenFun acc env aenv (t -> e)
+                -> PreOpenFun acc env aenv (t -> e)  -- TJS: should be closed, but GHC doesn't like me
                 -> PreOpenExp acc env aenv t
                 -> PreOpenExp acc env aenv (((), e), t)
 

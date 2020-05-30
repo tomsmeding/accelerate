@@ -92,12 +92,11 @@ showPrimFun (PrimCountTrailingZeros _) = "PrimCountTrailingZeros"
 showPrimFun (PrimIsInfinite _)     = "PrimIsInfinite"
 showPrimFun (PrimToFloating _ _)   = "PrimToFloating"
 
-
--- dualise :: (Differentiable t, DifferentiableAtom e)
---         => PreOpenFun OpenAcc env aenv (t -> e)
---         -> PreOpenFun OpenAcc env aenv ((t, t) -> (e, e))
--- dualise (Lam f) = undefined
--- dualise (Body x) = undefined  -- if body has function type
+-- type ExpVar = Var ScalarType
+-- data Var s env t = Var (s t) (Idx env t)
+-- data Idx env t where
+--   ZeroIdx ::              Idx (env, t) t
+--   SuccIdx :: Idx env t -> Idx (env, s) t
 
 
 convertExp :: PreOpenExp OpenAcc env aenv e -> PreOpenExp OpenAcc env aenv e
