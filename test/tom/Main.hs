@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
 module Main where
 
@@ -22,7 +23,16 @@ optimise = do
   let theta = A.fromList (Z :. Optimise.dimension) (repeat 0)
   print (I.run (Optimise.optimise (A.use theta) (A.use (A.fromList Z [0.3]))))
 
+indexing :: IO ()
+indexing = do
+  print $ I.run $ let store = A.use (A.fromList (Z :. 6) [1.0::Float .. 6])
+                      source = A.use (A.fromList (Z :. 3) [42.0::Float, 10.0, 100.0])
+                  in A.map (\(A.T2 idx x) -> let Z :. i = A.unlift idx :: Z :. A.Exp Int
+                                             in (store A.! A.index1 (2 * i)) + x)
+                           (A.indexed source)
+
 main :: IO ()
 main = do
   logistic
   optimise
+  indexing
