@@ -10,15 +10,26 @@ module Data.Array.Accelerate.Trafo.Tom (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo.Config
+import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Array.Representation (showArrayR)
 
 import Debug.Trace
 
 
+showTupR :: TupR ScalarType arrs -> String
+showTupR TupRunit = "()"
+showTupR (TupRsingle rep) = show rep
+showTupR (TupRpair a b) = "(" ++ showTupR a ++ ", " ++ showTupR b ++ ")"
+
 showTupRA :: TupR ArrayR arrs -> String
 showTupRA TupRunit = "()"
 showTupRA (TupRsingle rep) = showArrayR rep ""
 showTupRA (TupRpair a b) = "(" ++ showTupRA a ++ ", " ++ showTupRA b ++ ")"
+
+showLHS :: LeftHandSide ScalarType arrs aenv aenv' -> String
+showLHS (LeftHandSideSingle s) = show s
+showLHS (LeftHandSideWildcard r) = showTupR r
+showLHS (LeftHandSidePair as bs) = "(" ++ showLHS as ++ ", " ++ showLHS bs ++ ")"
 
 showLHSA :: LeftHandSide ArrayR arrs aenv aenv' -> String
 showLHSA (LeftHandSideSingle s) = showArrayR s ""
@@ -107,6 +118,9 @@ convertExp (PrimApp f e) =
 convertExp (Evar (Var rep idx)) =
   trace ("Exp: Referencing variable at index: " ++ show (idxToInt idx)) $
     Evar (Var rep idx)
+convertExp (Let lhs def body) =
+  trace ("Exp: Let-assigning to: " ++ showLHS lhs) $
+    Let lhs (convertExp def) (convertExp body)
 convertExp Nil = Nil
 convertExp (Pair e1 e2) = Pair (convertExp e1) (convertExp e2)
 convertExp (Shape arr) = Shape (convertAcc arr)
@@ -136,9 +150,15 @@ convertAcc (OpenAcc (Use rep a)) = OpenAcc (Use rep a)
 convertAcc (OpenAcc (Fold f e a)) = OpenAcc (Fold (convertFun f) (convertExp e) (convertAcc a))
 convertAcc (OpenAcc (ZipWith ty f a1 a2)) = OpenAcc (ZipWith ty (convertFun f) (convertAcc a1) (convertAcc a2))
 convertAcc (OpenAcc (Backpermute rep e f a)) = OpenAcc (Backpermute rep (convertExp e) (convertFun f) (convertAcc a))
+convertAcc (OpenAcc (Awhile cond f a)) = OpenAcc (Awhile (convertAfun cond) (convertAfun f) (convertAcc a))
+convertAcc (OpenAcc (Replicate rep slice a)) = OpenAcc (Replicate rep (convertExp slice) (convertAcc a))
 convertAcc (OpenAcc acc) =
   $internalError "Tom.convertAcc" ("Cannot convert Acc node <" ++ showPreAccOp acc ++ ">")
 
 convertFun :: PreOpenFun OpenAcc env aenv t -> PreOpenFun OpenAcc env aenv t
 convertFun (Lam lhs f) = Lam lhs (convertFun f)
 convertFun (Body e) = Body (convertExp e)
+
+convertAfun :: PreOpenAfun OpenAcc aenv t -> PreOpenAfun OpenAcc aenv t
+convertAfun (Alam lhs f) = Alam lhs (convertAfun f)
+convertAfun (Abody a) = Abody (convertAcc a)
