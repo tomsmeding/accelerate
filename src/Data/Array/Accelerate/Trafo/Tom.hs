@@ -149,6 +149,7 @@ convertAcc (OpenAcc Anil) = OpenAcc Anil
 convertAcc (OpenAcc (Use rep a)) = OpenAcc (Use rep a)
 convertAcc (OpenAcc (Fold f e a)) = OpenAcc (Fold (convertFun f) (convertExp e) (convertAcc a))
 convertAcc (OpenAcc (ZipWith ty f a1 a2)) = OpenAcc (ZipWith ty (convertFun f) (convertAcc a1) (convertAcc a2))
+convertAcc (OpenAcc (Permute f a1 fi a2)) = OpenAcc (Permute (convertFun f) (convertAcc a1) (convertFun fi) (convertAcc a2))
 convertAcc (OpenAcc (Backpermute rep e f a)) = OpenAcc (Backpermute rep (convertExp e) (convertFun f) (convertAcc a))
 convertAcc (OpenAcc (Awhile cond f a)) = OpenAcc (Awhile (convertAfun cond) (convertAfun f) (convertAcc a))
 convertAcc (OpenAcc (Replicate rep slice a)) = OpenAcc (Replicate rep (convertExp slice) (convertAcc a))
