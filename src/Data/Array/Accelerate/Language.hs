@@ -1351,7 +1351,7 @@ gradientE :: forall t e. (Elt t, Elt e)
           => (Exp t -> Exp e)
           -> Exp t
           -> Exp (e, t)
-gradientE f (Exp e) = exp $ GradientE @(EltRepr t) @(EltRepr e) (eltType @t) (restrictScalars (eltType @e)) (unExp . f . Exp) e
+gradientE f (Exp e) = mkExp $ GradientE @(EltRepr t) @(EltRepr e) (eltType @t) (restrictScalars (eltType @e)) (unExp . f . Exp) e
   where
     restrictScalars :: TupleType a -> ScalarType a
     restrictScalars (TupRsingle s) = s

@@ -110,7 +110,12 @@ showPrimFun (PrimToFloating _ _)   = "PrimToFloating"
 --   SuccIdx :: Idx env t -> Idx (env, s) t
 
 
-convertExp :: PreOpenExp OpenAcc env aenv e -> PreOpenExp OpenAcc env aenv e
+convertVar :: Var ArrayR aenv t -> Var ArrayR aenv t
+convertVar (Var rep idx) =
+  trace ("Exp: Referencing array variable at index: " ++ show (idxToInt idx)) $
+    Var rep idx
+
+convertExp :: OpenExp env aenv e -> OpenExp env aenv e
 convertExp (Const ty con) = Const ty con
 convertExp (PrimApp f e) =
   trace ("Exp: applying primitive " ++ showPrimFun f) $
@@ -123,8 +128,8 @@ convertExp (Let lhs def body) =
     Let lhs (convertExp def) (convertExp body)
 convertExp Nil = Nil
 convertExp (Pair e1 e2) = Pair (convertExp e1) (convertExp e2)
-convertExp (Shape arr) = Shape (convertAcc arr)
-convertExp (Index arr dim) = Index (convertAcc arr) (convertExp dim)
+convertExp (Shape var) = Shape (convertVar var)
+convertExp (Index var dim) = Index (convertVar var) (convertExp dim)
 -- convertExp (GradientE func arg) = undefined
 convertExp e =
   $internalError "Tom.convertExp" ("Cannot convert Exp node <" ++ showPreExpOp e ++ ">")
@@ -157,7 +162,7 @@ convertAcc (OpenAcc (Generate rep sz f)) = OpenAcc (Generate rep (convertExp sz)
 convertAcc (OpenAcc acc) =
   $internalError "Tom.convertAcc" ("Cannot convert Acc node <" ++ showPreAccOp acc ++ ">")
 
-convertFun :: PreOpenFun OpenAcc env aenv t -> PreOpenFun OpenAcc env aenv t
+convertFun :: OpenFun env aenv t -> OpenFun env aenv t
 convertFun (Lam lhs f) = Lam lhs (convertFun f)
 convertFun (Body e) = Body (convertExp e)
 

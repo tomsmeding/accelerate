@@ -621,9 +621,9 @@ data OpenExp env aenv t where
   -- type of (e', t'), if e and t are the representation types of e' and t'.
   GradientE     :: TupleType t
                 -> ScalarType e
-                -> PreOpenFun acc env aenv (t -> e)  -- TJS: should be closed, but GHC doesn't like me
-                -> PreOpenExp acc env aenv t
-                -> PreOpenExp acc env aenv (((), e), t)
+                -> OpenFun env aenv (t -> e)  -- TJS: should be closed, but GHC doesn't like me
+                -> OpenExp env aenv t
+                -> OpenExp env aenv (((), e), t)
 
   -- Unsafe operations (may fail or result in undefined behaviour)
   -- An unspecified bit pattern
