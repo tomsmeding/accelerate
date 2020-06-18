@@ -6,6 +6,10 @@ resolver: lts-16.11
 packages:
 - .
 
+flags:
+  accelerate:
+    debug: true
+
 # extra-deps: []
 
 # Override default flag values for local packages and extra-deps
