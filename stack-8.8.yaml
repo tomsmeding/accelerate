@@ -9,6 +9,10 @@ packages:
 extra-deps:
 - text-format-0.3.2
 
+flags:
+  accelerate:
+    debug: true
+
 # Override default flag values for local packages and extra-deps
 # flags: {}
 
