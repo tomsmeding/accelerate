@@ -283,6 +283,8 @@ library
         , containers                    >= 0.3
         , cryptonite                    >= 0.21
         , deepseq                       >= 1.3
+        , dependent-map                 >= 0.4.0.0
+        , dependent-sum                 >= 0.7.1.0
         , directory                     >= 1.0
         , exceptions                    >= 0.6
         , filepath                      >= 1.0
@@ -296,6 +298,7 @@ library
         , prettyprinter                 >= 1.2
         , prettyprinter-ansi-terminal   >= 1.0
         , primitive                     >= 0.6.4
+        , some                          >= 1.0.1
         , tasty                         >= 0.11
         , template-haskell
         , terminal-size                 >= 0.3
@@ -409,8 +412,18 @@ library
         Data.Array.Accelerate.Pretty.Graphviz.Monad
         Data.Array.Accelerate.Pretty.Graphviz.Type
         Data.Array.Accelerate.Pretty.Print
+        Data.Array.Accelerate.Shows
         Data.Array.Accelerate.Trafo.Algebra
         Data.Array.Accelerate.Trafo.Environment
+        Data.Array.Accelerate.Trafo.AD.Algorithms
+        -- Data.Array.Accelerate.Trafo.AD.ADDep
+        Data.Array.Accelerate.Trafo.AD.Exp
+        Data.Array.Accelerate.Trafo.AD.TupleZip
+        -- Data.Array.Accelerate.Trafo.AD.TupleZipExp
+        Data.Array.Accelerate.Trafo.AD.Util
+        Data.Array.Accelerate.Trafo.Base
+        Data.Array.Accelerate.Trafo.Config
+        Data.Array.Accelerate.Trafo.Fusion
         Data.Array.Accelerate.Trafo.LetSplit
         Data.Array.Accelerate.Trafo.Shrink
         Data.Array.Accelerate.Trafo.Simplify
