@@ -25,21 +25,20 @@ sinkExp _ (Const ty x) = Const ty x
 sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
 sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
 sinkExp _ Nil = Nil
-sinkExp k (Let lhs rhs e) =
-    case generaliseLHS lhs of
-        GenLHS lhs' -> Let lhs' (sinkExp k rhs) (sinkExp (A.sinkWithLHS lhs lhs' k) e)
+sinkExp k (Get ti e) = Get ti (sinkExp k e)
+sinkExp k (Let lhs rhs e)
+  | GenLHS lhs' <- generaliseLHS lhs =
+      Let lhs' (sinkExp k rhs) (sinkExp (A.sinkWithLHS lhs lhs' k) e)
+  where
+    generaliseLHS :: ELeftHandSide t env1 env1' -> GenLHS env2 t
+    generaliseLHS (LeftHandSideWildcard ty) = GenLHS (LeftHandSideWildcard ty)
+    generaliseLHS (LeftHandSideSingle ty) = GenLHS (LeftHandSideSingle ty)
+    generaliseLHS (LeftHandSidePair lhs1 lhs2)
+      | GenLHS lhs1' <- generaliseLHS lhs1
+      , GenLHS lhs2' <- generaliseLHS lhs2 =
+          GenLHS (LeftHandSidePair lhs1' lhs2')
 sinkExp k (Var (A.Var sty idx)) = Var (A.Var sty (k >:> idx))
 sinkExp _ (Label lab) = Label lab
-
-generaliseLHS :: ELeftHandSide t env1 env1' -> GenLHS env2 t
-generaliseLHS (LeftHandSideWildcard ty) = GenLHS (LeftHandSideWildcard ty)
-generaliseLHS (LeftHandSideSingle ty) = GenLHS (LeftHandSideSingle ty)
-generaliseLHS (LeftHandSidePair lhs1 lhs2) =
-    case generaliseLHS lhs1 of
-        GenLHS lhs1' ->
-            case generaliseLHS lhs2 of
-                GenLHS lhs2' ->
-                    GenLHS (LeftHandSidePair lhs1' lhs2')
 
 varsZip :: Combiner lab
         -> TupleType t
