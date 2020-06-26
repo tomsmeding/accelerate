@@ -8,13 +8,15 @@ module Data.Array.Accelerate.Trafo.AD.Exp (
     Idx(..), Val(..), idxToInt, prj
 ) where
 
--- import Data.GADT.Show
+import Data.GADT.Compare
+import Data.GADT.Show
 
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST as A
 import Data.Array.Accelerate.AST (Idx(..), Val(..), idxToInt, prj)
 import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Shows
+import Data.Array.Accelerate.Trafo.AD.Orphans ()
 
 
 -- De Bruijn
@@ -27,6 +29,14 @@ data TagVal tag env where
 data LabVal lab env where
     LEmpty :: LabVal lab ()
     LPush :: LabVal lab env -> DLabel lab t -> LabVal lab (env, t)
+
+-- Tuples
+-- ------
+
+data TupleIdx s t where
+    TIHere  :: TupleIdx s s
+    TILeft  :: TupleIdx s a -> TupleIdx s (a, b)
+    TIRight :: TupleIdx s b -> TupleIdx s (a, b)
 
 -- Expressions
 -- -----------
@@ -53,6 +63,12 @@ data OpenExp env lab t where
             -> OpenExp env lab (a, b)
 
     Nil     :: OpenExp env lab ()
+
+    -- Use this VERY sparingly. It has no equivalent in the real AST, so must
+    -- be laboriously back-converted using Let-bindings.
+    Get     :: TupleIdx s t
+            -> OpenExp env lab t
+            -> OpenExp env lab s
 
     Let     :: A.ELeftHandSide bnd_t env env'
             -> OpenExp env lab bnd_t
@@ -135,6 +151,13 @@ showsExpr labf seed env _ (Pair _ e1 e2) =
         showsExpr labf seed env 0 e2 . showString ")"
 showsExpr _ _ _ _ Nil =
     showString "()"
+showsExpr labf seed env d (Get ti e) = showParen (d > 10) $
+    showString (tiPrefix ti) . showsExpr labf seed env 10 e
+  where
+    tiPrefix :: TupleIdx s t -> String
+    tiPrefix TIHere = ""
+    tiPrefix (TILeft ti') = "fst " ++ tiPrefix ti'
+    tiPrefix (TIRight ti') = "snd " ++ tiPrefix ti'
 showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
     let (descr, seed') = namifyLHS topseed toplhs
         env' = descr : env
@@ -163,11 +186,26 @@ showsExpr labf _ _ d (Label (DLabel ty lab)) = showParen (d > 0) $
 instance Show lab => Show (OpenExp env lab t) where
     showsPrec = showsExpr show 0 []
 
--- instance Show lab => GShow (DLabel lab) where
---     gshowsPrec = showsPrec
+instance Show lab => GShow (DLabel lab) where
+    gshowsPrec = showsPrec
 
--- instance Show lab => GShow (OpenExp env lab) where
---     gshowsPrec = showsPrec
+instance Show lab => GShow (OpenExp env lab) where
+    gshowsPrec = showsPrec
+
+instance GEq (DLabel lab) where
+    geq (DLabel ty1 _) (DLabel ty2 _) = do
+        Refl <- geq ty1 ty2
+        return Refl
+
+instance Ord lab => GCompare (DLabel lab) where
+    gcompare (DLabel ty1 lab1) (DLabel ty2 lab2) =
+        case gcompare ty1 ty2 of
+          GLT -> GLT
+          GGT -> GGT
+          GEQ -> case compare lab1 lab2 of
+                   LT -> GLT
+                   EQ -> GEQ
+                   GT -> GGT
 
 -- Auxiliary functions
 -- -------------------
@@ -177,6 +215,14 @@ typeOf (Const ty _) = TupRsingle ty
 typeOf (PrimApp ty _ _) = ty
 typeOf (Pair ty _ _) = ty
 typeOf Nil = TupRunit
+typeOf (Get ti e) = subType ti (typeOf e)
+  where
+    subType :: TupleIdx s t -> TupleType t -> TupleType s
+    subType TIHere ty = ty
+    subType (TILeft ti') (TupRpair ty _) = subType ti' ty
+    subType (TIRight ti') (TupRpair _ ty) = subType ti' ty
+    subType (TILeft _) (TupRsingle _) = error "impossible GADT"
+    subType (TIRight _) (TupRsingle _) = error "impossible GADT"
 typeOf (Let _ _ body) = typeOf body
 typeOf (Var (A.Var ty _)) = TupRsingle ty
 typeOf (Label (DLabel ty _)) = ty

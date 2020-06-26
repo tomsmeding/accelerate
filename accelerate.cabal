@@ -416,8 +416,9 @@ library
         Data.Array.Accelerate.Trafo.Algebra
         Data.Array.Accelerate.Trafo.Environment
         Data.Array.Accelerate.Trafo.AD.Algorithms
-        -- Data.Array.Accelerate.Trafo.AD.ADDep
+        Data.Array.Accelerate.Trafo.AD.ADDep
         Data.Array.Accelerate.Trafo.AD.Exp
+        Data.Array.Accelerate.Trafo.AD.Orphans
         Data.Array.Accelerate.Trafo.AD.Sink
         Data.Array.Accelerate.Trafo.AD.TupleZip
         -- Data.Array.Accelerate.Trafo.AD.TupleZipExp
