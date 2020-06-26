@@ -6,39 +6,18 @@ module Data.Array.Accelerate.Trafo.AD.TupleZip (
 ) where
 
 import qualified Data.Array.Accelerate.AST as A
-import Data.Array.Accelerate.AST ((>:>), weakenWithLHS, weakenId, ELeftHandSide, LeftHandSide(..))
+import Data.Array.Accelerate.AST (weakenWithLHS, weakenId)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo.Base
 import Data.Array.Accelerate.Trafo.AD.Exp
+import Data.Array.Accelerate.Trafo.AD.Sink
 
-
-data GenLHS env t = forall env'. GenLHS (ELeftHandSide t env env')
 
 type Combiner lab =
   forall s env.
     ScalarType s -> OpenExp env lab s
                  -> OpenExp env lab s
                  -> Maybe (OpenExp env lab s)
-
-sinkExp :: env A.:> env' -> OpenExp env lab t -> OpenExp env' lab t
-sinkExp _ (Const ty x) = Const ty x
-sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
-sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
-sinkExp _ Nil = Nil
-sinkExp k (Get ti e) = Get ti (sinkExp k e)
-sinkExp k (Let lhs rhs e)
-  | GenLHS lhs' <- generaliseLHS lhs =
-      Let lhs' (sinkExp k rhs) (sinkExp (A.sinkWithLHS lhs lhs' k) e)
-  where
-    generaliseLHS :: ELeftHandSide t env1 env1' -> GenLHS env2 t
-    generaliseLHS (LeftHandSideWildcard ty) = GenLHS (LeftHandSideWildcard ty)
-    generaliseLHS (LeftHandSideSingle ty) = GenLHS (LeftHandSideSingle ty)
-    generaliseLHS (LeftHandSidePair lhs1 lhs2)
-      | GenLHS lhs1' <- generaliseLHS lhs1
-      , GenLHS lhs2' <- generaliseLHS lhs2 =
-          GenLHS (LeftHandSidePair lhs1' lhs2')
-sinkExp k (Var (A.Var sty idx)) = Var (A.Var sty (k >:> idx))
-sinkExp _ (Label lab) = Label lab
 
 varsZip :: Combiner lab
         -> TupleType t
