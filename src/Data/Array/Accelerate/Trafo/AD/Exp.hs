@@ -42,9 +42,14 @@ data TupleIdx s t where
 -- -----------
 
 data DLabel lab t =
-    DLabel { labelType :: TupleType t
+    DLabel { labelType :: ScalarType t
            , labelLabel :: lab }
   deriving (Show)
+
+data DLabels lab t where
+    DLNil :: DLabels lab ()
+    DLPair :: DLabels lab t1 -> DLabels lab t2 -> DLabels lab (t1, t2)
+    DLScalar :: DLabel lab s -> DLabels lab s
 
 -- TODO: Check how many reified types can be removed in this AST
 data OpenExp env lab t where
@@ -78,7 +83,7 @@ data OpenExp env lab t where
     Var     :: A.ExpVar env t
             -> OpenExp env lab t
 
-    Label   :: DLabel lab t
+    Label   :: DLabels lab t
             -> OpenExp env lab t
 
 type Exp = OpenExp ()
