@@ -43,11 +43,16 @@ newtype IdGen a = IdGen (State Int a)
 evalIdGen :: IdGen a -> a
 evalIdGen (IdGen s) = evalState s 1
 
-genId :: TupleType t -> IdGen (DLabel Int t)
-genId ty = state (\s -> (DLabel ty s, succ s))
+genScalarId :: ScalarType t -> IdGen (DLabel Int t)
+genScalarId ty = state (\s -> (DLabel ty s, succ s))
+
+genId :: TupleType t -> IdGen (DLabels Int t)
+genId TupRunit = return DLNil
+genId (TupRsingle ty) = DLScalar <$> genScalarId ty
+genId (TupRpair t1 t2) = DLPair <$> genId t1 <*> genId t2
 
 
-type Exploded lab res = (DLabel lab res, DMap (DLabel lab) (Exp lab))
+type Exploded lab res = (DLabels lab res, DMap (DLabel lab) (Exp lab))
 
 showExploded :: (Ord lab, Show lab) => Exploded lab t -> String
 showExploded (endlab, nodemap) = "(" ++ show endlab ++ ", " ++ showNodemap nodemap ++ ")"
@@ -87,45 +92,50 @@ explode labelenv e = evalIdGen (explode' labelenv e)
 explode' :: LabVal Int env -> OpenExp env unused t -> IdGen (Exploded Int t)
 explode' env = \case
     Const ty x -> do
-        lab <- genId (TupRsingle ty)
-        return (lab, DMap.singleton lab (Const ty x))
+        lab <- genScalarId ty
+        return (DLScalar lab, DMap.singleton lab (Const ty x))
     PrimApp ty f e -> do
-        (lab1, mp) <- explode' env e
-        lab <- genId ty
-        let pruned = PrimApp ty f (Label lab1)
-        return (lab, DMap.insert lab pruned mp)
-    Pair ty e1 e2 -> do
-        (lab1, mp1) <- explode' env e1
-        (lab2, mp2) <- explode' env e2
+        (labs1, mp) <- explode' env e
+        labs <- genId ty
+        let pruned = PrimApp ty f (Label labs1)
+        let mp' = tupleGetMap ty labs pruned
+            mp'' = DMap.unionWithKey (error "explode: Overlapping id's") mp mp'
+        return (labs, mp'')
+    Pair _ e1 e2 -> do
+        (labs1, mp1) <- explode' env e1
+        (labs2, mp2) <- explode' env e2
         let mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 mp2
-        lab <- genId ty
-        let pruned = Pair ty (Label lab1) (Label lab2)
-        return (lab, DMap.insert lab pruned mp)
-    Nil -> do
-        lab <- genId TupRunit
-        return (lab, DMap.singleton lab Nil)
+        return (DLPair labs1 labs2, mp)
+    Nil -> return (DLNil, DMap.empty)
     Let lhs rhs body -> do
         (lab1, mp1) <- explode' env rhs
-        (env', mpLHS) <- lpushLHS lhs env (Label lab1)
+        labs <- genId (typeOf rhs)
+        let (env', mpLHS) = lpushLHS lhs labs env (Label lab1)
         (lab2, mp2) <- explode' env' body
         let mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mpLHS, mp2]
         return (lab2, mp)
     Var (A.Var _ idx) -> do
         let lab = prjL idx env
-        return (lab, mempty)
+        return (DLScalar lab, mempty)
     Get _ _ -> error "explode: Unexpected Get"
     Label _ -> error "explode: Unexpected Label"
   where
-    lpushLHS :: A.ELeftHandSide t env env' -> LabVal Int env -> Exp Int t -> IdGen (LabVal Int env', DMap (DLabel Int) (Exp Int))
-    lpushLHS lhs labelenv rhs = case lhs of
-        A.LeftHandSidePair lhs1 lhs2 -> do
-            (labelenv1, mp1) <- lpushLHS lhs1 labelenv (smartFst rhs)
-            (labelenv2, mp2) <- lpushLHS lhs2 labelenv1 (smartSnd rhs)
-            return (labelenv2, DMap.unionWithKey (error "lpushLHS: Overlapping id's") mp1 mp2)
-        A.LeftHandSideSingle sty -> do
-            lab <- genId (TupRsingle sty)
-            return (LPush labelenv lab, DMap.singleton lab rhs)
-        A.LeftHandSideWildcard _ -> return (labelenv, mempty)
+    tupleGetMap :: TupleType t -> DLabels lab t -> Exp lab t -> DMap (DLabel lab) (Exp lab)
+    tupleGetMap TupRunit _ _ = DMap.empty
+    tupleGetMap (TupRsingle _) (DLScalar lab) ex = DMap.singleton lab ex
+    tupleGetMap (TupRpair t1 t2) (DLPair labs1 labs2) ex =
+        let mp1 = tupleGetMap t1 labs1 (smartFst ex)
+            mp2 = tupleGetMap t2 labs2 (smartSnd ex)
+        in DMap.unionWithKey (error "tupleGetMap: Overlapping id's") mp1 mp2
+
+    lpushLHS :: A.ELeftHandSide t env env' -> DLabels Int t -> LabVal Int env -> Exp Int t -> (LabVal Int env', DMap (DLabel Int) (Exp Int))
+    lpushLHS lhs labs labelenv rhs = case (lhs, labs) of
+        (A.LeftHandSidePair lhs1 lhs2, DLPair labs1 labs2) ->
+            let (labelenv1, mp1) = lpushLHS lhs1 labs1 labelenv (smartFst rhs)
+                (labelenv2, mp2) = lpushLHS lhs2 labs2 labelenv1 (smartSnd rhs)
+            in (labelenv2, DMap.unionWithKey (error "lpushLHS: Overlapping id's") mp1 mp2)
+        (A.LeftHandSideSingle _, DLScalar lab) -> (LPush labelenv lab, DMap.singleton lab rhs)
+        (A.LeftHandSideWildcard _, _) -> (labelenv, mempty)
 
     smartFst :: OpenExp env lab (t1, t2) -> OpenExp env lab t1
     smartFst (Get tidx ex) = Get (insertFst tidx) ex
