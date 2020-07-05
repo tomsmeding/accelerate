@@ -55,7 +55,7 @@ genId (TupRpair t1 t2) = DLPair <$> genId t1 <*> genId t2
 type Exploded lab res = (DLabels lab res, DMap (DLabel lab) (Exp lab))
 
 showExploded :: (Ord lab, Show lab) => Exploded lab t -> String
-showExploded (endlab, nodemap) = "(" ++ show endlab ++ ", " ++ showNodemap nodemap ++ ")"
+showExploded (endlab, nodemap) = "(" ++ showDLabels show endlab ++ ", " ++ showNodemap nodemap ++ ")"
 
 showNodemap :: (Ord lab, Show lab) => DMap (DLabel lab) (Exp lab) -> String
 showNodemap nodemap =
@@ -120,13 +120,14 @@ explode' env = \case
     Get _ _ -> error "explode: Unexpected Get"
     Label _ -> error "explode: Unexpected Label"
   where
-    tupleGetMap :: TupleType t -> DLabels lab t -> Exp lab t -> DMap (DLabel lab) (Exp lab)
+    tupleGetMap :: Ord lab => TupleType t -> DLabels lab t -> Exp lab t -> DMap (DLabel lab) (Exp lab)
     tupleGetMap TupRunit _ _ = DMap.empty
     tupleGetMap (TupRsingle _) (DLScalar lab) ex = DMap.singleton lab ex
     tupleGetMap (TupRpair t1 t2) (DLPair labs1 labs2) ex =
         let mp1 = tupleGetMap t1 labs1 (smartFst ex)
             mp2 = tupleGetMap t2 labs2 (smartSnd ex)
         in DMap.unionWithKey (error "tupleGetMap: Overlapping id's") mp1 mp2
+    tupleGetMap _ _ _ = error "tupleGetMap: impossible GADTs"
 
     lpushLHS :: A.ELeftHandSide t env env' -> DLabels Int t -> LabVal Int env -> Exp Int t -> (LabVal Int env', DMap (DLabel Int) (Exp Int))
     lpushLHS lhs labs labelenv rhs = case (lhs, labs) of
@@ -136,6 +137,7 @@ explode' env = \case
             in (labelenv2, DMap.unionWithKey (error "lpushLHS: Overlapping id's") mp1 mp2)
         (A.LeftHandSideSingle _, DLScalar lab) -> (LPush labelenv lab, DMap.singleton lab rhs)
         (A.LeftHandSideWildcard _, _) -> (labelenv, mempty)
+        (_, _) -> error "lpushLHS: impossible GADTs"
 
     smartFst :: OpenExp env lab (t1, t2) -> OpenExp env lab t1
     smartFst (Get tidx ex) = Get (insertFst tidx) ex
@@ -153,22 +155,36 @@ explode' env = \case
             insertSnd (TIRight ti) = TIRight (insertSnd ti)
     smartSnd ex = Get (TIRight TIHere) ex
 
-{-
 data PD a = P a | D a
   deriving (Show, Eq, Ord)
 
+{-
 primaldual :: Exploded Int Float
            -> (forall env. LabVal (PD Int) env -> OpenExp env (PD Int) t)
            -> Exp (PD Int) t
 primaldual exploded cont =
     primal exploded (\labelenv -> dual exploded labelenv cont)
+-}
 
 -- Resulting computation will only use P, never D
 primal :: Ord lab
        => Exploded lab res
        -> (forall env. LabVal (PD lab) env -> OpenExp env (PD lab) t)
        -> Exp (PD lab) t
-primal (endlab, nodemap) = primal' nodemap endlab LEmpty
+primal (endlab, nodemap) = primal'Tuple nodemap endlab LEmpty
+
+primal'Tuple :: Ord lab
+             => DMap (DLabel lab) (Exp lab)
+             -> DLabels lab t
+             -> LabVal (PD lab) env
+             -> (forall env'. LabVal (PD lab) env' -> OpenExp env' (PD lab) res)
+             -> OpenExp env (PD lab) res
+primal'Tuple nodemap labs labelenv cont = case labs of
+    DLNil -> cont labelenv
+    DLScalar lab -> primal' nodemap lab labelenv cont
+    DLPair labs1 labs2 ->
+        primal'Tuple nodemap labs1 labelenv $ \labelenv1 ->
+            primal'Tuple nodemap labs2 labelenv1 cont
 
 primal' :: Ord lab
         => DMap (DLabel lab) (Exp lab)
@@ -185,31 +201,42 @@ primal' nodemap lbl labelenv cont
       case nodemap DMap.! lbl of
           Const ty value ->
               let subexp = cont (LPush labelenv (fmapLabel P lbl))
-              in Let (Const ty value) subexp
+              in Let (A.LeftHandSideSingle ty) (Const ty value) subexp
 
-          PrimApp restype oper (Label arglbl) ->
-              primal' nodemap arglbl labelenv $ \labelenv' ->
-                  case labValFind labelenv' (fmapLabel P arglbl) of
-                      Just idx ->
-                          let subexp = cont (LPush labelenv' (fmapLabel P lbl))
-                          in Let (App restype oper (Var (labelType arglbl) idx)) subexp
-                      Nothing ->
-                          error "primal: App argument did not compute argument"
+          PrimApp restype oper (Label arglabs)
+            -- We can do this because 'labelType lbl' is a ScalarType, and that's
+            -- the same type as this expression node.
+            | TupRsingle restypeS <- restype ->
+                primal'Tuple nodemap arglabs labelenv $ \labelenv' ->
+                    case labValFinds labelenv' (fmapLabels P arglabs) of
+                        Just vars ->
+                            let subexp = cont (LPush labelenv' (fmapLabel P lbl))
+                            in Let (A.LeftHandSideSingle restypeS) (PrimApp restype oper (evars vars)) subexp
+                        Nothing ->
+                            error "primal: App argument did not compute argument"
 
-          Pair restype (Label arglbl1) (Label arglbl2) ->
-              primal' nodemap arglbl1 labelenv $ \labelenv1 ->
-              primal' nodemap arglbl2 labelenv1 $ \labelenv2 ->
-                  case (labValFind labelenv2 (fmapLabel P arglbl1)
-                       ,labValFind labelenv2 (fmapLabel P arglbl2)) of
-                    (Just idx1, Just idx2) ->
-                        let subexp = cont (LPush labelenv2 (fmapLabel P lbl))
-                        in Let (Pair restype (Var (labelType arglbl1) idx1) (Var (labelType arglbl2) idx2)) subexp
-                    _ ->
-                        error "primal: Pair arguments did not compute argument(s)"
+          Pair _ (Label arglabs1) (Label arglabs2) ->
+              primal'Tuple nodemap arglabs1 labelenv $ \labelenv1 ->
+                  primal'Tuple nodemap arglabs2 labelenv1 cont
+
+          Nil ->
+              cont labelenv
+
+          expr@(Get path (Label arglabs))
+            -- We can do this because 'labelType lbl' is a ScalarType, and that's
+            -- the same type as this expression node.
+            | TupRsingle sty <- typeOf expr
+            , DLScalar lab <- pickDLabels path arglabs ->
+                primal' nodemap lab labelenv $ \labelenv' ->
+                    case labValFind labelenv' (fmapLabel P lab) of
+                        Just idx ->
+                            Let (A.LeftHandSideSingle sty) (Var (A.Var sty idx))
+                                (cont (LPush labelenv' (fmapLabel P lbl)))
+                        Nothing ->
+                            error "primal: Get argument did not compute argument"
 
           _ ->
               error "primal: Unexpected node shape in Exploded"
--}
 
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the environment is needed.
@@ -571,18 +598,18 @@ instance IsMaybeAdditive TupleType where
     maybeExpPlus ty e1 e2 = tupleZip ty maybeExpPlus e1 e2
 
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
-expLabelParents :: OpenExp env lab t -> [AnyLabel lab]
-expLabelParents = \case
-    Const _ _ -> []
-    PrimApp _ _ e -> [fromLabel e]
-    Pair _ e1 e2 -> [fromLabel e1, fromLabel e2]
-    Nil -> []
-    Get _ e -> [fromLabel e]
-    Let _ _ _ -> unimplemented "Let"
-    Var _ -> unimplemented "Var"
-    Label _ -> unimplemented "Label"
-  where
-    unimplemented name =
-        error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
-    fromLabel (Label lbl) = AnyLabel lbl
-    fromLabel _ = error ("expLabelParents: Parent is not a label")
+-- expLabelParents :: OpenExp env lab t -> [AnyLabel lab]
+-- expLabelParents = \case
+--     Const _ _ -> []
+--     PrimApp _ _ e -> [fromLabel e]
+--     Pair _ e1 e2 -> [fromLabel e1, fromLabel e2]
+--     Nil -> []
+--     Get _ e -> [fromLabel e]
+--     Let _ _ _ -> unimplemented "Let"
+--     Var _ -> unimplemented "Var"
+--     Label _ -> unimplemented "Label"
+--   where
+--     unimplemented name =
+--         error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
+--     fromLabel (Label lbl) = AnyLabel lbl
+--     fromLabel _ = error ("expLabelParents: Parent is not a label")

@@ -95,6 +95,9 @@ deriving instance Show lab => Show (AnyExp lab)
 data AnyTupleType = forall t. AnyTupleType (TupleType t)
 deriving instance Show AnyTupleType
 
+data AnyScalarType = forall t. AnyScalarType (ScalarType t)
+deriving instance Show AnyScalarType
+
 -- Instances
 -- ---------
 
@@ -137,6 +140,13 @@ showTuple TupRunit () = "()"
 showTuple (TupRsingle ty) s = showScalar ty s
 showTuple (TupRpair t1 t2) (a, b) =
     "(" ++ showTuple t1 a ++ ", " ++ showTuple t2 b ++ ")"
+
+showDLabels :: (lab -> String) -> DLabels lab t -> String
+showDLabels _ DLNil = "()"
+showDLabels labf (DLScalar (DLabel ty lab)) =
+    'L' : labf lab ++ " :: " ++ show ty
+showDLabels labf (DLPair labs1 labs2) =
+    "(" ++ showDLabels labf labs1 ++ ", " ++ showDLabels labf labs2 ++ ")"
 
 showsExpr :: (lab -> String) -> Int -> [String] -> Int -> OpenExp env lab t -> ShowS
 showsExpr _ _ _ _ (Const ty x) = showString (showScalar ty x)
@@ -182,8 +192,8 @@ showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
           (descr2, seed2) = namifyLHS seed1 lhs2
       in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", seed2)
 showsExpr _ _ env _ (Var (A.Var _ idx)) = showString (env !! idxToInt idx)
-showsExpr labf _ _ d (Label (DLabel ty lab)) = showParen (d > 0) $
-    showString ('L' : labf lab ++ " :: ") . showsPrec 1 ty
+showsExpr labf _ _ d (Label labs) = showParen (d > 0) $
+    showString (showDLabels labf labs)
 
 -- instance Show (OpenExp env Int t) where
 --     showsPrec = showsExpr subscript 0 []
@@ -230,7 +240,12 @@ typeOf (Get ti e) = subType ti (typeOf e)
     subType (TIRight _) (TupRsingle _) = error "impossible GADT"
 typeOf (Let _ _ body) = typeOf body
 typeOf (Var (A.Var ty _)) = TupRsingle ty
-typeOf (Label (DLabel ty _)) = ty
+typeOf (Label labs) = dlabelsType labs
+
+dlabelsType :: DLabels lab t -> TupleType t
+dlabelsType DLNil = TupRunit
+dlabelsType (DLScalar lab) = TupRsingle (labelType lab)
+dlabelsType (DLPair t1 t2) = TupRpair (dlabelsType t1) (dlabelsType t2)
 
 isInfixOp :: A.PrimFun ((a, b) -> c) -> Bool
 isInfixOp (A.PrimAdd _) = True
@@ -262,6 +277,12 @@ prettyPrimFun Prefix op = '(' : prettyPrimFun Infix op ++ ")"
 prettyPrimFun fixity op =
     error ("prettyPrimFun: not defined for " ++ show fixity ++ " " ++ showPrimFun op)
 
+pickDLabels :: TupleIdx t' t -> DLabels lab t -> DLabels lab t'
+pickDLabels TIHere labs = labs
+pickDLabels (TILeft path) (DLPair lab _) = pickDLabels path lab
+pickDLabels (TIRight path) (DLPair _ lab) = pickDLabels path lab
+pickDLabels _ _ = error "pickDLabel: impossible GADTs"
+
 prjL :: Idx env t -> LabVal lab env -> DLabel lab t
 prjL ZeroIdx (LPush _ x) = x
 prjL (SuccIdx idx) (LPush env _) = prjL idx env
@@ -280,7 +301,7 @@ uniqueLabVal LEmpty = True
 uniqueLabVal (LPush env (DLabel _ lab)) =
     not (labValContains env lab) && uniqueLabVal env
 
-data FoundTag env = forall t. FoundTag (TupleType t) (Idx env t)
+data FoundTag env = forall t. FoundTag (ScalarType t) (Idx env t)
 
 labValFind' :: Eq lab => LabVal lab env -> lab -> Maybe (FoundTag env)
 labValFind' LEmpty _ = Nothing
@@ -294,17 +315,44 @@ labValFind' (LPush env (DLabel ty lab)) target
 labValFind :: Eq lab => LabVal lab env -> DLabel lab t -> Maybe (Idx env t)
 labValFind LEmpty _ = Nothing
 labValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
-    | Just Refl <- matchTupleType ty ty2
+    | Just Refl <- matchScalarType ty ty2
     , lab == lab2 = Just ZeroIdx
     | otherwise =
         case labValFind env target of
             Just idx -> Just (SuccIdx idx)
             Nothing -> Nothing
 
+labValFinds :: Eq lab => LabVal lab env -> DLabels lab t -> Maybe (A.ExpVars env t)
+labValFinds labelenv labs = case labs of
+    DLNil -> Just A.VarsNil
+    DLScalar lab ->
+        A.VarsSingle . A.Var (labelType lab)
+            <$> labValFind labelenv lab
+    DLPair labs1 labs2 ->
+        A.VarsPair <$> labValFinds labelenv labs1
+                   <*> labValFinds labelenv labs2
+
 fmapLabel :: (lab -> lab') -> DLabel lab t -> DLabel lab' t
 fmapLabel f (DLabel ty lab) = DLabel ty (f lab)
 
-labValToList :: LabVal lab env -> [(AnyTupleType, lab)]
+fmapLabels :: (lab -> lab') -> DLabels lab t -> DLabels lab' t
+fmapLabels _ DLNil = DLNil
+fmapLabels f (DLScalar lab) = DLScalar (fmapLabel f lab)
+fmapLabels f (DLPair labs1 labs2) =
+    DLPair (fmapLabels f labs1) (fmapLabels f labs2)
+
+labValToList :: LabVal lab env -> [(AnyScalarType, lab)]
 labValToList LEmpty = []
 labValToList (LPush env (DLabel ty lab)) =
-    (AnyTupleType ty, lab) : labValToList env
+    (AnyScalarType ty, lab) : labValToList env
+
+evars :: A.ExpVars env t -> OpenExp env lab t
+evars = snd . evars'
+  where
+    evars' :: A.ExpVars env t -> (TupleType t, OpenExp env lab t)
+    evars' A.VarsNil = (TupRunit, Nil)
+    evars' (A.VarsSingle var@(A.Var ty _)) = (TupRsingle ty, Var var)
+    evars' (A.VarsPair vars1 vars2) =
+        let (t1, e1) = evars' vars1
+            (t2, e2) = evars' vars2
+        in (TupRpair t1 t2, Pair (TupRpair t1 t2) e1 e2)
