@@ -70,6 +70,21 @@ explodedAddNode lab expr (endlab, nodemap)
   | lab `DMap.notMember` nodemap = (endlab, DMap.insert lab expr nodemap)
   | otherwise = error "explodedAddNode: Label already exists in nodemap"
 
+-- TODO: This now takes a constant scalar value as the function argument, but
+-- this should be an ELeftHandSide, since that is also what we have in the
+-- context of a gradientE expression. Then the type of the 'expr' argument
+-- changes too.
+-- The label environment passed to 'explode' here should derive from that LHS.
+-- Maybe the value stored in the nodemap for the labels bound to the LHS should
+-- be of a new expression node type, say Arg, that models arguments with
+-- respect to which we are differentiating. If they then get type-level index
+-- into the top-level LHS here, say an Idx (that should work), then if the rest
+-- of the computation just considers them constants, we should be able to fill
+-- them in here at the end. To do this filling in, we'll have to recurse over
+-- the entire produced expression, incrementing indices along the way, and
+-- replace each Arg with a Var reference to the let-bound variable at the top
+-- level (which is inserted there as we go; we must do this as we go since
+-- otherwise the types won't match up).
 reverseAD :: ScalarType t -> t -> OpenExp ((), t) unused Float -> Exp (PD Int) t
 reverseAD paramtype param expr =
     let arglabel = DLabel paramtype (-1)
