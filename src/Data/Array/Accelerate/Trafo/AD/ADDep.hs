@@ -12,9 +12,9 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
-module Data.Array.Accelerate.Trafo.AD.ADDep
-  -- ( reverseAD )
-where
+module Data.Array.Accelerate.Trafo.AD.ADDep (
+  reverseAD
+) where
 
 import Control.Monad.State.Strict
 import Data.List (intercalate, sortOn)
@@ -30,11 +30,9 @@ import Debug.Trace
 
 import qualified Data.Array.Accelerate.AST as A
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Trafo.Substitution (weakenE)
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.TupleZip
-import Data.Array.Accelerate.Trafo.AD.Sink
 
 
 newtype IdGen a = IdGen (State Int a)
@@ -72,20 +70,22 @@ explodedAddNode lab expr (endlab, nodemap)
   | lab `DMap.notMember` nodemap = (endlab, DMap.insert lab expr nodemap)
   | otherwise = error "explodedAddNode: Label already exists in nodemap"
 
--- reverseAD :: TupleType t -> t -> OpenExp ((), t) unused Float -> Exp (PD Int) t
--- reverseAD paramtype param expr =
---     let arglabel = DLabel paramtype (-1)
---         exploded = explode (LPush LEmpty arglabel) expr
---         exploded' = explodedAddNode arglabel (Const paramtype param) exploded
---     in trace ("exploded: " ++ showExploded exploded') $
---        primaldual exploded' $ \labelenv ->
---            trace ("\nlabval in core: " ++ show (labValToList labelenv)) $
---            case labValFind labelenv (fmapLabel D arglabel) of
---              Just idx -> Var paramtype idx
---              Nothing -> error "reverseAD: dual did not compute adjoint of parameter"
+reverseAD :: ScalarType t -> t -> OpenExp ((), t) unused Float -> Exp (PD Int) t
+reverseAD paramtype param expr =
+    let arglabel = DLabel paramtype (-1)
+        exploded = explode (LPush LEmpty arglabel) expr
+        exploded' = explodedAddNode arglabel (Const paramtype param) exploded
+    in trace ("exploded: " ++ showExploded exploded') $
+       primaldual exploded' $ \labelenv ->
+           trace ("\nlabval in core: " ++ show (labValToList labelenv)) $
+           case labValFind labelenv (fmapLabel D arglabel) of
+             Just idx -> Var (A.Var paramtype idx)
+             Nothing -> error "reverseAD: dual did not compute adjoint of parameter"
 
--- Map will contain neither Let nor Var; also it will not contain Label, since
--- the original expression should not have included Label.
+-- Map will NOT contain:
+-- - Let or Var
+-- - Label: the original expression should not have included Label
+-- - Pair or Nil: eliminated by pairing of variable labels
 explode :: LabVal Int env -> OpenExp env unused t -> Exploded Int t
 explode labelenv e = evalIdGen (explode' labelenv e)
 
@@ -117,7 +117,7 @@ explode' env = \case
     Var (A.Var _ idx) -> do
         let lab = prjL idx env
         return (DLScalar lab, mempty)
-    Get _ _ -> error "explode: Unexpected Get"
+    Get _ _ _ -> error "explode: Unexpected Get"
     Label _ -> error "explode: Unexpected Label"
   where
     tupleGetMap :: Ord lab => TupleType t -> DLabels lab t -> Exp lab t -> DMap (DLabel lab) (Exp lab)
@@ -140,31 +140,35 @@ explode' env = \case
         (_, _) -> error "lpushLHS: impossible GADTs"
 
     smartFst :: OpenExp env lab (t1, t2) -> OpenExp env lab t1
-    smartFst (Get tidx ex) = Get (insertFst tidx) ex
+    smartFst (Get (TupRpair t1 _) tidx ex) = Get t1 (insertFst tidx) ex
       where insertFst :: TupleIdx (t1, t2) t -> TupleIdx t1 t
             insertFst TIHere = TILeft TIHere
             insertFst (TILeft ti) = TILeft (insertFst ti)
             insertFst (TIRight ti) = TIRight (insertFst ti)
-    smartFst ex = Get (TILeft TIHere) ex
+    smartFst ex
+      | TupRpair t1 _ <- typeOf ex
+      = Get t1 (TILeft TIHere) ex
+    smartFst _ = error "smartFst: impossible GADTs"
 
     smartSnd :: OpenExp env lab (t1, t2) -> OpenExp env lab t2
-    smartSnd (Get tidx ex) = Get (insertSnd tidx) ex
+    smartSnd (Get (TupRpair _ t2) tidx ex) = Get t2 (insertSnd tidx) ex
       where insertSnd :: TupleIdx (t1, t2) t -> TupleIdx t2 t
             insertSnd TIHere = TIRight TIHere
             insertSnd (TILeft ti) = TILeft (insertSnd ti)
             insertSnd (TIRight ti) = TIRight (insertSnd ti)
-    smartSnd ex = Get (TIRight TIHere) ex
+    smartSnd ex
+      | TupRpair _ t2 <- typeOf ex
+      = Get t2 (TIRight TIHere) ex
+    smartSnd _ = error "smartSnd: impossible GADTs"
 
 data PD a = P a | D a
   deriving (Show, Eq, Ord)
 
-{-
 primaldual :: Exploded Int Float
            -> (forall env. LabVal (PD Int) env -> OpenExp env (PD Int) t)
            -> Exp (PD Int) t
 primaldual exploded cont =
     primal exploded (\labelenv -> dual exploded labelenv cont)
--}
 
 -- Resulting computation will only use P, never D
 primal :: Ord lab
@@ -215,22 +219,15 @@ primal' nodemap lbl labelenv cont
                         Nothing ->
                             error "primal: App argument did not compute argument"
 
-          Pair _ (Label arglabs1) (Label arglabs2) ->
-              primal'Tuple nodemap arglabs1 labelenv $ \labelenv1 ->
-                  primal'Tuple nodemap arglabs2 labelenv1 cont
-
-          Nil ->
-              cont labelenv
-
-          expr@(Get path (Label arglabs))
+          Get restype path (Label arglabs)
             -- We can do this because 'labelType lbl' is a ScalarType, and that's
             -- the same type as this expression node.
-            | TupRsingle sty <- typeOf expr
+            | TupRsingle restypeS <- restype
             , DLScalar lab <- pickDLabels path arglabs ->
                 primal' nodemap lab labelenv $ \labelenv' ->
                     case labValFind labelenv' (fmapLabel P lab) of
                         Just idx ->
-                            Let (A.LeftHandSideSingle sty) (Var (A.Var sty idx))
+                            Let (A.LeftHandSideSingle restypeS) (Var (A.Var restypeS idx))
                                 (cont (LPush labelenv' (fmapLabel P lbl)))
                         Nothing ->
                             error "primal: Get argument did not compute argument"
@@ -247,7 +244,6 @@ data AnyLabel lab = forall t. AnyLabel (DLabel lab t)
 instance Show lab => Show (AnyLabel lab) where
     showsPrec d (AnyLabel lab) = showParen (d > 9) (showString "AnyLabel " . showsPrec 9 lab)
 
-{-
 -- The Ord and Eq instances refer only to 'a'.
 data OrdBox a b = OrdBox { _ordboxTag :: a, ordboxAuxiliary :: b }
 instance Eq  a => Eq  (OrdBox a b) where OrdBox x _    ==     OrdBox y _ = x == y
@@ -257,11 +253,10 @@ dual :: Exploded Int Float
      -> LabVal (PD Int) env
      -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) t)
      -> OpenExp env (PD Int) t
-dual (endlab, nodemap) labelenv cont =
+dual (DLScalar endlab, nodemap) labelenv cont =
     trace ("\nlabelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
-    let sflt = TupSingle TypeFloat
-        contribmap = DMap.singleton (fmapLabel D endlab) (AdjList (const [Const sflt 1.0]))
-    in dualGate nodemap labelorder labelenv contribmap cont
+    let contribmap = DMap.singleton (fmapLabel D endlab) (AdjList (const [Const (labelType endlab) 1.0]))
+    in dual' nodemap labelorder labelenv contribmap cont
   where
     -- Every numeric label is unique; we don't need the type information for that.
     -- We play fast and loose with that here: we use an 'OrdBox' for 'floodfill'
@@ -288,35 +283,15 @@ dual (endlab, nodemap) labelenv cont =
                           (\(AnyLabel l) -> parentmap Map.! labelLabel l)
 
 -- Note [dualGate split]
--- This function is only written explicitly, and not merged into dual', so that
--- the 'a' type variable in the signature of dual' can be mentioned explicitly
--- in a type signature wrapping the definition of the 'contribution' variable
--- in dual'. This is necessary, because the 'contribution' variable _must_ have
--- a type signature for GHC to understand it, and that type signature would
--- mention 'a', which would not be mentioned anywhere yet had the current label
--- 'lbl' been extracted from 'labels' ad-hoc in a subexpression of dual'.
-dualGate :: DMap (DLabel Int) (Exp Int)
-         -> [AnyLabel Int]
-         -> LabVal (PD Int) env
-         -> DMap (DLabel (PD Int)) (AdjList (PD Int))
-         -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
-         -> OpenExp env (PD Int) res
-dualGate nodemap labels labelenv contribmap cont =
-    case labels of
-      [] ->
-          cont labelenv
-      AnyLabel lbl : restlabels ->
-          dual' nodemap lbl restlabels labelenv contribmap cont
-
-dual' :: forall a res env.
+dual' :: forall res env.
          DMap (DLabel Int) (Exp Int)
-      -> DLabel Int a
       -> [AnyLabel Int]
       -> LabVal (PD Int) env
       -> DMap (DLabel (PD Int)) (AdjList (PD Int))
       -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
       -> OpenExp env (PD Int) res
-dual' nodemap lbl restlabels labelenv contribmap cont =
+dual' _ [] labelenv _ cont = cont labelenv
+dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
     case nodemap DMap.! lbl of
       -- Note that we normally aren't interested in the adjoint of a constant
       -- node -- seeing as it doesn't have any parents to contribute to.
@@ -324,185 +299,163 @@ dual' nodemap lbl restlabels labelenv contribmap cont =
       -- do need the parameter's adjoint, obviously.
       Const ty _ ->
           let adjoint = case contribmap DMap.! fmapLabel D lbl of
-                          AdjList listgen -> fromJust $ expSum' ty (listgen labelenv)
-          in Let adjoint (dualGate nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap cont)
+                          AdjList listgen -> fromJust $ maybeExpSum ty (listgen labelenv)
+          in Let (A.LeftHandSideSingle ty) adjoint
+                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap cont)
 
-      -- For the particular case of the arithmetic operators Add/Mul/Log/etc,
-      -- the types are all forced to be explicitly Float anyway, so we can
-      -- specify all types manually and thus don't need the trick from Note
-      -- [dualGate split]. However, for consistency, we do it here too.
-      PrimApp restype (A.PrimAdd argtype) (Label arglab) ->
-          dual'Add nodemap lbl restype arglab restlabels labelenv contribmap cont
+      -- Note [dual' split]
+      -- The bodies of these case arms are written as separate functions, and
+      -- not merged into dual' here, so that the type of the label 'lbl' (which
+      -- is 'DLabel Int a' for some 'a') can be mentioned explicitly in a type
+      -- signature somewhere. This is necessary, because the 'contribution'
+      -- variable in those helper functions _must_ have a type signature for
+      -- GHC to understand it, and that type signature would mention 'a', which
+      -- would not be mentioned anywhere yet if the function body was just
+      -- spliced in here.
+      PrimApp _ (A.PrimAdd argtype) (Label arglabs) ->
+          dual'Add nodemap lbl argtype arglabs restlabels labelenv contribmap cont
 
-      PrimApp restype (A.PrimMul argtype) (Label arglab) ->
-          dual'Mul nodemap lbl restype arglab restlabels labelenv contribmap cont
+      PrimApp _ (A.PrimMul argtype) (Label arglabs) ->
+          dual'Mul nodemap lbl argtype arglabs restlabels labelenv contribmap cont
 
-      PrimApp restype (A.PrimLog argtype) (Label arglab) ->
-          dual'Log nodemap lbl restype arglab restlabels labelenv contribmap cont
+      PrimApp _ (A.PrimLog argtype) (Label arglabs) ->
+          dual'Log nodemap lbl argtype arglabs restlabels labelenv contribmap cont
 
-      Pair restype (Label arglab1) (Label arglab2) ->
-          dual'Pair nodemap lbl restype (arglab1, arglab2) restlabels labelenv contribmap cont
-
-      -- The splitting up of the cases into separate functions here is for
-      -- exactly the same reason as Note [dualGate split].
-      -- App restype Fst (Label arglab) ->
-      --     dual'Fst nodemap lbl restype arglab restlabels labelenv contribmap cont
-
-      -- App restype Snd (Label arglab) ->
-      --     dual'Snd nodemap lbl restype arglab restlabels labelenv contribmap cont
+      -- Note that the types enforce that the result of this Get operation is a
+      -- scalar. This typechecks because we arranged it like this in 'explode'.
+      Get restype path (Label arglabs) ->
+          dual'Get nodemap lbl restype arglabs path restlabels labelenv contribmap cont
 
       expr -> trace ("\n!! " ++ show expr) undefined
 
 -- TODO: More DRY code!
-dual'Add  :: forall res env.
-             DMap (DLabel Int) (Exp Int)
-          -> DLabel Int Float
-          -> TupleType Float
-          -> DLabel Int (Float, Float)
-          -> [AnyLabel Int]
-          -> LabVal (PD Int) env
-          -> DMap (DLabel (PD Int)) (AdjList (PD Int))
-          -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
-          -> OpenExp env (PD Int) res
-dual'Add nodemap lbl restype arglab restlabels labelenv contribmap cont =
-      let adjoint = case contribmap DMap.! fmapLabel D lbl of
-                      AdjList listgen -> fromJust $ expSum' restype (listgen labelenv)
-          contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) (Float, Float)
-          contribution labelenv' =
-              case labValFind labelenv' (fmapLabel D lbl) of
-                Just adjidx ->
-                    Pair (labelType arglab) (Var restype adjidx) (Var restype adjidx)
-                _ -> error "dual' App Add: arg P and/or node D was not computed"
-          contribmap' = addContribution (fmapLabel D arglab) contribution contribmap
-      in Let adjoint (dualGate nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+dual'Add :: forall res env a.
+            DMap (DLabel Int) (Exp Int)
+         -> DLabel Int a
+         -> NumType a
+         -> DLabels Int (a, a)
+         -> [AnyLabel Int]
+         -> LabVal (PD Int) env
+         -> DMap (DLabel (PD Int)) (AdjList (PD Int))
+         -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
+         -> OpenExp env (PD Int) res
+dual'Add nodemap lbl argtype (DLPair (DLScalar arglab1) (DLScalar arglab2)) restlabels labelenv contribmap cont =
+    let argtypeS = SingleScalarType (NumSingleType argtype)
+        adjoint = case contribmap DMap.! fmapLabel D lbl of
+                    AdjList listgen -> expSum argtype (listgen labelenv)
+        -- Type signature here is necessary, and its mentioning of 'a' enforces
+        -- that dual'Add has a type signature, which enforces this separation
+        -- thing. See Note [dual' split].
+        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) a
+        contribution labelenv' =
+            case labValFind labelenv' (fmapLabel D lbl) of
+              Just adjidx ->
+                  Var (A.Var argtypeS adjidx)
+              _ -> error "dual' App Add: node D was not computed"
+        contribmap' = addContribution (fmapLabel D arglab1) contribution $
+                      addContribution (fmapLabel D arglab2) contribution $
+                      contribmap
+    in Let (A.LeftHandSideSingle argtypeS) adjoint
+           (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+dual'Add _ _ _ _ _ _ _ _ = error "Invalid types in PrimAdd"
 
-dual'Mul  :: forall res env.
-             DMap (DLabel Int) (Exp Int)
-          -> DLabel Int Float
-          -> TupleType Float
-          -> DLabel Int (Float, Float)
-          -> [AnyLabel Int]
-          -> LabVal (PD Int) env
-          -> DMap (DLabel (PD Int)) (AdjList (PD Int))
-          -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
-          -> OpenExp env (PD Int) res
-dual'Mul nodemap lbl restype arglab restlabels labelenv contribmap cont =
-      let adjoint = case contribmap DMap.! fmapLabel D lbl of
-                      AdjList listgen -> fromJust $ expSum' restype (listgen labelenv)
-          sflt = TupSingle TypeFloat
-          contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) (Float, Float)
-          contribution labelenv' =
-              case (labValFind labelenv' (fmapLabel P arglab), labValFind labelenv' (fmapLabel D lbl)) of
-                (Just argidx, Just adjidx) ->
-                    Pair (labelType arglab)
-                         (App sflt Mul (Pair (labelType arglab) (Var restype adjidx)
-                                                                (App sflt Snd (Var (labelType arglab) argidx))))
-                         (App sflt Mul (Pair (labelType arglab) (Var restype adjidx)
-                                                                (App sflt Fst (Var (labelType arglab) argidx))))
-                _ -> error "dual' App Mul: arg P and/or node D was not computed"
-          contribmap' = addContribution (fmapLabel D arglab) contribution contribmap
-      in Let adjoint (dualGate nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+dual'Mul :: forall res env a.
+            DMap (DLabel Int) (Exp Int)
+         -> DLabel Int a
+         -> NumType a
+         -> DLabels Int (a, a)
+         -> [AnyLabel Int]
+         -> LabVal (PD Int) env
+         -> DMap (DLabel (PD Int)) (AdjList (PD Int))
+         -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
+         -> OpenExp env (PD Int) res
+dual'Mul nodemap lbl argtype (DLPair (DLScalar arglab1) (DLScalar arglab2)) restlabels labelenv contribmap cont =
+    let argtypeS = SingleScalarType (NumSingleType argtype)
+        argtypeT = TupRsingle argtypeS
+        adjoint = case contribmap DMap.! fmapLabel D lbl of
+                    AdjList listgen -> expSum argtype (listgen labelenv)
+        contribution1 :: LabVal (PD Int) env' -> OpenExp env' (PD Int) a
+        contribution1 labelenv' =
+            case (labValFind labelenv' (fmapLabel P arglab2), labValFind labelenv' (fmapLabel D lbl)) of
+              (Just arg2idx, Just adjidx) ->
+                  PrimApp argtypeT (A.PrimMul argtype)
+                      (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
+                                                         (Var (A.Var argtypeS arg2idx)))
+              _ -> error "dual' App Mul: arg P and/or node D was not computed"
+        contribution2 :: LabVal (PD Int) env' -> OpenExp env' (PD Int) a
+        contribution2 labelenv' =
+            case (labValFind labelenv' (fmapLabel P arglab1), labValFind labelenv' (fmapLabel D lbl)) of
+              (Just arg1idx, Just adjidx) ->
+                  PrimApp argtypeT (A.PrimMul argtype)
+                      (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
+                                                         (Var (A.Var argtypeS arg1idx)))
+              _ -> error "dual' App Mul: arg P and/or node D was not computed"
+        contribmap' = addContribution (fmapLabel D arglab1) contribution1 $
+                      addContribution (fmapLabel D arglab2) contribution2 $
+                      contribmap
+    in Let (A.LeftHandSideSingle argtypeS) adjoint
+           (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+dual'Mul _ _ _ _ _ _ _ _ = error "Invalid types in PrimMul"
 
-dual'Log  :: forall res env.
-             DMap (DLabel Int) (Exp Int)
-          -> DLabel Int Float
-          -> TupleType Float
-          -> DLabel Int Float
-          -> [AnyLabel Int]
-          -> LabVal (PD Int) env
-          -> DMap (DLabel (PD Int)) (AdjList (PD Int))
-          -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
-          -> OpenExp env (PD Int) res
-dual'Log nodemap lbl restype arglab restlabels labelenv contribmap cont =
-    let adjoint = case contribmap DMap.! fmapLabel D lbl of
-                    AdjList listgen -> fromJust $ expSum' restype (listgen labelenv)
-        -- See Note [dualGate split]
-        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) Float
+dual'Log :: forall res env a.
+            DMap (DLabel Int) (Exp Int)
+         -> DLabel Int a
+         -> FloatingType a
+         -> DLabels Int a
+         -> [AnyLabel Int]
+         -> LabVal (PD Int) env
+         -> DMap (DLabel (PD Int)) (AdjList (PD Int))
+         -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
+         -> OpenExp env (PD Int) res
+dual'Log nodemap lbl argtype (DLScalar arglab) restlabels labelenv contribmap cont =
+    let argtypeS = SingleScalarType (NumSingleType (FloatingNumType argtype))
+        argtypeT = TupRsingle argtypeS
+        adjoint = case contribmap DMap.! fmapLabel D lbl of
+                    AdjList listgen -> expSum argtype (listgen labelenv)
+        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) a
         contribution labelenv' =
             case (labValFind labelenv' (fmapLabel P arglab), labValFind labelenv' (fmapLabel D lbl)) of
               (Just argidx, Just adjidx) ->
                   -- dE/dx = dE/d(log x) * d(log x)/dx = adjoint * 1/x = adjoint / x
-                  App restype Div (Pair (TupPair restype restype) (Var restype adjidx)
-                                                                  (Var (labelType arglab) argidx))
+                  PrimApp argtypeT (A.PrimFDiv argtype)
+                      (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
+                                                         (Var (A.Var argtypeS argidx)))
               _ -> error "dual' App Log: arg P and/or node D were not computed"
         contribmap' = addContribution (fmapLabel D arglab) contribution contribmap
-    in Let adjoint (dualGate nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+    in Let (A.LeftHandSideSingle argtypeS) adjoint
+           (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+dual'Log _ _ _ _ _ _ _ _ = error "Invalid types in PrimLog"
 
-dual'Pair  :: forall a b res env.
-              DMap (DLabel Int) (Exp Int)
-           -> DLabel Int (a, b)
-           -> TupleType (a, b)
-           -> (DLabel Int a, DLabel Int b)
-           -> [AnyLabel Int]
-           -> LabVal (PD Int) env
-           -> DMap (DLabel (PD Int)) (AdjList (PD Int))
-           -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
-           -> OpenExp env (PD Int) res
-dual'Pair nodemap lbl restype (arglab1, arglab2) restlabels labelenv contribmap cont =
+-- Note that the types enforce that the result of this Get operation is a scalar.
+dual'Get :: forall res env tup item.
+            DMap (DLabel Int) (Exp Int)
+         -> DLabel Int item
+         -> TupleType item
+         -> DLabels Int tup
+         -> TupleIdx item tup
+         -> [AnyLabel Int]
+         -> LabVal (PD Int) env
+         -> DMap (DLabel (PD Int)) (AdjList (PD Int))
+         -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
+         -> OpenExp env (PD Int) res
+dual'Get nodemap lbl (TupRsingle restypeS) arglabs path restlabels labelenv contribmap cont =
     let adjoint = case contribmap DMap.! fmapLabel D lbl of
-                    AdjList listgen -> fromJust $ expSum' restype (listgen labelenv)
-        contributions :: LabVal (PD Int) env' -> (OpenExp env' (PD Int) a, OpenExp env' (PD Int) b)
-        contributions labelenv' =
-            case labValFind labelenv' (fmapLabel D lbl) of
-              Just idx ->
-                  (App (labelType arglab1) Fst (Var restype idx)
-                  ,App (labelType arglab2) Snd (Var restype idx))
-              _ -> error "dual' Pair: D was not computed"
-        contribmap' = addContribution (fmapLabel D arglab1) (fst . contributions) $
-                      addContribution (fmapLabel D arglab2) (snd . contributions) $
-                      contribmap
-    in Let adjoint (dualGate nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
--}
+                    AdjList listgen -> fromJust $ maybeExpSum restypeS (listgen labelenv)
 
--- dual'Fst  :: forall a b res env.
---              DMap (DLabel Int) (Exp Int)
---           -> DLabel Int a
---           -> TupleType a
---           -> DLabel Int (a, b)
---           -> [AnyLabel Int]
---           -> LabVal (PD Int) env
---           -> DMap (DLabel (PD Int)) (AdjList (PD Int))
---           -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
---           -> OpenExp env (PD Int) res
--- dual'Fst nodemap lbl restype arglab restlabels labelenv contribmap cont =
---     case labelType arglab of
---       TupPair _ argtypeSnd ->
---           let adjoint = case contribmap DMap.! fmapLabel D lbl of
---                           AdjList listgen -> fromJust $ expSum' restype (listgen labelenv)
---               contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) (a, b)
---               contribution labelenv' =
---                   case labValFind labelenv' (fmapLabel D lbl) of
---                     Just idx ->
---                         Pair (labelType arglab) (Var restype idx) (zeroForType argtypeSnd)
---                     _ -> error "dual' App Fst: D was not computed"
---               contribmap' = addContribution (fmapLabel D arglab) contribution contribmap
---           in Let adjoint (dualGate nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
---       _ -> error "Impossible GADT"
+        targetLabel = case pickDLabels path arglabs of
+                        DLScalar lab -> lab
+                        _ -> error "Invalid types in Get (pickDLabels)"
 
--- dual'Snd  :: forall a b res env.
---              DMap (DLabel Int) (Exp Int)
---           -> DLabel Int b
---           -> TupleType b
---           -> DLabel Int (a, b)
---           -> [AnyLabel Int]
---           -> LabVal (PD Int) env
---           -> DMap (DLabel (PD Int)) (AdjList (PD Int))
---           -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) res)
---           -> OpenExp env (PD Int) res
--- dual'Snd nodemap lbl restype arglab restlabels labelenv contribmap cont =
---     case labelType arglab of
---       TupPair argtypeFst _ ->
---           let adjoint = case contribmap DMap.! fmapLabel D lbl of
---                           AdjList listgen -> fromJust $ expSum' restype (listgen labelenv)
---               contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) (a, b)
---               contribution labelenv' =
---                   case labValFind labelenv' (fmapLabel D lbl) of
---                     Just idx ->
---                         Pair (labelType arglab) (zeroForType argtypeFst) (Var restype idx)
---                     _ -> error "dual' App Snd: D was not computed"
---               contribmap' = addContribution (fmapLabel D arglab) contribution contribmap
---           in Let adjoint (dualGate nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
---       _ -> error "Impossible GADT"
+        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) item
+        contribution labelenv' =
+            case labValFind labelenv' (fmapLabel D targetLabel) of
+              Just adjidx -> Var (A.Var restypeS adjidx)
+              _ -> error "dual' App Get: node D was not computed"
+
+        contribmap' = addContribution (fmapLabel D targetLabel) contribution contribmap
+    in Let (A.LeftHandSideSingle restypeS) adjoint
+           (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+dual'Get _ _ _ _ _ _ _ _ _ = error "Invalid types in Get"
 
 -- Utility functions
 -- -----------------
@@ -518,16 +471,22 @@ addContribution lbl contribution =
                     (AdjList (pure . contribution))
 
 class IsAdditive s where
-    zeroForType :: s t -> OpenExp env lab t
+    zeroForType' :: (forall a. Num a => a) -> s t -> OpenExp env lab t
     expPlus :: s t -> OpenExp env lab t -> OpenExp env lab t -> OpenExp env lab t
+
+    zeroForType :: s t -> OpenExp env lab t
+    zeroForType = zeroForType' 0
 
     expSum :: s t -> [OpenExp env lab t] -> OpenExp env lab t
     expSum ty [] = zeroForType ty
     expSum ty es = foldl1 (expPlus ty) es
 
 class IsMaybeAdditive s where
-    maybeZeroForType :: s t -> Maybe (OpenExp env lab t)
+    maybeZeroForType' :: (forall a. Num a => a) -> s t -> Maybe (OpenExp env lab t)
     maybeExpPlus :: s t -> OpenExp env lab t -> OpenExp env lab t -> Maybe (OpenExp env lab t)
+
+    maybeZeroForType :: s t -> Maybe (OpenExp env lab t)
+    maybeZeroForType = maybeZeroForType' 0
 
     maybeExpSum :: s t -> [OpenExp env lab t] -> Maybe (OpenExp env lab t)
     maybeExpSum ty [] = maybeZeroForType ty
@@ -536,17 +495,17 @@ class IsMaybeAdditive s where
             go (e:es) accum = maybeExpPlus ty accum e >>= go es
 
 instance IsAdditive IntegralType where
-    zeroForType ty = case ty of
-        TypeInt -> Const (scalar TypeInt) 0
-        TypeInt8 -> Const (scalar TypeInt8) 0
-        TypeInt16 -> Const (scalar TypeInt16) 0
-        TypeInt32 -> Const (scalar TypeInt32) 0
-        TypeInt64 -> Const (scalar TypeInt64) 0
-        TypeWord -> Const (scalar TypeWord) 0
-        TypeWord8 -> Const (scalar TypeWord8) 0
-        TypeWord16 -> Const (scalar TypeWord16) 0
-        TypeWord32 -> Const (scalar TypeWord32) 0
-        TypeWord64 -> Const (scalar TypeWord64) 0
+    zeroForType' z ty = case ty of
+        TypeInt -> Const (scalar TypeInt) z
+        TypeInt8 -> Const (scalar TypeInt8) z
+        TypeInt16 -> Const (scalar TypeInt16) z
+        TypeInt32 -> Const (scalar TypeInt32) z
+        TypeInt64 -> Const (scalar TypeInt64) z
+        TypeWord -> Const (scalar TypeWord) z
+        TypeWord8 -> Const (scalar TypeWord8) z
+        TypeWord16 -> Const (scalar TypeWord16) z
+        TypeWord32 -> Const (scalar TypeWord32) z
+        TypeWord64 -> Const (scalar TypeWord64) z
       where scalar = SingleScalarType . NumSingleType . IntegralNumType
 
     expPlus ty e1 e2 =
@@ -555,10 +514,10 @@ instance IsAdditive IntegralType where
       where scalar = SingleScalarType . NumSingleType . IntegralNumType
 
 instance IsAdditive FloatingType where
-    zeroForType ty = case ty of
-        TypeHalf -> Const (flttype TypeHalf) 0
-        TypeFloat -> Const (flttype TypeFloat) 0
-        TypeDouble -> Const (flttype TypeDouble) 0
+    zeroForType' z ty = case ty of
+        TypeHalf -> Const (flttype TypeHalf) z
+        TypeFloat -> Const (flttype TypeFloat) z
+        TypeDouble -> Const (flttype TypeDouble) z
       where flttype = SingleScalarType . NumSingleType . FloatingNumType
 
     expPlus ty e1 e2 =
@@ -567,8 +526,8 @@ instance IsAdditive FloatingType where
       where scalar = SingleScalarType . NumSingleType . FloatingNumType
 
 instance IsAdditive NumType where
-    zeroForType (IntegralNumType t) = zeroForType t
-    zeroForType (FloatingNumType t) = zeroForType t
+    zeroForType' z (IntegralNumType t) = zeroForType' z t
+    zeroForType' z (FloatingNumType t) = zeroForType' z t
 
     expPlus ty e1 e2 =
       PrimApp (TupRsingle (scalar ty)) (A.PrimAdd ty)
@@ -576,40 +535,47 @@ instance IsAdditive NumType where
       where scalar = SingleScalarType . NumSingleType
 
 instance IsMaybeAdditive SingleType where
-    maybeZeroForType (NumSingleType t) = Just (zeroForType t)
-    maybeZeroForType (NonNumSingleType _) = Nothing
+    maybeZeroForType' z (NumSingleType t) = Just (zeroForType' z t)
+    maybeZeroForType' _ (NonNumSingleType _) = Nothing
 
     maybeExpPlus (NumSingleType ty) e1 e2 = Just (expPlus ty e1 e2)
     maybeExpPlus (NonNumSingleType _) _ _ = Nothing
 
 instance IsMaybeAdditive ScalarType where
-    maybeZeroForType (SingleScalarType t) = maybeZeroForType t
-    maybeZeroForType (VectorScalarType _) = Nothing
+    maybeZeroForType' z (SingleScalarType t) = maybeZeroForType' z t
+    maybeZeroForType' _ (VectorScalarType _) = Nothing
 
     maybeExpPlus (SingleScalarType ty) e1 e2 = maybeExpPlus ty e1 e2
     maybeExpPlus (VectorScalarType _) _ _ = Nothing
 
 instance IsMaybeAdditive TupleType where
-    maybeZeroForType TupRunit = Just Nil
-    maybeZeroForType (TupRsingle t) = maybeZeroForType t
-    maybeZeroForType (TupRpair t1 t2) =
-        Pair (TupRpair t1 t2) <$> maybeZeroForType t1 <*> maybeZeroForType t2
+    maybeZeroForType' _ TupRunit = Just Nil
+    maybeZeroForType' z (TupRsingle t) = maybeZeroForType' z t
+    maybeZeroForType' z (TupRpair t1 t2) =
+        Pair (TupRpair t1 t2) <$> maybeZeroForType' z t1 <*> maybeZeroForType' z t2
 
     maybeExpPlus ty e1 e2 = tupleZip ty maybeExpPlus e1 e2
 
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
--- expLabelParents :: OpenExp env lab t -> [AnyLabel lab]
--- expLabelParents = \case
---     Const _ _ -> []
---     PrimApp _ _ e -> [fromLabel e]
---     Pair _ e1 e2 -> [fromLabel e1, fromLabel e2]
---     Nil -> []
---     Get _ e -> [fromLabel e]
---     Let _ _ _ -> unimplemented "Let"
---     Var _ -> unimplemented "Var"
---     Label _ -> unimplemented "Label"
---   where
---     unimplemented name =
---         error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
---     fromLabel (Label lbl) = AnyLabel lbl
---     fromLabel _ = error ("expLabelParents: Parent is not a label")
+expLabelParents :: OpenExp env lab t -> [AnyLabel lab]
+expLabelParents = \case
+    Const _ _ -> []
+    PrimApp _ _ e -> fromLabel e
+    Pair _ e1 e2 -> fromLabel e1 ++ fromLabel e2
+    Nil -> []
+    Get _ path (Label labs) -> collect (pickDLabels path labs)
+    Get _ _ e -> fromLabel e
+    Let _ _ _ -> unimplemented "Let"
+    Var _ -> unimplemented "Var"
+    Label _ -> unimplemented "Label"
+  where
+    unimplemented name =
+        error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
+
+    fromLabel (Label labs) = collect labs
+    fromLabel _ = error ("expLabelParents: Parent is not a label set")
+
+    collect :: DLabels lab t -> [AnyLabel lab]
+    collect DLNil = []
+    collect (DLScalar lab) = [AnyLabel lab]
+    collect (DLPair labs1 labs2) = collect labs1 ++ collect labs2

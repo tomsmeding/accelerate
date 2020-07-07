@@ -71,7 +71,8 @@ data OpenExp env lab t where
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
-    Get     :: TupleIdx s t
+    Get     :: TupleType s
+            -> TupleIdx s t
             -> OpenExp env lab t
             -> OpenExp env lab s
 
@@ -166,7 +167,7 @@ showsExpr labf seed env _ (Pair _ e1 e2) =
         showsExpr labf seed env 0 e2 . showString ")"
 showsExpr _ _ _ _ Nil =
     showString "()"
-showsExpr labf seed env d (Get ti e) = showParen (d > 10) $
+showsExpr labf seed env d (Get _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsExpr labf seed env 10 e
   where
     tiPrefix :: TupleIdx s t -> String
@@ -230,14 +231,7 @@ typeOf (Const ty _) = TupRsingle ty
 typeOf (PrimApp ty _ _) = ty
 typeOf (Pair ty _ _) = ty
 typeOf Nil = TupRunit
-typeOf (Get ti e) = subType ti (typeOf e)
-  where
-    subType :: TupleIdx s t -> TupleType t -> TupleType s
-    subType TIHere ty = ty
-    subType (TILeft ti') (TupRpair ty _) = subType ti' ty
-    subType (TIRight ti') (TupRpair _ ty) = subType ti' ty
-    subType (TILeft _) (TupRsingle _) = error "impossible GADT"
-    subType (TIRight _) (TupRsingle _) = error "impossible GADT"
+typeOf (Get ty _ _) = ty
 typeOf (Let _ _ body) = typeOf body
 typeOf (Var (A.Var ty _)) = TupRsingle ty
 typeOf (Label labs) = dlabelsType labs
@@ -250,14 +244,14 @@ dlabelsType (DLPair t1 t2) = TupRpair (dlabelsType t1) (dlabelsType t2)
 isInfixOp :: A.PrimFun ((a, b) -> c) -> Bool
 isInfixOp (A.PrimAdd _) = True
 isInfixOp (A.PrimMul _) = True
-isInfixOp (A.PrimQuot _) = True
+isInfixOp (A.PrimFDiv _) = True
 isInfixOp (A.PrimLtEq _) = True
 isInfixOp _ = False
 
 precedence :: A.PrimFun sig -> Int
 precedence (A.PrimAdd _) = 6
 precedence (A.PrimMul _) = 7
-precedence (A.PrimQuot _) = 7
+precedence (A.PrimFDiv _) = 7
 precedence (A.PrimNeg _) = 7  -- ?
 precedence (A.PrimLog _) = 10
 precedence (A.PrimLtEq _) = 4
@@ -269,7 +263,7 @@ data Fixity = Prefix | Infix
 prettyPrimFun :: Fixity -> A.PrimFun sig -> String
 prettyPrimFun Infix (A.PrimAdd _) = "+"
 prettyPrimFun Infix (A.PrimMul _) = "*"
-prettyPrimFun Infix (A.PrimQuot _) = "/"
+prettyPrimFun Infix (A.PrimFDiv _) = "/"
 prettyPrimFun Infix (A.PrimNeg _) = "-"
 prettyPrimFun Infix (A.PrimLtEq _) = "<="
 prettyPrimFun Prefix (A.PrimLog _) = "log"
@@ -281,7 +275,7 @@ pickDLabels :: TupleIdx t' t -> DLabels lab t -> DLabels lab t'
 pickDLabels TIHere labs = labs
 pickDLabels (TILeft path) (DLPair lab _) = pickDLabels path lab
 pickDLabels (TIRight path) (DLPair _ lab) = pickDLabels path lab
-pickDLabels _ _ = error "pickDLabel: impossible GADTs"
+pickDLabels _ _ = error "pickDLabels: impossible GADTs"
 
 prjL :: Idx env t -> LabVal lab env -> DLabel lab t
 prjL ZeroIdx (LPush _ x) = x

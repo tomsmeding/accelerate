@@ -15,7 +15,7 @@ sinkExp _ (Const ty x) = Const ty x
 sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
 sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
 sinkExp _ Nil = Nil
-sinkExp k (Get ti e) = Get ti (sinkExp k e)
+sinkExp k (Get ty ti e) = Get ty ti (sinkExp k e)
 sinkExp k (Let lhs rhs e)
   | GenLHS lhs' <- generaliseLHS lhs =
       Let lhs' (sinkExp k rhs) (sinkExp (A.sinkWithLHS lhs lhs' k) e)
