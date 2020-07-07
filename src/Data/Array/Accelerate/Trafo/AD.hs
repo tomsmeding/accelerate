@@ -3,7 +3,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
-module Data.Array.Accelerate.Trafo.Tom (
+module Data.Array.Accelerate.Trafo.AD (
   convertExp, convertAccWith
 ) where
 

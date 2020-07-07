@@ -42,7 +42,7 @@ import qualified Data.Array.Accelerate.Trafo.LetSplit               as LetSplit
 import qualified Data.Array.Accelerate.Trafo.Simplify               as Rewrite
 import qualified Data.Array.Accelerate.Trafo.Sharing                as Sharing
 -- import qualified Data.Array.Accelerate.Trafo.Vectorise              as Vectorise
-import qualified Data.Array.Accelerate.Trafo.Tom                    as Tom
+import qualified Data.Array.Accelerate.Trafo.AD                     as AD
 
 import Control.DeepSeq
 
@@ -68,7 +68,7 @@ convertAccWith config
   = phase "array-fusion"           (Fusion.convertAccWith config)
   . phase "array-split-lets"       LetSplit.convertAcc
   -- phase "vectorise-sequences"    Vectorise.vectoriseSeqAcc `when` vectoriseSequences
-  . phase "tom-phase"              (Tom.convertAccWith config)
+  . phase "ad-phase"               (AD.convertAccWith config)
   . phase "sharing-recovery"       (Sharing.convertAccWith config)
 
 
@@ -92,7 +92,7 @@ convertAfunWith config
 convertExp :: Exp e -> AST.Exp () (EltR e)
 convertExp
   = phase "exp-simplify"     Rewrite.simplifyExp
-  . phase "tom-phase"        Tom.convertExp
+  . phase "ad-phase"         AD.convertExp
   . phase "sharing-recovery" Sharing.convertExp
 
 
