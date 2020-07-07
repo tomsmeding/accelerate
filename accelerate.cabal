@@ -415,6 +415,7 @@ library
         Data.Array.Accelerate.Shows
         Data.Array.Accelerate.Trafo.Algebra
         Data.Array.Accelerate.Trafo.Environment
+        Data.Array.Accelerate.Trafo.AD
         Data.Array.Accelerate.Trafo.AD.Algorithms
         Data.Array.Accelerate.Trafo.AD.ADDep
         Data.Array.Accelerate.Trafo.AD.Exp
@@ -430,7 +431,7 @@ library
         Data.Array.Accelerate.Trafo.Shrink
         Data.Array.Accelerate.Trafo.Simplify
         Data.Array.Accelerate.Trafo.Var
-        Data.Array.Accelerate.Trafo.Tom
+        Data.Array.Accelerate.Trafo.Substitution
         Data.Atomic
 
         -- Data.Array.Accelerate.Array.Lifted
