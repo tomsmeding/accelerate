@@ -10,8 +10,8 @@ module Data.Array.Accelerate.Trafo.AD (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo.Config
-import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Array.Representation (showArrayR)
+-- import Data.Array.Accelerate.Type
+-- import Data.Array.Accelerate.Array.Representation (showArrayR)
 import Data.Array.Accelerate.Shows
 
 import Debug.Trace

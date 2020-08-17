@@ -52,46 +52,50 @@ data DLabels lab t where
     DLScalar :: DLabel lab s -> DLabels lab s
 
 -- TODO: Check how many reified types can be removed in this AST
-data OpenExp env lab t where
+data OpenExp env lab args t where
     Const   :: ScalarType t
             -> t
-            -> OpenExp env lab t
+            -> OpenExp env lab args t
 
     PrimApp :: TupleType r
             -> A.PrimFun (a -> r)
-            -> OpenExp env lab a
-            -> OpenExp env lab r
+            -> OpenExp env lab args a
+            -> OpenExp env lab args r
 
     Pair    :: TupleType (a, b)
-            -> OpenExp env lab a
-            -> OpenExp env lab b
-            -> OpenExp env lab (a, b)
+            -> OpenExp env lab args a
+            -> OpenExp env lab args b
+            -> OpenExp env lab args (a, b)
 
-    Nil     :: OpenExp env lab ()
+    Nil     :: OpenExp env lab args ()
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
     Get     :: TupleType s
             -> TupleIdx s t
-            -> OpenExp env lab t
-            -> OpenExp env lab s
+            -> OpenExp env lab args t
+            -> OpenExp env lab args s
 
     Let     :: A.ELeftHandSide bnd_t env env'
-            -> OpenExp env lab bnd_t
-            -> OpenExp env' lab a
-            -> OpenExp env lab a
+            -> OpenExp env lab args bnd_t
+            -> OpenExp env' lab args a
+            -> OpenExp env lab args a
 
     Var     :: A.ExpVar env t
-            -> OpenExp env lab t
+            -> OpenExp env lab args t
+
+    Arg     :: ScalarType t
+            -> A.Idx args t
+            -> OpenExp env lab args t
 
     Label   :: DLabels lab t
-            -> OpenExp env lab t
+            -> OpenExp env lab args t
 
 type Exp = OpenExp ()
 
 -- Closed expression with an unknown type
-data AnyExp lab = forall t. AnyExp (Exp lab t)
-deriving instance Show lab => Show (AnyExp lab)
+data AnyExp lab args = forall t. AnyExp (Exp lab args t)
+deriving instance Show lab => Show (AnyExp lab args)
 
 data AnyTupleType = forall t. AnyTupleType (TupleType t)
 deriving instance Show AnyTupleType
@@ -149,7 +153,7 @@ showDLabels labf (DLScalar (DLabel ty lab)) =
 showDLabels labf (DLPair labs1 labs2) =
     "(" ++ showDLabels labf labs1 ++ ", " ++ showDLabels labf labs2 ++ ")"
 
-showsExpr :: (lab -> String) -> Int -> [String] -> Int -> OpenExp env lab t -> ShowS
+showsExpr :: (lab -> String) -> Int -> [String] -> Int -> OpenExp env lab args t -> ShowS
 showsExpr _ _ _ _ (Const ty x) = showString (showScalar ty x)
 showsExpr labf seed env d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
     let prec = precedence f
@@ -192,6 +196,8 @@ showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
       let (descr1, seed1) = namifyLHS seed lhs1
           (descr2, seed2) = namifyLHS seed1 lhs2
       in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", seed2)
+showsExpr _ _ _ d (Arg ty idx) = showParen (d > 0) $
+    showString ('A' : show (A.idxToInt idx) ++ " :: " ++ show ty)
 showsExpr _ _ env _ (Var (A.Var _ idx)) = showString (env !! idxToInt idx)
 showsExpr labf _ _ d (Label labs) = showParen (d > 0) $
     showString (showDLabels labf labs)
@@ -199,13 +205,13 @@ showsExpr labf _ _ d (Label labs) = showParen (d > 0) $
 -- instance Show (OpenExp env Int t) where
 --     showsPrec = showsExpr subscript 0 []
 
-instance Show lab => Show (OpenExp env lab t) where
+instance Show lab => Show (OpenExp env lab args t) where
     showsPrec = showsExpr show 0 []
 
 instance Show lab => GShow (DLabel lab) where
     gshowsPrec = showsPrec
 
-instance Show lab => GShow (OpenExp env lab) where
+instance Show lab => GShow (OpenExp env lab args) where
     gshowsPrec = showsPrec
 
 instance GEq (DLabel lab) where
@@ -226,7 +232,7 @@ instance Ord lab => GCompare (DLabel lab) where
 -- Auxiliary functions
 -- -------------------
 
-typeOf :: OpenExp env lab t -> TupleType t
+typeOf :: OpenExp env lab args t -> TupleType t
 typeOf (Const ty _) = TupRsingle ty
 typeOf (PrimApp ty _ _) = ty
 typeOf (Pair ty _ _) = ty
@@ -234,6 +240,7 @@ typeOf Nil = TupRunit
 typeOf (Get ty _ _) = ty
 typeOf (Let _ _ body) = typeOf body
 typeOf (Var (A.Var ty _)) = TupRsingle ty
+typeOf (Arg ty _) = TupRsingle ty
 typeOf (Label labs) = dlabelsType labs
 
 dlabelsType :: DLabels lab t -> TupleType t
@@ -340,10 +347,10 @@ labValToList LEmpty = []
 labValToList (LPush env (DLabel ty lab)) =
     (AnyScalarType ty, lab) : labValToList env
 
-evars :: A.ExpVars env t -> OpenExp env lab t
+evars :: A.ExpVars env t -> OpenExp env lab args t
 evars = snd . evars'
   where
-    evars' :: A.ExpVars env t -> (TupleType t, OpenExp env lab t)
+    evars' :: A.ExpVars env t -> (TupleType t, OpenExp env lab args t)
     evars' A.VarsNil = (TupRunit, Nil)
     evars' (A.VarsSingle var@(A.Var ty _)) = (TupRsingle ty, Var var)
     evars' (A.VarsPair vars1 vars2) =

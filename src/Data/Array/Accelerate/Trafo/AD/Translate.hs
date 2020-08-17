@@ -8,7 +8,7 @@ import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
 import Data.Array.Accelerate.Type
 
 
-translateExp :: A.OpenExp env () t -> D.OpenExp env lab t
+translateExp :: A.OpenExp env () t -> D.OpenExp env lab args t
 translateExp expr = case expr of
     A.Const ty con -> D.Const ty con
     A.PrimApp f e -> D.PrimApp (A.expType expr) f (translateExp e)
@@ -18,7 +18,7 @@ translateExp expr = case expr of
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
     _ -> internalError "AD.translateExp" ("Cannot perform AD on Exp node <" ++ A.showPreExpOp expr ++ ">")
 
-untranslateExp :: D.OpenExp env lab t -> A.OpenExp env () t
+untranslateExp :: D.OpenExp env lab args t -> A.OpenExp env () t
 untranslateExp expr = case expr of
     D.Const ty con -> A.Const ty con
     D.PrimApp _ f e -> A.PrimApp f (untranslateExp e)
@@ -29,6 +29,7 @@ untranslateExp expr = case expr of
     D.Get _ path e
       | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
       -> A.Let lhs (untranslateExp e) body
+    D.Arg _ _ -> internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
     D.Label _ -> internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
 
 data LetBoundExp env t s = forall env'. LetBoundExp (A.ELeftHandSide t env env') (A.OpenExp env' () s)
