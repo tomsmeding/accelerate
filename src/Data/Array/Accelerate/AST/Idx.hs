@@ -25,6 +25,19 @@ data Idx env t where
   ZeroIdx ::              Idx (env, t) t
   SuccIdx :: Idx env t -> Idx (env, s) t
 
+instance GEq (Idx env) where
+    geq ZeroIdx ZeroIdx = Just Refl
+    geq (SuccIdx i1) (SuccIdx i2)
+      | Just Refl <- geq i1 i2
+      = Just Refl
+    geq _ _ = Nothing
+
+instance GCompare (Idx env) where
+    gcompare ZeroIdx ZeroIdx = GEQ
+    gcompare (SuccIdx i1) (SuccIdx i2) = gcompare i1 i2
+    gcompare ZeroIdx (SuccIdx _) = GLT
+    gcompare (SuccIdx _) ZeroIdx = GGT
+
 data PairIdx p a where
   PairIdxLeft  :: PairIdx (a, b) a
   PairIdxRight :: PairIdx (a, b) b
