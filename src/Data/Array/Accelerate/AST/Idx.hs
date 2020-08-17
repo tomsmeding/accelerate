@@ -32,6 +32,7 @@ module Data.Array.Accelerate.AST.Idx (
 
 ) where
 
+import Data.GADT.Compare
 import Language.Haskell.TH ( Q, TExp )
 
 #ifndef ACCELERATE_INTERNAL_CHECKS
@@ -60,6 +61,19 @@ rnfIdx (SuccIdx ix) = rnfIdx ix
 liftIdx :: Idx env t -> Q (TExp (Idx env t))
 liftIdx ZeroIdx      = [|| ZeroIdx ||]
 liftIdx (SuccIdx ix) = [|| SuccIdx $$(liftIdx ix) ||]
+
+instance GEq (Idx env) where
+    geq ZeroIdx ZeroIdx = Just Refl
+    geq (SuccIdx i1) (SuccIdx i2)
+      | Just Refl <- geq i1 i2
+      = Just Refl
+    geq _ _ = Nothing
+
+instance GCompare (Idx env) where
+    gcompare ZeroIdx ZeroIdx = GEQ
+    gcompare (SuccIdx i1) (SuccIdx i2) = gcompare i1 i2
+    gcompare ZeroIdx (SuccIdx _) = GLT
+    gcompare (SuccIdx _) ZeroIdx = GGT
 
 #else
 
@@ -99,6 +113,18 @@ rnfIdx !_ = ()
 
 liftIdx :: Idx env t -> Q (TExp (Idx env t))
 liftIdx (UnsafeIdxConstructor i) = [|| UnsafeIdxConstructor i ||]
+
+instance GEq (Idx env) where
+    geq (UnsafeIdxConstructor n) (UnsafeIdxConstructor m)
+      | n == m = Just (unsafeCoerce Refl)
+      | otherwise = Nothing
+
+instance GCompare (Idx env) where
+    gcompare (UnsafeIdxConstructor n) (UnsafeIdxConstructor m) =
+      case compare n m of
+        LT -> GLT
+        EQ -> unsafeCoerce GEQ
+        GT -> GGT
 
 #endif
 
