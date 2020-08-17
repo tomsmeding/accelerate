@@ -14,16 +14,16 @@ import Data.Array.Accelerate.Trafo.AD.Sink
 
 
 type Combiner lab =
-  forall s env.
-    ScalarType s -> OpenExp env lab s
-                 -> OpenExp env lab s
-                 -> Maybe (OpenExp env lab s)
+  forall s env args.
+    ScalarType s -> OpenExp env lab args s
+                 -> OpenExp env lab args s
+                 -> Maybe (OpenExp env lab args s)
 
 varsZip :: Combiner lab
         -> TupleType t
         -> A.ExpVars env t
         -> A.ExpVars env t
-        -> Maybe (OpenExp env lab t)
+        -> Maybe (OpenExp env lab args t)
 varsZip _ TupRunit A.VarsNil A.VarsNil =
   Just Nil
 varsZip combine (TupRsingle ty) (A.VarsSingle v1) (A.VarsSingle v2) =
@@ -32,11 +32,12 @@ varsZip combine ty@(TupRpair t1 t2) (A.VarsPair v11 v12) (A.VarsPair v21 v22) =
   Pair ty <$> varsZip combine t1 v11 v21 <*> varsZip combine t2 v12 v22
 varsZip _ _ _ _ = error "inconsistency in varsZip"
 
-tupleZip :: forall env lab t. TupleType t
+tupleZip :: forall env lab t args.
+            TupleType t
          -> Combiner lab
-         -> OpenExp env lab t
-         -> OpenExp env lab t
-         -> Maybe (OpenExp env lab t)
+         -> OpenExp env lab args t
+         -> OpenExp env lab args t
+         -> Maybe (OpenExp env lab args t)
 tupleZip ty combine e1 e2
   | DeclareVars lhs1 _ value1 <- declareVars ty
   , DeclareVars lhs2 _ value2 <- declareVars ty
