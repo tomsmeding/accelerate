@@ -180,8 +180,8 @@ showsExpr labf seed env d (Get _ ti e) = showParen (d > 10) $
     tiPrefix (TILeft ti') = "fst " ++ tiPrefix ti'
     tiPrefix (TIRight ti') = "snd " ++ tiPrefix ti'
 showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
-    let (descr, seed') = namifyLHS topseed toplhs
-        env' = descr : env
+    let (descr, descrs, seed') = namifyLHS topseed toplhs
+        env' = descrs ++ env
     in showString ("let " ++ descr ++ " = ") . showsExpr labf seed' env 0 rhs .
             showString " in " . showsExpr labf seed' env' 0 body
   where
@@ -190,16 +190,22 @@ showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
       let name = if seed < 26 then [['a'..'z'] !! seed] else 't' : show (seed - 25)
       in (name, seed + 1)
 
-    namifyLHS :: Int -> A.ELeftHandSide v env env' -> (String, Int)
-    namifyLHS seed (A.LeftHandSideSingle _) = namifyVar seed
-    namifyLHS seed (A.LeftHandSideWildcard _) = ("_", seed)
+    namifyLHS :: Int -> A.ELeftHandSide v env env' -> (String, [String], Int)
+    namifyLHS seed (A.LeftHandSideSingle _) =
+      let (n, seed') = namifyVar seed
+      in (n, [n], seed')
+    namifyLHS seed (A.LeftHandSideWildcard _) = ("_", ["_"], seed)
     namifyLHS seed (A.LeftHandSidePair lhs1 lhs2) =
-      let (descr1, seed1) = namifyLHS seed lhs1
-          (descr2, seed2) = namifyLHS seed1 lhs2
-      in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", seed2)
+      let (descr1, descrs1, seed1) = namifyLHS seed lhs1
+          (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
+      in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", descrs2 ++ descrs1,seed2)
 showsExpr _ _ _ d (Arg ty idx) = showParen (d > 0) $
     showString ('A' : show (A.idxToInt idx) ++ " :: " ++ show ty)
-showsExpr _ _ env _ (Var (A.Var _ idx)) = showString (env !! idxToInt idx)
+showsExpr _ _ env _ (Var (A.Var _ idx)) =
+    case drop (idxToInt idx) env of
+        descr : _ -> showString descr
+        [] -> error $ "Var out of env range in showsExpr: " ++
+                      show (idxToInt idx) ++ " in " ++ show env
 showsExpr labf _ _ d (Label labs) = showParen (d > 0) $
     showString (showDLabels labf labs)
 
