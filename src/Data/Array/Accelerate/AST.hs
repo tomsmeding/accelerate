@@ -623,7 +623,8 @@ data OpenExp env aenv t where
                 -> ScalarType e
                 -> OpenFun env aenv (t -> e)  -- TJS: should be closed, but GHC doesn't like me
                 -> OpenExp env aenv t
-                -> OpenExp env aenv (((), e), t)
+                -- -> OpenExp env aenv (((), e), t)
+                -> OpenExp env aenv t
 
   -- Unsafe operations (may fail or result in undefined behaviour)
   -- An unspecified bit pattern
@@ -636,10 +637,6 @@ data OpenExp env aenv t where
                 -> ScalarType b
                 -> OpenExp env aenv a
                 -> OpenExp env aenv b
-
-  -- Take the forward automatic derivative of the expression
-  ForwardDiff   :: PreOpenExp acc env aenv Float
-                -> PreOpenExp acc env aenv Float
 
 -- |Primitive constant values
 --

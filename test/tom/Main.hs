@@ -49,10 +49,20 @@ ignoretest = do
                    (\_ -> A.lift Z)
                    (A.use (A.fromList (Z :. (10 :: Int)) [1::Float .. 10])))
 
+adtest1 :: IO ()
+adtest1 = do
+  print $ I.run (A.unit (A.gradientE (\x -> 2 * x) (5 :: A.Exp Float)))
+  print $ I.run (A.unit (A.gradientE (\x -> 2 * x * x) (5 :: A.Exp Float)))
+  print $ I.run (A.unit (A.gradientE (\(A.T2 x y) -> log (x + x * y)) (A.T2 5 6 :: A.Exp (Float, Float))))
+  print $ I.run (A.unit (A.gradientE (\x ->
+              let A.T2 y z = A.T2 (log (x * x)) (log x)
+              in y * z + z * y) (5 :: A.Exp Float)))
+
 main :: IO ()
 main = do
   -- logistic
   -- optimise
   -- indexing
   -- apply
-  ignoretest
+  -- ignoretest
+  adtest1
