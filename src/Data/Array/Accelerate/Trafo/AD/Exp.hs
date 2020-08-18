@@ -8,6 +8,7 @@ module Data.Array.Accelerate.Trafo.AD.Exp (
     Idx(..), idxToInt
 ) where
 
+import Data.List (intercalate)
 import Data.GADT.Compare
 import Data.GADT.Show
 
@@ -176,9 +177,12 @@ showsExpr labf seed env d (Get _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsExpr labf seed env 10 e
   where
     tiPrefix :: TupleIdx s t -> String
-    tiPrefix TIHere = ""
-    tiPrefix (TILeft ti') = "fst " ++ tiPrefix ti'
-    tiPrefix (TIRight ti') = "snd " ++ tiPrefix ti'
+    tiPrefix = (++ " ") . intercalate "." . reverse . tiPrefix'
+
+    tiPrefix' :: TupleIdx s t -> [String]
+    tiPrefix' TIHere = []
+    tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
+    tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
 showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
     let (descr, descrs, seed') = namifyLHS topseed toplhs
         env' = descrs ++ env
