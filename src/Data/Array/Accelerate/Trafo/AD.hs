@@ -10,18 +10,14 @@ module Data.Array.Accelerate.Trafo.AD (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Trafo.Config
--- import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Type
 -- import Data.Array.Accelerate.Array.Representation (showArrayR)
 import Data.Array.Accelerate.Shows
+import qualified Data.Array.Accelerate.Trafo.AD.ADDep as AD
+import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
+import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
 
 import Debug.Trace
-
-
--- type ExpVar = Var ScalarType
--- data Var s env t = Var (s t) (Idx env t)
--- data Idx env t where
---   ZeroIdx ::              Idx (env, t) t
---   SuccIdx :: Idx env t -> Idx (env, s) t
 
 
 convertVar :: Var ArrayR aenv t -> Var ArrayR aenv t
@@ -44,7 +40,18 @@ convertExp Nil = Nil
 convertExp (Pair e1 e2) = Pair (convertExp e1) (convertExp e2)
 convertExp (Shape var) = Shape (convertVar var)
 convertExp (Index var dim) = Index (convertVar var) (convertExp dim)
--- convertExp (GradientE func arg) = undefined
+convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
+  | SingleScalarType (NumSingleType (FloatingNumType TypeFloat)) <- sty
+  , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
+      case AD.checkClosedInLHS lhs' (AD.translateExp body) of
+          Just transBody
+            | AD.ReverseADRes lhs'' body' <- AD.reverseAD lhs' transBody
+            , AD.UntranslateResult lhs''' body'' <- AD.untranslateLHSboundExp lhs'' body' ->
+                Let lhs''' arg body''
+          Nothing ->
+              error "Body of gradientE not a closed expression"
+  | otherwise =
+      error "gradientE expression must produce Float, other types currently unsupported"
 convertExp e =
   $internalError "Tom.convertExp" ("Cannot convert Exp node <" ++ showPreExpOp e ++ ">")
 

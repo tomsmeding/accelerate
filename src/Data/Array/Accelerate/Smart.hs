@@ -583,7 +583,8 @@ data PreSmartExp acc exp t where
                 -> ScalarType e
                 -> (SmartExp t -> exp e)
                 -> exp t
-                -> PreSmartExp acc exp (((), e), t)
+                -- -> PreSmartExp acc exp (((), e), t)
+                -> PreSmartExp acc exp t
 
   Undef         :: ScalarType t
                 -> PreSmartExp acc exp t
@@ -593,7 +594,6 @@ data PreSmartExp acc exp t where
                 -> ScalarType b
                 -> exp a
                 -> PreSmartExp acc exp b
-
 
 -- Smart constructors for stencils
 -- -------------------------------

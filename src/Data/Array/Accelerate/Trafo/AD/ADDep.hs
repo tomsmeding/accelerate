@@ -13,7 +13,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Array.Accelerate.Trafo.AD.ADDep (
-  reverseAD
+  reverseAD, ReverseADRes(..)
 ) where
 
 import Control.Monad.State.Strict
@@ -157,6 +157,7 @@ reverseAD paramlhs expr
                   produceGradient argLabelMap labelenv argsRHS
       in
           trace ("exploded: " ++ showExploded exploded) $
+          trace ("AD result: " ++ show transformedExp) $
           ReverseADRes paramlhs' (realiseArgs transformedExp paramlhs')
   where
     varsToArgs :: A.ExpVars env t -> OpenExp env' lab env t
@@ -182,6 +183,7 @@ reverseAD paramlhs expr
           | otherwise
               -> error $ "produceGradient: Adjoint of Arg (" ++ show ty ++ ") " ++
                             'A' : show (A.idxToInt idx) ++ " not computed"
+        _ -> error "produceGradient: what?"
 
 realiseArgs :: OpenExp () lab args t -> A.ELeftHandSide t () args -> OpenExp args lab () t
 realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
@@ -206,7 +208,9 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- - Label: the original expression should not have included Label
 -- - Pair or Nil: eliminated by pairing of variable labels
 explode :: LabVal Int env -> OpenExp env unused args t -> Exploded Int args t
-explode labelenv e = evalIdGen (explode' labelenv e)
+explode labelenv e =
+    trace ("explode: exploding " ++ showsExpr (const "L?") 0 [] 9 e "") $
+    evalIdGen (explode' labelenv e)
 
 explode' :: LabVal Int env -> OpenExp env unused args t -> IdGen (Exploded Int args t)
 explode' env = \case
@@ -321,6 +325,7 @@ primal' :: Ord lab
         -> (forall env'. LabVal (PD lab) env' -> OpenExp env' (PD lab) args res)
         -> OpenExp env (PD lab) args res
 primal' nodemap lbl labelenv cont
+  -- | trace ("primal': computing " ++ show lbl) False = undefined
   | labValContains labelenv (P (labelLabel lbl)) =
       cont labelenv
   | not (uniqueLabVal labelenv) =
@@ -359,6 +364,26 @@ primal' nodemap lbl labelenv cont
           Arg ty idx ->
               let subexp = cont (LPush labelenv (fmapLabel P lbl))
               in Let (A.LeftHandSideSingle ty) (Arg ty idx) subexp
+
+          Label (DLScalar arglabel) ->
+              -- We can do this because 'labelType lbl' is a ScalarType, and that's
+              -- the same type as this expression node.
+              primal' nodemap arglabel labelenv $ \labelenv' ->
+                  case labValFind labelenv' (fmapLabel P arglabel) of
+                      Just idx ->
+                          Let (A.LeftHandSideSingle (labelType arglabel))
+                              (Var (A.Var (labelType arglabel) idx))
+                              (cont (LPush labelenv' (fmapLabel P lbl)))
+                      Nothing ->
+                          error "primal: Label remap in nodemap was not previously computed"
+
+          -- Label arglabs ->
+          --     primal'Tuple nodemap arglabs labelenv $ \labelenv' ->
+          --         case labValFinds labelenv' (fmapLabels P arglabs) of
+          --             Just vars ->
+          --                 let subexp = cont (lpushVars labelenv' (fmapLabel P lbl))
+          --                     lhs = varsLHS vars
+          --                 in Let lhs vars subexp
 
           _ ->
               error "primal: Unexpected node shape in Exploded"
@@ -420,6 +445,7 @@ dual' :: forall res env args.
       -> OpenExp env (PD Int) args res
 dual' _ [] labelenv _ cont = cont labelenv
 dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
+    -- trace ("dual': computing " ++ show lbl) $
     case nodemap DMap.! lbl of
       -- We aren't interested in the adjoint of constant nodes -- seeing as
       -- they don't have any parents to contribute to.
@@ -457,9 +483,35 @@ dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
       Get restype path (Label arglabs) ->
           dual'Get nodemap lbl restype arglabs path restlabels labelenv contribmap cont
 
+      Label (DLScalar arglab) ->
+          dual'Label nodemap lbl arglab restlabels labelenv contribmap cont
+
       expr -> trace ("\n!! " ++ show expr) undefined
 
 -- TODO: More DRY code!
+dual'Label :: forall res env a args.
+              DMap (DLabel Int) (Exp Int args)
+           -> DLabel Int a
+           -> DLabel Int a
+           -> [AnyLabel Int]
+           -> LabVal (PD Int) env
+           -> DMap (DLabel (PD Int)) (AdjList (PD Int) args)
+           -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) args res)
+           -> OpenExp env (PD Int) args res
+dual'Label nodemap lbl arglab restlabels labelenv contribmap cont =
+    let adjoint = case contribmap DMap.! fmapLabel D lbl of
+                    AdjList listgen ->
+                        fromJust $ maybeExpSum (labelType arglab) (listgen labelenv)
+        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
+        contribution labelenv' =
+            case labValFind labelenv' (fmapLabel D lbl) of
+              Just adjidx ->
+                  Var (A.Var (labelType arglab) adjidx)
+              _ -> error "dual' Label: node D was not computed"
+        contribmap' = addContribution (fmapLabel D arglab) contribution contribmap
+    in Let (A.LeftHandSideSingle (labelType arglab)) adjoint
+           (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+
 dual'Add :: forall res env a args.
             DMap (DLabel Int) (Exp Int args)
          -> DLabel Int a
@@ -579,9 +631,9 @@ dual'Get nodemap lbl (TupRsingle restypeS) arglabs path restlabels labelenv cont
 
         contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args item
         contribution labelenv' =
-            case labValFind labelenv' (fmapLabel D targetLabel) of
+            case labValFind labelenv' (fmapLabel D lbl) of
               Just adjidx -> Var (A.Var restypeS adjidx)
-              _ -> error "dual' App Get: node D was not computed"
+              _ -> error $ "dual' App Get " ++ show lbl ++ ": node D " ++ show targetLabel ++ " was not computed"
 
         contribmap' = addContribution (fmapLabel D targetLabel) contribution contribmap
     in Let (A.LeftHandSideSingle restypeS) adjoint
@@ -697,9 +749,9 @@ expLabelParents = \case
     Get _ path (Label labs) -> collect (pickDLabels path labs)
     Get _ _ e -> fromLabel e
     Arg _ _ -> []
+    Label lab -> collect lab
     Let _ _ _ -> unimplemented "Let"
     Var _ -> unimplemented "Var"
-    Label _ -> unimplemented "Label"
   where
     unimplemented name =
         error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
