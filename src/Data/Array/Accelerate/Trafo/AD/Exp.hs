@@ -5,7 +5,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 module Data.Array.Accelerate.Trafo.AD.Exp (
     module Data.Array.Accelerate.Trafo.AD.Exp,
-    Idx(..), Val(..), idxToInt, prj
+    Idx(..), idxToInt
 ) where
 
 import Data.GADT.Compare
@@ -13,7 +13,7 @@ import Data.GADT.Show
 
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST as A
-import Data.Array.Accelerate.AST (Idx(..), Val(..), idxToInt, prj)
+import Data.Array.Accelerate.AST (Idx(..), idxToInt)
 import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Shows
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
@@ -22,6 +22,7 @@ import Data.Array.Accelerate.Trafo.AD.Orphans ()
 -- De Bruijn
 -- ---------
 
+-- TODO: check whether this type is actually used anywhere
 data TagVal tag env where
     TEmpty :: TagVal tag ()
     TPush :: TagVal tag env -> tag -> TupleType t -> TagVal tag (env, t)
