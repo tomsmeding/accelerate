@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -488,13 +489,9 @@ dual'Label :: forall res env a args.
            -> OpenExp env (PD Int) args res
 dual'Label nodemap lbl arglab restlabels labelenv contribmap cont =
     let adjoint = collectAdjoint contribmap lbl (TupRsingle (labelType arglab)) labelenv
-        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
-        contribution labelenv' =
-            case labValFind labelenv' (fmapLabel D lbl) of
-              Just adjidx ->
-                  Var (A.Var (labelType arglab) adjidx)
-              _ -> error "dual' Label: node D was not computed"
-        contribmap' = addContribution (fmapLabel D arglab) contribution contribmap
+        contribmap' = updateContribmap lbl
+                          [Contribution arglab TLNil (\adjidx _ -> Var (A.Var (labelType arglab) adjidx))]
+                          contribmap
     in Let (A.LeftHandSideSingle (labelType arglab)) adjoint
            (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
 
@@ -511,18 +508,10 @@ dual'Add :: forall res env a args.
 dual'Add nodemap lbl argtype (DLPair (DLScalar arglab1) (DLScalar arglab2)) restlabels labelenv contribmap cont =
     let argtypeS = SingleScalarType (NumSingleType argtype)
         adjoint = collectAdjointNum contribmap lbl argtype labelenv
-        -- Type signature here is necessary, and its mentioning of 'a' enforces
-        -- that dual'Add has a type signature, which enforces this separation
-        -- thing. See Note [dual' split].
-        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
-        contribution labelenv' =
-            case labValFind labelenv' (fmapLabel D lbl) of
-              Just adjidx ->
-                  Var (A.Var argtypeS adjidx)
-              _ -> error "dual' App Add: node D was not computed"
-        contribmap' = addContribution (fmapLabel D arglab1) contribution $
-                      addContribution (fmapLabel D arglab2) contribution $
-                      contribmap
+        contribmap' = updateContribmap lbl
+                          [Contribution arglab1 TLNil (\adjidx _ -> Var (A.Var argtypeS adjidx))
+                          ,Contribution arglab2 TLNil (\adjidx _ -> Var (A.Var argtypeS adjidx))]
+                          contribmap
     in Let (A.LeftHandSideSingle argtypeS) adjoint
            (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
 dual'Add _ _ _ _ _ _ _ _ = error "Invalid types in PrimAdd"
@@ -541,25 +530,16 @@ dual'Mul nodemap lbl argtype (DLPair (DLScalar arglab1) (DLScalar arglab2)) rest
     let argtypeS = SingleScalarType (NumSingleType argtype)
         argtypeT = TupRsingle argtypeS
         adjoint = collectAdjointNum contribmap lbl argtype labelenv
-        contribution1 :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
-        contribution1 labelenv' =
-            case (labValFind labelenv' (fmapLabel P arglab2), labValFind labelenv' (fmapLabel D lbl)) of
-              (Just arg2idx, Just adjidx) ->
-                  PrimApp argtypeT (A.PrimMul argtype)
-                      (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
-                                                         (Var (A.Var argtypeS arg2idx)))
-              _ -> error "dual' App Mul: arg P and/or node D was not computed"
-        contribution2 :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
-        contribution2 labelenv' =
-            case (labValFind labelenv' (fmapLabel P arglab1), labValFind labelenv' (fmapLabel D lbl)) of
-              (Just arg1idx, Just adjidx) ->
-                  PrimApp argtypeT (A.PrimMul argtype)
-                      (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
-                                                         (Var (A.Var argtypeS arg1idx)))
-              _ -> error "dual' App Mul: arg P and/or node D was not computed"
-        contribmap' = addContribution (fmapLabel D arglab1) contribution1 $
-                      addContribution (fmapLabel D arglab2) contribution2 $
-                      contribmap
+        contribmap' = updateContribmap lbl
+                          [Contribution arglab1 (arglab2 :@ TLNil) (\adjidx (arg2idx :@ _) ->
+                              PrimApp argtypeT (A.PrimMul argtype)
+                                  (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
+                                                                     (Var (A.Var argtypeS arg2idx))))
+                          ,Contribution arglab2 (arglab1 :@ TLNil) (\adjidx (arg1idx :@ _) ->
+                              PrimApp argtypeT (A.PrimMul argtype)
+                                  (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
+                                                                     (Var (A.Var argtypeS arg1idx))))]
+                          contribmap
     in Let (A.LeftHandSideSingle argtypeS) adjoint
            (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
 dual'Mul _ _ _ _ _ _ _ _ = error "Invalid types in PrimMul"
@@ -578,16 +558,13 @@ dual'Log nodemap lbl argtype (DLScalar arglab) restlabels labelenv contribmap co
     let argtypeS = SingleScalarType (NumSingleType (FloatingNumType argtype))
         argtypeT = TupRsingle argtypeS
         adjoint = collectAdjointNum contribmap lbl (FloatingNumType argtype) labelenv
-        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
-        contribution labelenv' =
-            case (labValFind labelenv' (fmapLabel P arglab), labValFind labelenv' (fmapLabel D lbl)) of
-              (Just argidx, Just adjidx) ->
-                  -- dE/dx = dE/d(log x) * d(log x)/dx = adjoint * 1/x = adjoint / x
-                  PrimApp argtypeT (A.PrimFDiv argtype)
-                      (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
-                                                         (Var (A.Var argtypeS argidx)))
-              _ -> error "dual' App Log: arg P and/or node D were not computed"
-        contribmap' = addContribution (fmapLabel D arglab) contribution contribmap
+        contribmap' = updateContribmap lbl
+                          [Contribution arglab (arglab :@ TLNil) (\adjidx (argidx :@ _) ->
+                              -- dE/dx = dE/d(log x) * d(log x)/dx = adjoint * 1/x = adjoint / x
+                              PrimApp argtypeT (A.PrimFDiv argtype)
+                                  (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
+                                                                     (Var (A.Var argtypeS argidx))))]
+                          contribmap
     in Let (A.LeftHandSideSingle argtypeS) adjoint
            (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
 dual'Log _ _ _ _ _ _ _ _ = error "Invalid types in PrimLog"
@@ -611,19 +588,54 @@ dual'Get nodemap lbl restype@(TupRsingle restypeS) arglabs path restlabels label
                         DLScalar lab -> lab
                         _ -> error "Invalid types in Get (pickDLabels)"
 
-        contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args item
-        contribution labelenv' =
-            case labValFind labelenv' (fmapLabel D lbl) of
-              Just adjidx -> Var (A.Var restypeS adjidx)
-              _ -> error $ "dual' App Get " ++ show lbl ++ ": node D " ++ show targetLabel ++ " was not computed"
-
-        contribmap' = addContribution (fmapLabel D targetLabel) contribution contribmap
+        contribmap' = updateContribmap lbl
+                          [Contribution targetLabel TLNil (\adjidx _ -> Var (A.Var restypeS adjidx))]
+                          contribmap
     in Let (A.LeftHandSideSingle restypeS) adjoint
            (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
 dual'Get _ _ _ _ _ _ _ _ _ = error "Invalid types in Get"
 
 -- Utility functions
 -- -----------------
+
+infixr :@
+data TypedList f tys where
+    TLNil :: TypedList f '[]
+    (:@) :: f t -> TypedList f tys -> TypedList f (t ': tys)
+
+tlmap :: (forall t. f t -> g t) -> TypedList f tys -> TypedList g tys
+tlmap _ TLNil = TLNil
+tlmap f (x :@ xs) = f x :@ tlmap f xs
+
+data Contribution node args =
+    forall parents t.
+        Contribution (DLabel Int t)  -- adjoint of which label to contribute to
+                     (TypedList (DLabel Int) parents)  -- labels you need the primary value of
+                     (forall env. Idx env node -> TypedList (Idx env) parents -> OpenExp env (PD Int) args t)
+
+-- Note: Before this code was extracted into a separate function, its
+-- functionality was inlined in the branches of dual'. Because of that, the
+-- branches needed explicit type signatures (and thus be separate functions),
+-- since the definition of the contribution function had too intricate type
+-- variables for GHC to figure out.
+-- Now that this is a separate function, though, the type signature here (and
+-- the typing of Contribution) removes the need of the branches of dual' to
+-- have a separate type signature, significantly simplifying the structure of
+-- the code.
+updateContribmap :: DLabel Int node
+                 -> [Contribution node args]
+                 -> DMap (DLabel (PD Int)) (AdjList (PD Int) args)
+                 -> DMap (DLabel (PD Int)) (AdjList (PD Int) args)
+updateContribmap lbl =
+    flip . foldr $ \(Contribution lab parentlabs gen) ->
+        addContribution (fmapLabel D lab) $ \labelenv ->
+            case (labValFind labelenv (fmapLabel D lbl), findAll labelenv parentlabs) of
+                (Just idx, indices) -> gen idx indices
+                _ -> error $ "updateContribmap: node D " ++ show lbl ++ " was not computed"
+  where
+    findAll :: LabVal (PD Int) env -> TypedList (DLabel Int) parents -> TypedList (Idx env) parents
+    findAll labelenv = tlmap $ \lab -> fromMaybe (err lab) (labValFind labelenv (fmapLabel P lab))
+      where err lab = error $ "updateContribmap: arg P " ++ show lab ++ " was not computed"
 
 addContribution :: Ord lab
                 => DLabel lab t
