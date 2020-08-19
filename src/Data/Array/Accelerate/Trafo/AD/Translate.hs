@@ -1,6 +1,8 @@
 {-# LANGUAGE GADTs #-}
 module Data.Array.Accelerate.Trafo.AD.Translate where
 
+import Data.Maybe (fromJust)
+
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.Trafo.Substitution as A
 import Data.Array.Accelerate.Error
@@ -8,7 +10,6 @@ import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Analysis.Match (matchTupleType, (:~:)(Refl))
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as D
-import Data.Maybe (fromJust)
 
 
 translateExp :: A.OpenExp env aenv t -> D.OpenExp env lab args t
