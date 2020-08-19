@@ -72,11 +72,6 @@ showArgmap argmap =
 showDLabel :: Show lab => DLabel lab t -> String
 showDLabel (DLabel ty lab) = "L" ++ show lab ++ " :: " ++ show ty
 
-explodedAddNode :: Ord lab => DLabel lab t -> Exp lab args t -> Exploded lab args res -> Exploded lab args res
-explodedAddNode lab expr (endlab, nodemap, argmap)
-  | lab `DMap.notMember` nodemap = (endlab, DMap.insert lab expr nodemap, argmap)
-  | otherwise = error "explodedAddNode: Label already exists in nodemap"
-
 data ExpandLHS s t env env1
     = forall env2. ExpandLHS (A.LeftHandSide s t env env2) (env1 A.:> env2)
 
