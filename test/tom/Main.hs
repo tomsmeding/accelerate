@@ -7,6 +7,7 @@ import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Interpreter as I
 import Data.Array.Accelerate (Z(..), (:.)(..))
 
+import qualified ADHelp as AD
 import qualified Logistic
 import qualified Optimise
 
@@ -49,14 +50,25 @@ ignoretest = do
                    (\_ -> A.lift Z)
                    (A.use (A.fromList (Z :. (10 :: Int)) [1::Float .. 10])))
 
-adtest1 :: IO ()
-adtest1 = do
-  print $ I.run (A.unit (A.gradientE (\x -> 2 * x) (5 :: A.Exp Float)))
-  print $ I.run (A.unit (A.gradientE (\x -> 2 * x * x) (5 :: A.Exp Float)))
-  print $ I.run (A.unit (A.gradientE (\(A.T2 x y) -> log (x + x * y)) (A.T2 5 6 :: A.Exp (Float, Float))))
-  print $ I.run (A.unit (A.gradientE (\x ->
-              let A.T2 y z = A.T2 (log (x * x)) (log x)
-              in y * z + z * y) (5 :: A.Exp Float)))
+adtest :: IO ()
+adtest = do
+  AD.compareAD (\x -> 2 * x)
+               (\x -> 2 * x)
+               5
+
+  AD.compareAD (\x -> 2 * x * x)
+               (\x -> 2 * x * x)
+               5
+
+  AD.compareAD (\(A.T2 x y) -> log (x + x * y))
+               (\(x, y)     -> log (x + x * y))
+               (5, 6)
+
+  AD.compareAD (\x -> let A.T2 y z = A.T2 (log (x * x)) (log x) in y * z + z * y)
+               (\x -> let (y, z)   =      (log (x * x),  log x) in y * z + z * y)
+               5
+
+  print $ I.run (A.unit (A.gradientE (\x -> x * x + x) (4 :: A.Exp Float)))
 
 main :: IO ()
 main = do
@@ -65,4 +77,4 @@ main = do
   -- indexing
   -- apply
   -- ignoretest
-  adtest1
+  adtest
