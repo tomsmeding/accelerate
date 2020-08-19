@@ -487,9 +487,7 @@ dual'Label :: forall res env a args.
            -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) args res)
            -> OpenExp env (PD Int) args res
 dual'Label nodemap lbl arglab restlabels labelenv contribmap cont =
-    let adjoint = case contribmap DMap.! fmapLabel D lbl of
-                    AdjList listgen ->
-                        fromJust $ maybeExpSum (labelType arglab) (listgen labelenv)
+    let adjoint = collectAdjoint contribmap lbl (TupRsingle (labelType arglab)) labelenv
         contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
         contribution labelenv' =
             case labValFind labelenv' (fmapLabel D lbl) of
@@ -512,8 +510,7 @@ dual'Add :: forall res env a args.
          -> OpenExp env (PD Int) args res
 dual'Add nodemap lbl argtype (DLPair (DLScalar arglab1) (DLScalar arglab2)) restlabels labelenv contribmap cont =
     let argtypeS = SingleScalarType (NumSingleType argtype)
-        adjoint = case contribmap DMap.! fmapLabel D lbl of
-                    AdjList listgen -> expSum argtype (listgen labelenv)
+        adjoint = collectAdjointNum contribmap lbl argtype labelenv
         -- Type signature here is necessary, and its mentioning of 'a' enforces
         -- that dual'Add has a type signature, which enforces this separation
         -- thing. See Note [dual' split].
@@ -543,8 +540,7 @@ dual'Mul :: forall res env a args.
 dual'Mul nodemap lbl argtype (DLPair (DLScalar arglab1) (DLScalar arglab2)) restlabels labelenv contribmap cont =
     let argtypeS = SingleScalarType (NumSingleType argtype)
         argtypeT = TupRsingle argtypeS
-        adjoint = case contribmap DMap.! fmapLabel D lbl of
-                    AdjList listgen -> expSum argtype (listgen labelenv)
+        adjoint = collectAdjointNum contribmap lbl argtype labelenv
         contribution1 :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
         contribution1 labelenv' =
             case (labValFind labelenv' (fmapLabel P arglab2), labValFind labelenv' (fmapLabel D lbl)) of
@@ -581,8 +577,7 @@ dual'Log :: forall res env a args.
 dual'Log nodemap lbl argtype (DLScalar arglab) restlabels labelenv contribmap cont =
     let argtypeS = SingleScalarType (NumSingleType (FloatingNumType argtype))
         argtypeT = TupRsingle argtypeS
-        adjoint = case contribmap DMap.! fmapLabel D lbl of
-                    AdjList listgen -> expSum argtype (listgen labelenv)
+        adjoint = collectAdjointNum contribmap lbl (FloatingNumType argtype) labelenv
         contribution :: LabVal (PD Int) env' -> OpenExp env' (PD Int) args a
         contribution labelenv' =
             case (labValFind labelenv' (fmapLabel P arglab), labValFind labelenv' (fmapLabel D lbl)) of
@@ -609,9 +604,8 @@ dual'Get :: forall res env tup item args.
          -> DMap (DLabel (PD Int)) (AdjList (PD Int) args)
          -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) args res)
          -> OpenExp env (PD Int) args res
-dual'Get nodemap lbl (TupRsingle restypeS) arglabs path restlabels labelenv contribmap cont =
-    let adjoint = case contribmap DMap.! fmapLabel D lbl of
-                    AdjList listgen -> fromJust $ maybeExpSum restypeS (listgen labelenv)
+dual'Get nodemap lbl restype@(TupRsingle restypeS) arglabs path restlabels labelenv contribmap cont =
+    let adjoint = collectAdjoint contribmap lbl restype labelenv
 
         targetLabel = case pickDLabels path arglabs of
                         DLScalar lab -> lab
@@ -640,6 +634,24 @@ addContribution lbl contribution =
     DMap.insertWith (\(AdjList f1) (AdjList f2) -> AdjList (\labelenv -> f1 labelenv ++ f2 labelenv))
                     lbl
                     (AdjList (pure . contribution))
+
+collectAdjoint :: DMap (DLabel (PD Int)) (AdjList (PD Int) args)
+               -> DLabel Int item
+               -> TupleType item
+               -> LabVal (PD Int) env
+               -> OpenExp env (PD Int) args item
+collectAdjoint contribmap lbl ty labelenv =
+    case contribmap DMap.! fmapLabel D lbl of
+      AdjList listgen -> fromJust $ maybeExpSum ty (listgen labelenv)
+
+collectAdjointNum :: DMap (DLabel (PD Int)) (AdjList (PD Int) args)
+                  -> DLabel Int item
+                  -> NumType item
+                  -> LabVal (PD Int) env
+                  -> OpenExp env (PD Int) args item
+collectAdjointNum contribmap lbl ty labelenv =
+    case contribmap DMap.! fmapLabel D lbl of
+      AdjList listgen -> expSum ty (listgen labelenv)
 
 class IsAdditive s where
     zeroForType' :: (forall a. Num a => a) -> s t -> OpenExp env lab args t
