@@ -373,14 +373,6 @@ primal' nodemap lbl labelenv cont
                       Nothing ->
                           error "primal: Label remap in nodemap was not previously computed"
 
-          -- Label arglabs ->
-          --     primal'Tuple nodemap arglabs labelenv $ \labelenv' ->
-          --         case labValFinds labelenv' (fmapLabels P arglabs) of
-          --             Just vars ->
-          --                 let subexp = cont (lpushVars labelenv' (fmapLabel P lbl))
-          --                     lhs = varsLHS vars
-          --                 in Let lhs vars subexp
-
           _ ->
               error "primal: Unexpected node shape in Exploded"
 
@@ -431,7 +423,7 @@ dual (DLScalar endlab, nodemap, _) labelenv cont =
                           alllabels
                           (\(AnyLabel l) -> parentmap Map.! labelLabel l)
 
--- Note [dualGate split]
+-- Note [dual' split]
 dual' :: forall res env args.
          DMap (DLabel Int) (Exp Int args)
       -> [AnyLabel Int]
@@ -753,7 +745,7 @@ expLabelParents = \case
         error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
 
     fromLabel (Label labs) = collect labs
-    fromLabel _ = error ("expLabelParents: Parent is not a label set")
+    fromLabel _ = error "expLabelParents: Parent is not a label set"
 
     collect :: DLabels lab t -> [AnyLabel lab]
     collect DLNil = []
