@@ -72,6 +72,8 @@ adtest = do
 
 adtest2 :: IO ()
 adtest2 = do
+  print (I.run (A.map (A.gradientE (\x -> x * x))
+                      (A.generate (A.index1 15) (\i -> A.toFloating (A.unindex1 i :: A.Exp Int) :: A.Exp Float))))
   print $ I.run (A.unit (A.gradientE (\x -> A.cond (x A.> 0) (x + 1) (x * 2)) (3 :: A.Exp Float)))
 
 main :: IO ()
