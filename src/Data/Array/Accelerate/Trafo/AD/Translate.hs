@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Data.Array.Accelerate.Trafo.AD.Translate where
 
 import Data.Maybe (fromJust)
@@ -20,7 +21,7 @@ translateExp expr = case expr of
     A.Let lhs def body -> D.Let lhs (translateExp def) (translateExp body)
     A.Nil -> D.Nil
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
-    _ -> internalError "AD.translateExp" ("Cannot perform AD on Exp node <" ++ A.showPreExpOp expr ++ ">")
+    _ -> $internalError "AD.translateExp" ("Cannot perform AD on Exp node <" ++ A.showPreExpOp expr ++ ">")
 
 untranslateExp :: D.OpenExp env lab args t -> A.OpenExp env aenv t
 untranslateExp expr = case expr of
@@ -33,8 +34,8 @@ untranslateExp expr = case expr of
     D.Get _ path e
       | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
       -> A.Let lhs (untranslateExp e) body
-    D.Arg _ _ -> internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
-    D.Label _ -> internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
+    D.Arg _ _ -> $internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
+    D.Label _ -> $internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
 
 data PartialVal topenv env where
     PTEmpty :: PartialVal topenv topenv
@@ -79,8 +80,8 @@ untranslateLHSboundExp toplhs topexpr
         D.Get _ path e
           | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
           -> A.Let lhs (go e pv) body
-        D.Arg _ _ -> internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
-        D.Label _ -> internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
+        D.Arg _ _ -> $internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
+        D.Label _ -> $internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
 
 data LetBoundExp env aenv t s =
     forall env'. LetBoundExp (A.ELeftHandSide t env env') (A.OpenExp env' aenv s)
