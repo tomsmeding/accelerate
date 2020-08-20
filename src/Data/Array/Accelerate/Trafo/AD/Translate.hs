@@ -1,15 +1,18 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE TemplateHaskell #-}
 module Data.Array.Accelerate.Trafo.AD.Translate where
 
 import Data.Maybe (fromJust)
 
 import qualified Data.Array.Accelerate.AST as A
+import qualified Data.Array.Accelerate.AST.Environment as A
+import qualified Data.Array.Accelerate.AST.LeftHandSide as A
+import qualified Data.Array.Accelerate.AST.Idx as A
+import qualified Data.Array.Accelerate.AST.Var as A
 import qualified Data.Array.Accelerate.Trafo.Substitution as A
 import Data.Array.Accelerate.Error
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
-import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Analysis.Match (matchTupleType, (:~:)(Refl))
+import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Analysis.Match (matchTypeR, (:~:)(Refl))
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as D
 
 
@@ -21,7 +24,7 @@ translateExp expr = case expr of
     A.Let lhs def body -> D.Let lhs (translateExp def) (translateExp body)
     A.Nil -> D.Nil
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
-    _ -> $internalError "AD.translateExp" ("Cannot perform AD on Exp node <" ++ A.showPreExpOp expr ++ ">")
+    _ -> internalError "AD.translateExp" ("Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
 
 untranslateExp :: D.OpenExp env lab args t -> A.OpenExp env aenv t
 untranslateExp expr = case expr of
@@ -34,16 +37,16 @@ untranslateExp expr = case expr of
     D.Get _ path e
       | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
       -> A.Let lhs (untranslateExp e) body
-    D.Arg _ _ -> $internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
-    D.Label _ -> $internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
+    D.Arg _ _ -> internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
+    D.Label _ -> internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
 
 data PartialVal topenv env where
     PTEmpty :: PartialVal topenv topenv
-    PTPush :: PartialVal topenv env -> TupleType t -> PartialVal topenv (env, t)
+    PTPush :: PartialVal topenv env -> TypeR t -> PartialVal topenv (env, t)
 
 pvalPushLHS :: A.ELeftHandSide t env env' -> PartialVal topenv env -> PartialVal topenv env'
 pvalPushLHS (A.LeftHandSideWildcard _) tv = tv
-pvalPushLHS (A.LeftHandSideSingle sty) tv = PTPush tv (A.TupRsingle sty)
+pvalPushLHS (A.LeftHandSideSingle sty) tv = PTPush tv (TupRsingle sty)
 pvalPushLHS (A.LeftHandSidePair lhs1 lhs2) tv = pvalPushLHS lhs2 (pvalPushLHS lhs1 tv)
 
 data UntranslateResult a env aenv t =
@@ -65,7 +68,7 @@ untranslateLHSboundExp toplhs topexpr
             checkLocal :: A.ExpVar env t -> PartialVal topenv env2 -> Maybe (A.ExpVar env2 t)
             checkLocal _ PTEmpty = Nothing
             checkLocal (A.Var sty A.ZeroIdx) (PTPush _ sty')
-              | Just Refl <- matchTupleType (A.TupRsingle sty) sty' =
+              | Just Refl <- matchTypeR (TupRsingle sty) sty' =
                   Just (A.Var sty A.ZeroIdx)
               | otherwise = Nothing
             checkLocal (A.Var sty (A.SuccIdx idx)) (PTPush tagval _)
@@ -80,13 +83,13 @@ untranslateLHSboundExp toplhs topexpr
         D.Get _ path e
           | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
           -> A.Let lhs (go e pv) body
-        D.Arg _ _ -> $internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
-        D.Label _ -> $internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
+        D.Arg _ _ -> internalError "AD.untranslateExp" "Unexpected Arg in untranslate!"
+        D.Label _ -> internalError "AD.untranslateExp" "Unexpected Label in untranslate!"
 
 data LetBoundExp env aenv t s =
     forall env'. LetBoundExp (A.ELeftHandSide t env env') (A.OpenExp env' aenv s)
 
-untranslateGet :: TupleType t -> D.TupleIdx s t -> LetBoundExp env aenv t s
+untranslateGet :: TypeR t -> D.TupleIdx s t -> LetBoundExp env aenv t s
 untranslateGet ty D.TIHere = lhsCopy ty
 untranslateGet (TupRpair t1 t2) (D.TILeft path)
   | LetBoundExp lhs1 ex1 <- untranslateGet t1 path
@@ -96,7 +99,7 @@ untranslateGet (TupRpair t1 t2) (D.TIRight path)
   = LetBoundExp (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs2) ex2
 untranslateGet _ _ = error "untranslateGet: impossible GADTs"
 
-lhsCopy :: TupleType t -> LetBoundExp env aenv t t
+lhsCopy :: TypeR t -> LetBoundExp env aenv t t
 lhsCopy TupRunit = LetBoundExp (A.LeftHandSideWildcard TupRunit) A.Nil
 lhsCopy (TupRsingle sty) = LetBoundExp (A.LeftHandSideSingle sty) (A.Evar (A.Var sty A.ZeroIdx))
 lhsCopy (TupRpair t1 t2)

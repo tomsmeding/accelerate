@@ -987,7 +987,7 @@ evalOpenExp pexp env aenv =
     ShapeSize shr sh            -> size shr (evalE sh)
     Foreign _ _ f e             -> evalOpenFun f Empty Empty $ evalE e
     Coerce t1 t2 e              -> evalCoerceScalar t1 t2 (evalE e)
-    GradientE _ _ _ _           -> $internalError "evalPreOpenExp" "GradientE unimplemented in Interpreter"
+    GradientE _ _ _ _           -> internalError "evalPreOpenExp" "GradientE unimplemented in Interpreter"
 
 
 -- Coercions
@@ -1771,7 +1771,7 @@ evalSeq conf s aenv = evalSeq' s
           in ExecStuple (initTup t)
 
     delayed :: DelayedOpenAcc aenv (Array sh e) -> Delayed (Array sh e)
-    delayed AST.Manifest{}  = $internalError "evalOpenAcc" "expected delayed array"
+    delayed AST.Manifest{}  = internalError "evalOpenAcc" "expected delayed array"
     delayed AST.Delayed{..} = Delayed (evalExp extentD aenv)
                                       (evalFun indexD aenv)
                                       (evalFun linearIndexD aenv)

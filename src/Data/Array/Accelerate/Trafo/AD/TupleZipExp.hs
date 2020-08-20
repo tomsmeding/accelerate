@@ -12,8 +12,11 @@ module Data.Array.Accelerate.Trafo.AD.TupleZipExp (
 ) where
 
 import Data.Array.Accelerate.AST
-import Data.Array.Accelerate.Trafo.Base
 import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.AST.Environment (weakenWithLHS, weakenId)
+import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Trafo.Substitution (weakenE)
+import Data.Array.Accelerate.Trafo.Var
 
 
 type Combiner lab =
@@ -23,19 +26,19 @@ type Combiner lab =
                  -> Maybe (OpenExp env lab s)
 
 varsZip :: Combiner lab
-        -> TupleType t
+        -> TypeR t
         -> ExpVars env t
         -> ExpVars env t
         -> Maybe (OpenExp env lab t)
-varsZip _ TupRunit VarsNil VarsNil =
+varsZip _ TupRunit TupRunit TupRunit =
   Just Nil
-varsZip combine (TupRsingle ty) (VarsSingle v1) (VarsSingle v2) =
+varsZip combine (TupRsingle ty) (TupRsingle v1) (TupRsingle v2) =
   combine ty (Evar v1) (Evar v2)
-varsZip combine (TupRpair t1 t2) (VarsPair v11 v12) (VarsPair v21 v22) =
+varsZip combine (TupRpair t1 t2) (TupRpair v11 v12) (TupRpair v21 v22) =
   Pair <$> varsZip combine t1 v11 v21 <*> varsZip combine t2 v12 v22
 varsZip _ _ _ _ = error "inconsistency in varsZip"
 
-tupleZip :: forall env lab t. TupleType t
+tupleZip :: forall env lab t. TypeR t
          -> Combiner lab
          -> OpenExp env lab t
          -> OpenExp env lab t

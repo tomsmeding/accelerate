@@ -1,8 +1,10 @@
 {-# LANGUAGE GADTs #-}
 module Data.Array.Accelerate.Shows where
 
-import Data.Array.Accelerate.Array.Representation
+import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.Type
 
 
@@ -13,7 +15,7 @@ showTupR (TupRpair a b) = "(" ++ showTupR a ++ ", " ++ showTupR b ++ ")"
 
 showTupRA :: TupR ArrayR arrs -> String
 showTupRA TupRunit = "()"
-showTupRA (TupRsingle rep) = showArrayR rep ""
+showTupRA (TupRsingle rep) = show rep
 showTupRA (TupRpair a b) = "(" ++ showTupRA a ++ ", " ++ showTupRA b ++ ")"
 
 showLHS :: LeftHandSide ScalarType arrs aenv aenv' -> String
@@ -22,7 +24,7 @@ showLHS (LeftHandSideWildcard r) = showTupR r
 showLHS (LeftHandSidePair as bs) = "(" ++ showLHS as ++ ", " ++ showLHS bs ++ ")"
 
 showLHSA :: LeftHandSide ArrayR arrs aenv aenv' -> String
-showLHSA (LeftHandSideSingle s) = showArrayR s ""
+showLHSA (LeftHandSideSingle s) = show s
 showLHSA (LeftHandSideWildcard r) = showTupRA r
 showLHSA (LeftHandSidePair as bs) = "(" ++ showLHSA as ++ ", " ++ showLHSA bs ++ ")"
 
@@ -83,9 +85,6 @@ showPrimFun (PrimMin _)            = "PrimMin"
 showPrimFun PrimLAnd               = "PrimLAnd"
 showPrimFun PrimLOr                = "PrimLOr"
 showPrimFun PrimLNot               = "PrimLNot"
-showPrimFun PrimOrd                = "PrimOrd"
-showPrimFun PrimChr                = "PrimChr"
-showPrimFun PrimBoolToInt          = "PrimBoolToInt"
 showPrimFun (PrimFromIntegral _ _) = "PrimFromIntegral"
 showPrimFun (PrimPopCount _)       = "PrimPopCount"
 showPrimFun (PrimCountLeadingZeros _) = "PrimCountLeadingZeros"

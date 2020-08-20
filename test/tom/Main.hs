@@ -47,7 +47,7 @@ ignoretest = do
   -- ignore == Z, so can't permute onto a scalar
   print $ I.run
     (A.permute (+) (A.use (A.fromList Z [0]))
-                   (\_ -> A.lift Z)
+                   (\_ -> A.Just_ (A.lift Z))
                    (A.use (A.fromList (Z :. (10 :: Int)) [1::Float .. 10])))
 
 adtest :: IO ()

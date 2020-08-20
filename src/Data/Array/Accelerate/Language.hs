@@ -1352,9 +1352,9 @@ gradientE :: forall t e. (Elt t, Elt e)
           -> Exp t
           -- -> Exp (e, t)
           -> Exp t
-gradientE f (Exp e) = mkExp $ GradientE @(EltRepr t) @(EltRepr e) (eltType @t) (restrictScalars (eltType @e)) (unExp . f . Exp) e
+gradientE f (Exp e) = mkExp $ GradientE @(EltR t) @(EltR e) (eltR @t) (restrictScalars (eltR @e)) (unExp . f . Exp) e
   where
-    restrictScalars :: TupleType a -> ScalarType a
+    restrictScalars :: TypeR a -> ScalarType a
     restrictScalars (TupRsingle s) = s
     restrictScalars _ = error "Function under operator gradientE must return scalar"
 

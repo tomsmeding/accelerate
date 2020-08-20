@@ -425,14 +425,10 @@ library
         Data.Array.Accelerate.Trafo.AD.TupleZip
         -- Data.Array.Accelerate.Trafo.AD.TupleZipExp
         Data.Array.Accelerate.Trafo.AD.Util
-        Data.Array.Accelerate.Trafo.Base
-        Data.Array.Accelerate.Trafo.Config
-        Data.Array.Accelerate.Trafo.Fusion
         Data.Array.Accelerate.Trafo.LetSplit
         Data.Array.Accelerate.Trafo.Shrink
         Data.Array.Accelerate.Trafo.Simplify
         Data.Array.Accelerate.Trafo.Var
-        Data.Array.Accelerate.Trafo.Substitution
         Data.Atomic
 
         -- Data.Array.Accelerate.Array.Lifted

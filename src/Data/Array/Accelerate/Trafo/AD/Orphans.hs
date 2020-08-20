@@ -7,6 +7,7 @@ import Data.GADT.Compare
 import Data.Type.Equality
 
 import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Representation.Type
 
 
 instance GEq IntegralType where
@@ -33,15 +34,8 @@ instance GEq NumType where
   geq (FloatingNumType t1) (FloatingNumType t2) = geq t1 t2
   geq _ _ = Nothing
 
-instance GEq NonNumType where
-  geq TypeBool TypeBool = Just Refl
-  geq TypeChar TypeChar = Just Refl
-  geq _ _ = Nothing
-
 instance GEq SingleType where
   geq (NumSingleType t1) (NumSingleType t2) = geq t1 t2
-  geq (NonNumSingleType t1) (NonNumSingleType t2) = geq t1 t2
-  geq _ _ = Nothing
 
 instance GEq VectorType where
   geq _ _ =
@@ -101,12 +95,6 @@ instance GCompare FloatingType where
   gcompare _ TypeFloat = GGT
   gcompare TypeDouble TypeDouble = GEQ
 
-instance GCompare NonNumType where
-  gcompare TypeBool TypeBool = GEQ
-  gcompare TypeBool TypeChar = GLT
-  gcompare TypeChar TypeBool = GGT
-  gcompare TypeChar TypeChar = GEQ
-
 instance GCompare NumType where
   gcompare (IntegralNumType t1) (IntegralNumType t2) = gcompare t1 t2
   gcompare (IntegralNumType _) (FloatingNumType _) = GLT
@@ -115,9 +103,6 @@ instance GCompare NumType where
 
 instance GCompare SingleType where
   gcompare (NumSingleType t1) (NumSingleType t2) = gcompare t1 t2
-  gcompare (NumSingleType _) (NonNumSingleType _) = GLT
-  gcompare (NonNumSingleType _) (NumSingleType _) = GGT
-  gcompare (NonNumSingleType t1) (NonNumSingleType t2) = gcompare t1 t2
 
 instance GCompare VectorType where
   gcompare _ _ =

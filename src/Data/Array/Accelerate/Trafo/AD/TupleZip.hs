@@ -6,11 +6,12 @@ module Data.Array.Accelerate.Trafo.AD.TupleZip (
 ) where
 
 import qualified Data.Array.Accelerate.AST as A
-import Data.Array.Accelerate.AST (weakenWithLHS, weakenId)
+import Data.Array.Accelerate.AST.Environment (weakenWithLHS, weakenId)
 import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Trafo.Base
+import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Sink
+import Data.Array.Accelerate.Trafo.Var
 
 
 type Combiner lab =
@@ -20,20 +21,20 @@ type Combiner lab =
                  -> Maybe (OpenExp env lab args s)
 
 varsZip :: Combiner lab
-        -> TupleType t
+        -> TypeR t
         -> A.ExpVars env t
         -> A.ExpVars env t
         -> Maybe (OpenExp env lab args t)
-varsZip _ TupRunit A.VarsNil A.VarsNil =
+varsZip _ TupRunit TupRunit TupRunit =
   Just Nil
-varsZip combine (TupRsingle ty) (A.VarsSingle v1) (A.VarsSingle v2) =
+varsZip combine (TupRsingle ty) (TupRsingle v1) (TupRsingle v2) =
   combine ty (Var v1) (Var v2)
-varsZip combine ty@(TupRpair t1 t2) (A.VarsPair v11 v12) (A.VarsPair v21 v22) =
+varsZip combine ty@(TupRpair t1 t2) (TupRpair v11 v12) (TupRpair v21 v22) =
   Pair ty <$> varsZip combine t1 v11 v21 <*> varsZip combine t2 v12 v22
 varsZip _ _ _ _ = error "inconsistency in varsZip"
 
 tupleZip :: forall env lab t args.
-            TupleType t
+            TypeR t
          -> Combiner lab
          -> OpenExp env lab args t
          -> OpenExp env lab args t

@@ -16,6 +16,9 @@
 module Data.Array.Accelerate.AST.Idx
   where
 
+import Data.Typeable ((:~:)(Refl))
+import Data.GADT.Compare
+
 import Language.Haskell.TH
 
 -- De Bruijn variable index projecting a specific type from a type
