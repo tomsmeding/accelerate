@@ -987,7 +987,7 @@ evalOpenExp pexp env aenv =
     ShapeSize shr sh            -> size shr (evalE sh)
     Foreign _ _ f e             -> evalOpenFun f Empty Empty $ evalE e
     Coerce t1 t2 e              -> evalCoerceScalar t1 t2 (evalE e)
-    GradientE _ _ _ _           -> internalError "evalPreOpenExp" "GradientE unimplemented in Interpreter"
+    GradientE _ _ _ _           -> internalError "GradientE unimplemented in Interpreter"
 
 
 -- Coercions
