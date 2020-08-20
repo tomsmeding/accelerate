@@ -6,8 +6,13 @@ module Data.Array.Accelerate.Trafo.AD.Sink (
   checkClosed, checkClosedInLHS, checkClosedInTagval
 ) where
 
+import qualified Data.Array.Accelerate.Representation.Type as A
 import qualified Data.Array.Accelerate.AST as A
-import Data.Array.Accelerate.Analysis.Match (matchTupleType, (:~:)(Refl))
+import qualified Data.Array.Accelerate.AST.Environment as A
+import qualified Data.Array.Accelerate.AST.Idx as A
+import qualified Data.Array.Accelerate.AST.LeftHandSide as A
+import qualified Data.Array.Accelerate.AST.Var as A
+import Data.Array.Accelerate.Analysis.Match (matchTypeR, (:~:)(Refl))
 import Data.Array.Accelerate.Trafo.AD.Exp
 
 
@@ -37,7 +42,7 @@ generaliseLHS (A.LeftHandSidePair lhs1 lhs2)
 checkLocal :: A.ExpVar env t -> TagVal () env2 -> Maybe (A.ExpVar env2 t)
 checkLocal _ TEmpty = Nothing
 checkLocal (A.Var sty A.ZeroIdx) (TPush _ _ sty')
-  | Just Refl <- matchTupleType (A.TupRsingle sty) sty' =
+  | Just Refl <- matchTypeR (A.TupRsingle sty) sty' =
       Just (A.Var sty ZeroIdx)
   | otherwise = Nothing
 checkLocal (A.Var sty (A.SuccIdx idx)) (TPush tagval _ _)

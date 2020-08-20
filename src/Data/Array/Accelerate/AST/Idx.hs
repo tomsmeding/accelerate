@@ -34,12 +34,11 @@ module Data.Array.Accelerate.AST.Idx (
 
 import Data.GADT.Compare
 import Language.Haskell.TH ( Q, TExp )
+import Data.Type.Equality ((:~:)(Refl))
 
 #ifndef ACCELERATE_INTERNAL_CHECKS
-import Data.Type.Equality ((:~:)(Refl))
 import Unsafe.Coerce (unsafeCoerce)
 #endif
-
 
 #ifdef ACCELERATE_INTERNAL_CHECKS
 

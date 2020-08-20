@@ -8,7 +8,10 @@ module Data.Array.Accelerate.Trafo.AD (
 ) where
 
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Trafo.Config
 import Data.Array.Accelerate.Type
 -- import Data.Array.Accelerate.Array.Representation (showArrayR)
@@ -53,7 +56,7 @@ convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   | otherwise =
       error "gradientE expression must produce Float, other types currently unsupported"
 convertExp e =
-  $internalError "Tom.convertExp" ("Cannot convert Exp node <" ++ showPreExpOp e ++ ">")
+  internalError "Tom.convertExp" ("Cannot convert Exp node <" ++ showExpOp e ++ ">")
 
 convertAccWith :: Config -> Acc arrs -> Acc arrs
 convertAccWith _ = convertAcc
@@ -81,7 +84,7 @@ convertAcc (OpenAcc (Awhile cond f a)) = OpenAcc (Awhile (convertAfun cond) (con
 convertAcc (OpenAcc (Replicate rep slice a)) = OpenAcc (Replicate rep (convertExp slice) (convertAcc a))
 convertAcc (OpenAcc (Generate rep sz f)) = OpenAcc (Generate rep (convertExp sz) (convertFun f))
 convertAcc (OpenAcc acc) =
-  $internalError "Tom.convertAcc" ("Cannot convert Acc node <" ++ showPreAccOp acc ++ ">")
+  internalError "Tom.convertAcc" ("Cannot convert Acc node <" ++ showPreAccOp acc ++ ">")
 
 convertFun :: OpenFun env aenv t -> OpenFun env aenv t
 convertFun (Lam lhs f) = Lam lhs (convertFun f)

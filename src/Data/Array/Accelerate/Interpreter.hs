@@ -1788,7 +1788,7 @@ evalSeq conf s aenv = evalSeq' s
           in ExecStuple (initTup t)
 
     delayed :: DelayedOpenAcc aenv (Array sh e) -> Delayed (Array sh e)
-    delayed AST.Manifest{}  = $internalError "evalOpenAcc" "expected delayed array"
+    delayed AST.Manifest{}  = internalError "evalOpenAcc" "expected delayed array"
     delayed AST.Delayed{..} = Delayed (evalExp extentD aenv)
                                       (evalFun indexD aenv)
                                       (evalFun linearIndexD aenv)

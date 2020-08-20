@@ -637,7 +637,7 @@ data OpenExp env aenv t where
   -- Note that the function under the gradient operator must be closed, i.e. not have free variables.
   -- Note the return type of this operator; (((), e), t) is the representation
   -- type of (e', t'), if e and t are the representation types of e' and t'.
-  GradientE     :: TupleType t
+  GradientE     :: TypeR t
                 -> ScalarType e
                 -> OpenFun env aenv (t -> e)  -- TJS: should be closed, but GHC doesn't like me
                 -> OpenExp env aenv t
@@ -845,6 +845,7 @@ expType = \case
   ShapeSize{}                  -> TupRsingle scalarTypeInt
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
+  GradientE ty _ _ _           -> ty
 
 primConstType :: PrimConst a -> SingleType a
 primConstType = \case
@@ -1099,7 +1100,7 @@ rnfOpenExp topExp =
     Shape a                   -> rnfArrayVar a
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
-    GradientE tp t f e        -> rnfTupleType tp `seq` rnfScalarType t `seq` rnfF f `seq` rnfE e
+    GradientE tp t f e        -> rnfTypeR tp `seq` rnfScalarType t `seq` rnfF f `seq` rnfE e
 
 rnfExpVar :: ExpVar env t -> ()
 rnfExpVar = rnfVar rnfScalarType
@@ -1320,7 +1321,7 @@ liftOpenExp pexp =
     Shape a                   -> [|| Shape $$(liftArrayVar a) ||]
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
-    GradientE tp t f e        -> [|| GradientE $$(liftTupleType tp) $$(liftScalarType t) $$(liftF f) $$(liftE e) ||]
+    GradientE tp t f e        -> [|| GradientE $$(liftTypeR tp) $$(liftScalarType t) $$(liftF f) $$(liftE e) ||]
 
 liftELeftHandSide :: ELeftHandSide t env env' -> Q (TExp (ELeftHandSide t env env'))
 liftELeftHandSide = liftLeftHandSide liftScalarType

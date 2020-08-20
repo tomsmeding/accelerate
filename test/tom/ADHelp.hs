@@ -9,7 +9,7 @@ import qualified Data.Array.Accelerate.Interpreter as I
 import Data.Array.Accelerate (Z(..))
 
 
-class (A.Elt a, A.Lift A.Exp a, a ~ A.Plain a) => FinDiff a where
+class (A.Elt a, A.Lift A.Exp a, a ~ A.Plain a, Show a) => FinDiff a where
   hfindiff :: Float -> (a -> Float) -> a -> a
 
   findiff :: (a -> Float) -> a -> a

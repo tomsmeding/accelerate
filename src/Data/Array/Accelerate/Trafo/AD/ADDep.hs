@@ -27,12 +27,17 @@ import Data.Type.Equality
 import Debug.Trace
 
 import qualified Data.Array.Accelerate.AST as A
+import qualified Data.Array.Accelerate.AST.Environment as A
+import qualified Data.Array.Accelerate.AST.Idx as A
+import qualified Data.Array.Accelerate.AST.LeftHandSide as A
+import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.TupleZip
 import Data.Array.Accelerate.Trafo.AD.Sink
-import Data.Array.Accelerate.Trafo.Base (declareVars, DeclareVars(..))
+import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
 newtype IdGen a = IdGen (State Int a)
@@ -44,7 +49,7 @@ evalIdGen (IdGen s) = evalState s 1
 genScalarId :: ScalarType t -> IdGen (DLabel Int t)
 genScalarId ty = state (\s -> (DLabel ty s, succ s))
 
-genId :: TupleType t -> IdGen (DLabels Int t)
+genId :: TypeR t -> IdGen (DLabels Int t)
 genId TupRunit = return DLNil
 genId (TupRsingle ty) = DLScalar <$> genScalarId ty
 genId (TupRpair t1 t2) = DLPair <$> genId t1 <*> genId t2
@@ -153,9 +158,9 @@ reverseAD paramlhs expr
           ReverseADRes paramlhs' (realiseArgs transformedExp paramlhs')
   where
     varsToArgs :: A.ExpVars env t -> OpenExp env' lab env t
-    varsToArgs A.VarsNil = Nil
-    varsToArgs (A.VarsSingle (A.Var ty idx)) = Arg ty idx
-    varsToArgs (A.VarsPair vars1 vars2) =
+    varsToArgs TupRunit = Nil
+    varsToArgs (TupRsingle (A.Var ty idx)) = Arg ty idx
+    varsToArgs (TupRpair vars1 vars2) =
       let ex1 = varsToArgs vars1
           ex2 = varsToArgs vars2
       in Pair (TupRpair (typeOf ex1) (typeOf ex2)) ex1 ex2
@@ -240,7 +245,7 @@ explode' env = \case
     Get _ _ _ -> error "explode: Unexpected Get"
     Label _ -> error "explode: Unexpected Label"
   where
-    tupleGetMap :: Ord lab => TupleType t -> DLabels lab t -> Exp lab args t -> DMap (DLabel lab) (Exp lab args)
+    tupleGetMap :: Ord lab => TypeR t -> DLabels lab t -> Exp lab args t -> DMap (DLabel lab) (Exp lab args)
     tupleGetMap TupRunit _ _ = DMap.empty
     tupleGetMap (TupRsingle _) (DLScalar lab) ex = DMap.singleton lab ex
     tupleGetMap (TupRpair t1 t2) (DLPair labs1 labs2) ex =
@@ -562,7 +567,7 @@ addContribution lbl contribution =
 
 collectAdjoint :: DMap (DLabel (PD Int)) (AdjList (PD Int) args)
                -> DLabel Int item
-               -> TupleType item
+               -> TypeR item
                -> LabVal (PD Int) env
                -> OpenExp env (PD Int) args item
 collectAdjoint contribmap lbl ty labelenv =
@@ -644,10 +649,8 @@ instance IsAdditive NumType where
 
 instance IsMaybeAdditive SingleType where
     maybeZeroForType' z (NumSingleType t) = Just (zeroForType' z t)
-    maybeZeroForType' _ (NonNumSingleType _) = Nothing
 
     maybeExpPlus (NumSingleType ty) e1 e2 = Just (expPlus ty e1 e2)
-    maybeExpPlus (NonNumSingleType _) _ _ = Nothing
 
 instance IsMaybeAdditive ScalarType where
     maybeZeroForType' z (SingleScalarType t) = maybeZeroForType' z t
@@ -656,7 +659,7 @@ instance IsMaybeAdditive ScalarType where
     maybeExpPlus (SingleScalarType ty) e1 e2 = maybeExpPlus ty e1 e2
     maybeExpPlus (VectorScalarType _) _ _ = Nothing
 
-instance IsMaybeAdditive TupleType where
+instance IsMaybeAdditive TypeR where
     maybeZeroForType' _ TupRunit = Just Nil
     maybeZeroForType' z (TupRsingle t) = maybeZeroForType' z t
     maybeZeroForType' z (TupRpair t1 t2) =
