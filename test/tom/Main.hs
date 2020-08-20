@@ -70,6 +70,10 @@ adtest = do
 
   print $ I.run (A.unit (A.gradientE (\x -> x * x + x) (4 :: A.Exp Float)))
 
+adtest2 :: IO ()
+adtest2 = do
+  print $ I.run (A.unit (A.gradientE (\x -> A.cond (x A.> 0) (x + 1) (x * 2)) (3 :: A.Exp Float)))
+
 main :: IO ()
 main = do
   -- logistic
@@ -78,3 +82,4 @@ main = do
   -- apply
   -- ignoretest
   adtest
+  adtest2
