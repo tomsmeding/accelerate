@@ -31,6 +31,7 @@ import qualified Data.Array.Accelerate.AST.Environment as A
 import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Var as A
+import Data.Array.Accelerate.Error (internalError)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Algorithms
@@ -449,7 +450,8 @@ dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
 
       PrimApp _ (A.PrimAdd argtype) (Label (DLPair (DLScalar arglab1) (DLScalar arglab2))) ->
           let argtypeS = SingleScalarType (NumSingleType argtype)
-              adjoint = collectAdjointNum contribmap lbl argtype labelenv
+              argtypeT = TupRsingle argtypeS
+              adjoint = collectAdjoint contribmap lbl argtypeT labelenv
               contribmap' = updateContribmap lbl
                                 [Contribution arglab1 TLNil (\adjidx _ -> Var (A.Var argtypeS adjidx))
                                 ,Contribution arglab2 TLNil (\adjidx _ -> Var (A.Var argtypeS adjidx))]
@@ -460,7 +462,7 @@ dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
       PrimApp _ (A.PrimMul argtype) (Label (DLPair (DLScalar arglab1) (DLScalar arglab2))) ->
           let argtypeS = SingleScalarType (NumSingleType argtype)
               argtypeT = TupRsingle argtypeS
-              adjoint = collectAdjointNum contribmap lbl argtype labelenv
+              adjoint = collectAdjoint contribmap lbl argtypeT labelenv
               contribmap' = updateContribmap lbl
                                 [Contribution arglab1 (arglab2 :@ TLNil) (\adjidx (arg2idx :@ _) ->
                                     PrimApp argtypeT (A.PrimMul argtype)
@@ -477,7 +479,7 @@ dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
       PrimApp _ (A.PrimLog argtype) (Label (DLScalar arglab)) ->
           let argtypeS = SingleScalarType (NumSingleType (FloatingNumType argtype))
               argtypeT = TupRsingle argtypeS
-              adjoint = collectAdjointNum contribmap lbl (FloatingNumType argtype) labelenv
+              adjoint = collectAdjoint contribmap lbl argtypeT labelenv
               contribmap' = updateContribmap lbl
                                 [Contribution arglab (arglab :@ TLNil) (\adjidx (argidx :@ _) ->
                                     -- dE/dx = dE/d(log x) * d(log x)/dx = adjoint * 1/x = adjoint / x
@@ -572,15 +574,6 @@ collectAdjoint :: DMap (DLabel (PD Int)) (AdjList (PD Int) args)
                -> OpenExp env (PD Int) args item
 collectAdjoint contribmap lbl ty labelenv =
     case contribmap DMap.! fmapLabel D lbl of
-      AdjList listgen -> fromJust $ maybeExpSum ty (listgen labelenv)
-
-collectAdjointNum :: DMap (DLabel (PD Int)) (AdjList (PD Int) args)
-                  -> DLabel Int item
-                  -> NumType item
-                  -> LabVal (PD Int) env
-                  -> OpenExp env (PD Int) args item
-collectAdjointNum contribmap lbl ty labelenv =
-    case contribmap DMap.! fmapLabel D lbl of
       AdjList listgen -> expSum ty (listgen labelenv)
 
 class IsAdditive s where
@@ -594,18 +587,18 @@ class IsAdditive s where
     expSum ty [] = zeroForType ty
     expSum ty es = foldl1 (expPlus ty) es
 
-class IsMaybeAdditive s where
-    maybeZeroForType' :: (forall a. Num a => a) -> s t -> Maybe (OpenExp env lab args t)
-    maybeExpPlus :: s t -> OpenExp env lab args t -> OpenExp env lab args t -> Maybe (OpenExp env lab args t)
+-- class IsMaybeAdditive s where
+--     maybeZeroForType' :: (forall a. Num a => a) -> s t -> Maybe (OpenExp env lab args t)
+--     maybeExpPlus :: s t -> OpenExp env lab args t -> OpenExp env lab args t -> Maybe (OpenExp env lab args t)
 
-    maybeZeroForType :: s t -> Maybe (OpenExp env lab args t)
-    maybeZeroForType = maybeZeroForType' 0
+--     maybeZeroForType :: s t -> Maybe (OpenExp env lab args t)
+--     maybeZeroForType = maybeZeroForType' 0
 
-    maybeExpSum :: s t -> [OpenExp env lab args t] -> Maybe (OpenExp env lab args t)
-    maybeExpSum ty [] = maybeZeroForType ty
-    maybeExpSum ty (expr:exprs) = go exprs expr
-      where go [] accum = Just accum
-            go (e:es) accum = maybeExpPlus ty accum e >>= go es
+--     maybeExpSum :: s t -> [OpenExp env lab args t] -> Maybe (OpenExp env lab args t)
+--     maybeExpSum ty [] = maybeZeroForType ty
+--     maybeExpSum ty (expr:exprs) = go exprs expr
+--       where go [] accum = Just accum
+--             go (e:es) accum = maybeExpPlus ty accum e >>= go es
 
 instance IsAdditive IntegralType where
     zeroForType' z ty = case ty of
@@ -647,25 +640,25 @@ instance IsAdditive NumType where
               (Pair (TupRpair (TupRsingle (scalar ty)) (TupRsingle (scalar ty))) e1 e2)
       where scalar = SingleScalarType . NumSingleType
 
-instance IsMaybeAdditive SingleType where
-    maybeZeroForType' z (NumSingleType t) = Just (zeroForType' z t)
+instance IsAdditive SingleType where
+    zeroForType' z (NumSingleType t) = zeroForType' z t
 
-    maybeExpPlus (NumSingleType ty) e1 e2 = Just (expPlus ty e1 e2)
+    expPlus (NumSingleType ty) e1 e2 = expPlus ty e1 e2
 
-instance IsMaybeAdditive ScalarType where
-    maybeZeroForType' z (SingleScalarType t) = maybeZeroForType' z t
-    maybeZeroForType' _ (VectorScalarType _) = Nothing
+instance IsAdditive ScalarType where
+    zeroForType' z (SingleScalarType t) = zeroForType' z t
+    zeroForType' _ (VectorScalarType _) = internalError "AD: Can't handle vectors yet"
 
-    maybeExpPlus (SingleScalarType ty) e1 e2 = maybeExpPlus ty e1 e2
-    maybeExpPlus (VectorScalarType _) _ _ = Nothing
+    expPlus (SingleScalarType ty) e1 e2 = expPlus ty e1 e2
+    expPlus (VectorScalarType _) _ _ = internalError "AD: Can't handle vectors yet"
 
-instance IsMaybeAdditive TypeR where
-    maybeZeroForType' _ TupRunit = Just Nil
-    maybeZeroForType' z (TupRsingle t) = maybeZeroForType' z t
-    maybeZeroForType' z (TupRpair t1 t2) =
-        Pair (TupRpair t1 t2) <$> maybeZeroForType' z t1 <*> maybeZeroForType' z t2
+instance IsAdditive TypeR where
+    zeroForType' _ TupRunit = Nil
+    zeroForType' z (TupRsingle t) = zeroForType' z t
+    zeroForType' z (TupRpair t1 t2) =
+        Pair (TupRpair t1 t2) (zeroForType' z t1) (zeroForType' z t2)
 
-    maybeExpPlus ty e1 e2 = tupleZip ty maybeExpPlus e1 e2
+    expPlus ty e1 e2 = tupleZip' ty expPlus e1 e2
 
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
 expLabelParents :: OpenExp env lab args t -> [AnyLabel lab]
