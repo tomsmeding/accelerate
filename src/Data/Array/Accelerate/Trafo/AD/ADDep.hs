@@ -510,12 +510,10 @@ dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
       PrimApp _ (A.PrimToFloating _ _) _ ->
           dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap []
 
-      -- Result is an integral type, which produces no contributions (because its adjoint is always zero)
-      PrimApp _ (A.PrimRound _ _) _ ->
-          dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap []
-
-      -- Result is an integral type, which produces no contributions (because its adjoint is always zero)
-      PrimApp _ (A.PrimGt _) _ ->
+      -- Result is an integral type, which produces no contributions (because
+      -- its adjoint is always zero). Therefore, we also have no contributions
+      -- to our parents.
+      PrimApp (TupRsingle (SingleScalarType (NumSingleType (IntegralNumType _)))) _ _ ->
           dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap []
 
       Cond restype (Label (DLScalar condlab)) (Label (DLScalar thenlab)) (Label (DLScalar elselab)) ->
