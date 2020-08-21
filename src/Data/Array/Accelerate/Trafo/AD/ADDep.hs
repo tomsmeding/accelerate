@@ -461,8 +461,7 @@ dual (DLScalar endlab, nodemap, _) labelenv cont =
                           alllabels
                           (\(AnyLabel l) -> parentmap Map.! labelLabel l)
 
-dual' :: forall res env args.
-         DMap (DLabel Int) (Exp Int args)
+dual' :: DMap (DLabel Int) (Exp Int args)
       -> [AnyLabel Int]
       -> LabVal (PD Int) env
       -> DMap (DLabel (PD Int)) (AdjList (PD Int) args)
@@ -479,111 +478,66 @@ dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
 
       -- Argument nodes don't have any nodes to contribute to either, but we do
       -- need to calculate and store their adjoint.
-      Arg ty _ ->
-          let adjoint = collectAdjoint contribmap lbl (TupRsingle ty) labelenv
-          in Let (A.LeftHandSideSingle ty) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap cont)
+      Arg _ _ ->
+          dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap []
 
-      PrimApp _ (A.PrimAdd argtype) (Label (DLPair (DLScalar arglab1) (DLScalar arglab2))) ->
-          let argtypeS = SingleScalarType (NumSingleType argtype)
-              argtypeT = TupRsingle argtypeS
-              adjoint = collectAdjoint contribmap lbl argtypeT labelenv
-              contribmap' = updateContribmap lbl
-                                [Contribution arglab1 TLNil (\adjidx _ -> Var (A.Var argtypeS adjidx))
-                                ,Contribution arglab2 TLNil (\adjidx _ -> Var (A.Var argtypeS adjidx))]
-                                contribmap
-          in Let (A.LeftHandSideSingle argtypeS) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+      PrimApp _ (A.PrimAdd _) (Label (DLPair (DLScalar arglab1) (DLScalar arglab2))) ->
+          dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap
+              [Contribution arglab1 TLNil (\adjidx _ -> Var (A.Var (labelType arglab1) adjidx))
+              ,Contribution arglab2 TLNil (\adjidx _ -> Var (A.Var (labelType arglab1) adjidx))]
 
       PrimApp _ (A.PrimMul argtype) (Label (DLPair (DLScalar arglab1) (DLScalar arglab2))) ->
           let argtypeS = SingleScalarType (NumSingleType argtype)
               argtypeT = TupRsingle argtypeS
-              adjoint = collectAdjoint contribmap lbl argtypeT labelenv
-              contribmap' = updateContribmap lbl
-                                [Contribution arglab1 (arglab2 :@ TLNil) (\adjidx (arg2idx :@ _) ->
-                                    PrimApp argtypeT (A.PrimMul argtype)
-                                        (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
-                                                                           (Var (A.Var argtypeS arg2idx))))
-                                ,Contribution arglab2 (arglab1 :@ TLNil) (\adjidx (arg1idx :@ _) ->
-                                    PrimApp argtypeT (A.PrimMul argtype)
-                                        (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
-                                                                           (Var (A.Var argtypeS arg1idx))))]
-                                contribmap
-          in Let (A.LeftHandSideSingle argtypeS) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+          in dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap
+                [Contribution arglab1 (arglab2 :@ TLNil) (\adjidx (arg2idx :@ _) ->
+                    PrimApp argtypeT (A.PrimMul argtype)
+                        (smartPair (Var (A.Var argtypeS adjidx)) (Var (A.Var argtypeS arg2idx))))
+                ,Contribution arglab2 (arglab1 :@ TLNil) (\adjidx (arg1idx :@ _) ->
+                    PrimApp argtypeT (A.PrimMul argtype)
+                        (smartPair (Var (A.Var argtypeS adjidx)) (Var (A.Var argtypeS arg1idx))))]
 
       PrimApp _ (A.PrimLog argtype) (Label (DLScalar arglab)) ->
           let argtypeS = SingleScalarType (NumSingleType (FloatingNumType argtype))
               argtypeT = TupRsingle argtypeS
-              adjoint = collectAdjoint contribmap lbl argtypeT labelenv
-              contribmap' = updateContribmap lbl
-                                [Contribution arglab (arglab :@ TLNil) (\adjidx (argidx :@ _) ->
-                                    -- dE/dx = dE/d(log x) * d(log x)/dx = adjoint * 1/x = adjoint / x
-                                    PrimApp argtypeT (A.PrimFDiv argtype)
-                                        (Pair (TupRpair argtypeT argtypeT) (Var (A.Var argtypeS adjidx))
-                                                                           (Var (A.Var argtypeS argidx))))]
-                                contribmap
-          in Let (A.LeftHandSideSingle argtypeS) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+          in dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap
+                [Contribution arglab (arglab :@ TLNil) (\adjidx (argidx :@ _) ->
+                    -- dE/dx = dE/d(log x) * d(log x)/dx = adjoint * 1/x = adjoint / x
+                    PrimApp argtypeT (A.PrimFDiv argtype)
+                        (smartPair (Var (A.Var argtypeS adjidx)) (Var (A.Var argtypeS argidx))))]
 
-      PrimApp _ (A.PrimToFloating argtype restype) (Label (DLScalar arglab)) ->
-          let argtypeS = SingleScalarType (NumSingleType argtype)
-              restypeS = SingleScalarType (NumSingleType (FloatingNumType restype))
-              adjoint = collectAdjoint contribmap lbl (TupRsingle restypeS) labelenv
-              contribmap' = updateContribmap lbl
-                                [Contribution arglab TLNil (\_ _ -> zeroForType argtypeS)]
-                                contribmap
-          in Let (A.LeftHandSideSingle restypeS) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+      -- Argument is an integral type, which takes no contributions (thus gets zero adjoint)
+      PrimApp _ (A.PrimToFloating _ _) _ ->
+          dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap []
 
-      PrimApp _ (A.PrimRound argtype restype) (Label (DLScalar arglab)) ->
-          let argtypeS = SingleScalarType (NumSingleType (FloatingNumType argtype))
-              restypeS = SingleScalarType (NumSingleType (IntegralNumType restype))
-              adjoint = collectAdjoint contribmap lbl (TupRsingle restypeS) labelenv
-              contribmap' = updateContribmap lbl
-                                [Contribution arglab TLNil (\_ _ -> zeroForType argtypeS)]
-                                contribmap
-          in Let (A.LeftHandSideSingle restypeS) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+      -- Result is an integral type, which produces no contributions (because its adjoint is always zero)
+      PrimApp _ (A.PrimRound _ _) _ ->
+          dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap []
 
-      PrimApp restype@(TupRsingle restypeS) (A.PrimGt argtype) (Label (DLPair (DLScalar arglab1) (DLScalar arglab2))) ->
-          let adjoint = collectAdjoint contribmap lbl restype labelenv
-              -- TODO: should zero contributions perhaps be omitted entirely? It should be correct.
-              contribmap' = updateContribmap lbl
-                                [Contribution arglab1 TLNil (\_ _ -> zeroForType argtype)
-                                ,Contribution arglab2 TLNil (\_ _ -> zeroForType argtype)]
-                                contribmap
-          in Let (A.LeftHandSideSingle restypeS) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+      -- Result is an integral type, which produces no contributions (because its adjoint is always zero)
+      PrimApp _ (A.PrimGt _) _ ->
+          dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap []
 
       Cond restype (Label (DLScalar condlab)) (Label (DLScalar thenlab)) (Label (DLScalar elselab)) ->
           let restypeS = labelType thenlab
-              adjoint = collectAdjoint contribmap lbl restype labelenv
-              contribmap' = updateContribmap lbl
-                                [Contribution thenlab (condlab :@ TLNil) (\adjidx (condidx :@ _) ->
-                                    Cond restype (Var (A.Var (labelType condlab) condidx))
-                                                 (Var (A.Var restypeS adjidx)) (zeroForType restypeS))
-                                ,Contribution elselab (condlab :@ TLNil) (\adjidx (condidx :@ _) ->
-                                    Cond restype (Var (A.Var (labelType condlab) condidx))
-                                                 (zeroForType restypeS) (Var (A.Var restypeS adjidx)))]
-                                contribmap
-          in Let (A.LeftHandSideSingle restypeS) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+          in dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap
+                [Contribution thenlab (condlab :@ TLNil) (\adjidx (condidx :@ _) ->
+                    Cond restype (Var (A.Var (labelType condlab) condidx))
+                                 (Var (A.Var restypeS adjidx))
+                                 (zeroForType restypeS))
+                ,Contribution elselab (condlab :@ TLNil) (\adjidx (condidx :@ _) ->
+                    Cond restype (Var (A.Var (labelType condlab) condidx))
+                                 (zeroForType restypeS)
+                                 (Var (A.Var restypeS adjidx)))]
 
       -- Note that the types enforce that the result of this Get operation is a
       -- scalar. This typechecks because we arranged it like this in 'explode'.
-      Get restype@(TupRsingle restypeS) path (Label arglabs) ->
-          let adjoint = collectAdjoint contribmap lbl restype labelenv
-
-              targetLabel = case pickDLabels path arglabs of
+      Get (TupRsingle restypeS) path (Label arglabs) ->
+          let targetLabel = case pickDLabels path arglabs of
                               DLScalar lab -> lab
                               _ -> error "Invalid types in Get (pickDLabels)"
-
-              contribmap' = updateContribmap lbl
-                                [Contribution targetLabel TLNil (\adjidx _ -> Var (A.Var restypeS adjidx))]
-                                contribmap
-          in Let (A.LeftHandSideSingle restypeS) adjoint
-                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+          in dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap
+                [Contribution targetLabel TLNil (\adjidx _ -> Var (A.Var restypeS adjidx))]
 
       Label (DLScalar arglab) ->
           let adjoint = collectAdjoint contribmap lbl (TupRsingle (labelType arglab)) labelenv
@@ -594,6 +548,24 @@ dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
                  (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
 
       expr -> trace ("\n!! " ++ show expr) undefined
+  where
+    smartPair :: OpenExp env lab args a -> OpenExp env lab args b -> OpenExp env lab args (a, b)
+    smartPair a b = Pair (TupRpair (typeOf a) (typeOf b)) a b
+
+dualStoreAdjoint
+    :: DMap (DLabel Int) (Exp Int args)
+    -> [AnyLabel Int]
+    -> (forall env'. LabVal (PD Int) env' -> OpenExp env' (PD Int) args res)
+    -> DLabel Int t
+    -> LabVal (PD Int) env
+    -> DMap (DLabel (PD Int)) (AdjList (PD Int) args)
+    -> [Contribution t args]
+    -> OpenExp env (PD Int) args res
+dualStoreAdjoint nodemap restlabels cont lbl labelenv contribmap contribs =
+    let adjoint = collectAdjoint contribmap lbl (TupRsingle (labelType lbl)) labelenv
+        contribmap' = updateContribmap lbl contribs contribmap
+    in Let (A.LeftHandSideSingle (labelType lbl)) adjoint
+           (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
 
 -- Utility functions
 -- -----------------
