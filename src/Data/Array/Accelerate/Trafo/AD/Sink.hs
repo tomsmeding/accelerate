@@ -21,6 +21,7 @@ sinkExp _ (Const ty x) = Const ty x
 sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
 sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
 sinkExp _ Nil = Nil
+sinkExp k (Cond ty c t e) = Cond ty (sinkExp k c) (sinkExp k t) (sinkExp k e)
 sinkExp k (Get ty ti e) = Get ty ti (sinkExp k e)
 sinkExp k (Let lhs rhs e)
   | GenLHS lhs' <- generaliseLHS lhs =
@@ -66,6 +67,7 @@ checkClosedInTagval tv expr = case expr of
     PrimApp ty op e -> PrimApp ty op <$> checkClosedInTagval tv e
     Pair ty e1 e2 -> Pair ty <$> checkClosedInTagval tv e1 <*> checkClosedInTagval tv e2
     Nil -> Just Nil
+    Cond ty c t e -> Cond ty <$> checkClosedInTagval tv c <*> checkClosedInTagval tv t <*> checkClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> checkClosedInTagval tv e
     Let lhs rhs e
       | GenLHS lhs' <- generaliseLHS lhs ->

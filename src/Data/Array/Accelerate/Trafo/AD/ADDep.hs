@@ -23,6 +23,7 @@ import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
 import Data.Type.Equality
+import Data.GADT.Compare (GCompare)
 
 import Debug.Trace
 
@@ -31,7 +32,7 @@ import qualified Data.Array.Accelerate.AST.Environment as A
 import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Var as A
-import Data.Array.Accelerate.Error (internalError)
+import Data.Array.Accelerate.Error (internalError, HasCallStack)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Algorithms
@@ -112,6 +113,7 @@ generaliseArgs (Const ty x) = Const ty x
 generaliseArgs (PrimApp ty op ex) = PrimApp ty op (generaliseArgs ex)
 generaliseArgs (Pair ty e1 e2) = Pair ty (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs Nil = Nil
+generaliseArgs (Cond ty e1 e2 e3) = Cond ty (generaliseArgs e1) (generaliseArgs e2) (generaliseArgs e3)
 generaliseArgs (Get ty path ex) = Get ty path (generaliseArgs ex)
 generaliseArgs (Let lhs rhs ex) = Let lhs (generaliseArgs rhs) (generaliseArgs ex)
 generaliseArgs (Var v) = Var v
@@ -183,6 +185,8 @@ reverseAD paramlhs expr
                             'A' : show (A.idxToInt idx) ++ " not computed"
         _ -> error "produceGradient: what?"
 
+-- Produces an expression that can be put under a LHS that binds exactly the
+-- 'args' of the original expression.
 realiseArgs :: OpenExp () lab args t -> A.ELeftHandSide t () args -> OpenExp args lab () t
 realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
   where
@@ -192,6 +196,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         PrimApp ty op ex -> PrimApp ty op (go argWeaken varWeaken ex)
         Pair ty e1 e2 -> Pair ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
         Nil -> Nil
+        Cond ty e1 e2 e3 -> Cond ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
         Get ty tidx ex -> Get ty tidx (go argWeaken varWeaken ex)
         Let lhs rhs ex
           | GenLHS lhs' <- generaliseLHS lhs ->
@@ -229,6 +234,16 @@ explode' env = \case
             argmp = DMap.unionWithKey (error "explode: Overlapping arg's") argmp1 argmp2
         return (DLPair labs1 labs2, mp, argmp)
     Nil -> return (DLNil, mempty, mempty)
+    Cond ty e1 e2 e3 -> do
+        (labs1, mp1, argmp1) <- explode' env e1
+        (labs2, mp2, argmp2) <- explode' env e2
+        (labs3, mp3, argmp3) <- explode' env e3
+        labs <- genId ty
+        let pruned = Cond ty (Label labs1) (Label labs2) (Label labs3)
+        let mp = tupleGetMap ty labs pruned
+            mp' = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mp2, mp3, mp]
+            argmp = DMap.unionsWithKey (error "explode: Overlapping id's") [argmp1, argmp2, argmp3]
+        return (labs, mp', argmp)
     Let lhs rhs body -> do
         (lab1, mp1, argmp1) <- explode' env rhs
         labs <- genId (typeOf rhs)
@@ -323,13 +338,13 @@ primal' :: Ord lab
         -> (forall env'. LabVal (PD lab) env' -> OpenExp env' (PD lab) args res)
         -> OpenExp env (PD lab) args res
 primal' nodemap lbl labelenv cont
-  -- | trace ("primal': computing " ++ show lbl) False = undefined
+--   | trace ("primal': computing " ++ show lbl) False = undefined
   | labValContains labelenv (P (labelLabel lbl)) =
       cont labelenv
   | not (uniqueLabVal labelenv) =
       error "Non-unique label valuation in primal'!"
   | otherwise =
-      case nodemap DMap.! lbl of
+      case nodemap `dmapFind` lbl of
           Const ty value ->
               let subexp = cont (LPush labelenv (fmapLabel P lbl))
               in Let (A.LeftHandSideSingle ty) (Const ty value) subexp
@@ -345,6 +360,27 @@ primal' nodemap lbl labelenv cont
                             in Let (A.LeftHandSideSingle restypeS) (PrimApp restype oper (evars vars)) subexp
                         Nothing ->
                             error "primal: App argument did not compute argument"
+
+          -- TODO: inlining of the produced halves into the branches of the
+          -- generated Cond operation, so that the halves are really only
+          -- computed if needed
+          Cond restype (Label (DLScalar condlab)) (Label (DLScalar thenlab)) (Label (DLScalar elselab))
+            | TupRsingle restypeS <- restype ->
+              primal' nodemap condlab labelenv $ \labelenv1 ->
+              primal' nodemap thenlab labelenv1 $ \labelenv2 ->
+              primal' nodemap elselab labelenv2 $ \labelenv' ->
+                  case (labValFind labelenv' (fmapLabel P condlab)
+                       ,labValFind labelenv' (fmapLabel P thenlab)
+                       ,labValFind labelenv' (fmapLabel P elselab)) of
+                      (Just condidx, Just thenidx, Just elseidx) ->
+                          let subexp = cont (LPush labelenv' (fmapLabel P lbl))
+                          in Let (A.LeftHandSideSingle restypeS)
+                                 (Cond restype (Var (A.Var (labelType condlab) condidx))
+                                               (Var (A.Var (labelType thenlab) thenidx))
+                                               (Var (A.Var (labelType elselab) elseidx)))
+                                 subexp
+                      _ ->
+                          error "primal: Cond arguments did not compute arguments"
 
           Get restype path (Label arglabs)
             -- We can do this because 'labelType lbl' is a ScalarType, and that's
@@ -406,7 +442,7 @@ dual (DLScalar endlab, nodemap, _) labelenv cont =
     -- to use the 'Ord' instance on 'Int' while carrying along the full 'DLabel'
     -- objects, and we index the 'parentmap' on the integer value too.
     parentsOf :: AnyLabel Int -> [AnyLabel Int]
-    parentsOf (AnyLabel lbl) = expLabelParents (nodemap DMap.! lbl)
+    parentsOf (AnyLabel lbl) = expLabelParents (nodemap `dmapFind` lbl)
 
     alllabels :: [AnyLabel Int]
     alllabels =
@@ -435,7 +471,7 @@ dual' :: forall res env args.
 dual' _ [] labelenv _ cont = cont labelenv
 dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
     -- trace ("dual': computing " ++ show lbl) $
-    case nodemap DMap.! lbl of
+    case nodemap `dmapFind` lbl of
       -- We aren't interested in the adjoint of constant nodes -- seeing as
       -- they don't have any parents to contribute to.
       Const _ _ ->
@@ -488,6 +524,50 @@ dual' nodemap (AnyLabel lbl : restlabels) labelenv contribmap cont =
                                                                            (Var (A.Var argtypeS argidx))))]
                                 contribmap
           in Let (A.LeftHandSideSingle argtypeS) adjoint
+                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+
+      PrimApp _ (A.PrimToFloating argtype restype) (Label (DLScalar arglab)) ->
+          let argtypeS = SingleScalarType (NumSingleType argtype)
+              restypeS = SingleScalarType (NumSingleType (FloatingNumType restype))
+              adjoint = collectAdjoint contribmap lbl (TupRsingle restypeS) labelenv
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab TLNil (\_ _ -> zeroForType argtypeS)]
+                                contribmap
+          in Let (A.LeftHandSideSingle restypeS) adjoint
+                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+
+      PrimApp _ (A.PrimRound argtype restype) (Label (DLScalar arglab)) ->
+          let argtypeS = SingleScalarType (NumSingleType (FloatingNumType argtype))
+              restypeS = SingleScalarType (NumSingleType (IntegralNumType restype))
+              adjoint = collectAdjoint contribmap lbl (TupRsingle restypeS) labelenv
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab TLNil (\_ _ -> zeroForType argtypeS)]
+                                contribmap
+          in Let (A.LeftHandSideSingle restypeS) adjoint
+                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+
+      PrimApp restype@(TupRsingle restypeS) (A.PrimGt argtype) (Label (DLPair (DLScalar arglab1) (DLScalar arglab2))) ->
+          let adjoint = collectAdjoint contribmap lbl restype labelenv
+              -- TODO: should zero contributions perhaps be omitted entirely? It should be correct.
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab1 TLNil (\_ _ -> zeroForType argtype)
+                                ,Contribution arglab2 TLNil (\_ _ -> zeroForType argtype)]
+                                contribmap
+          in Let (A.LeftHandSideSingle restypeS) adjoint
+                 (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
+
+      Cond restype (Label (DLScalar condlab)) (Label (DLScalar thenlab)) (Label (DLScalar elselab)) ->
+          let restypeS = labelType thenlab
+              adjoint = collectAdjoint contribmap lbl restype labelenv
+              contribmap' = updateContribmap lbl
+                                [Contribution thenlab (condlab :@ TLNil) (\adjidx (condidx :@ _) ->
+                                    Cond restype (Var (A.Var (labelType condlab) condidx))
+                                                 (Var (A.Var restypeS adjidx)) (zeroForType restypeS))
+                                ,Contribution elselab (condlab :@ TLNil) (\adjidx (condidx :@ _) ->
+                                    Cond restype (Var (A.Var (labelType condlab) condidx))
+                                                 (zeroForType restypeS) (Var (A.Var restypeS adjidx)))]
+                                contribmap
+          in Let (A.LeftHandSideSingle restypeS) adjoint
                  (dual' nodemap restlabels (LPush labelenv (fmapLabel D lbl)) contribmap' cont)
 
       -- Note that the types enforce that the result of this Get operation is a
@@ -573,8 +653,9 @@ collectAdjoint :: DMap (DLabel (PD Int)) (AdjList (PD Int) args)
                -> LabVal (PD Int) env
                -> OpenExp env (PD Int) args item
 collectAdjoint contribmap lbl ty labelenv =
-    case contribmap DMap.! fmapLabel D lbl of
-      AdjList listgen -> expSum ty (listgen labelenv)
+    case DMap.lookup (fmapLabel D lbl) contribmap  of
+      Just (AdjList listgen) -> expSum ty (listgen labelenv)
+      Nothing -> expSum ty []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
 
 class IsAdditive s where
     zeroForType' :: (forall a. Num a => a) -> s t -> OpenExp env lab args t
@@ -667,6 +748,7 @@ expLabelParents = \case
     PrimApp _ _ e -> fromLabel e
     Pair _ e1 e2 -> fromLabel e1 ++ fromLabel e2
     Nil -> []
+    Cond _ e1 e2 e3 -> fromLabel e1 ++ fromLabel e2 ++ fromLabel e3
     Get _ path (Label labs) -> collect (pickDLabels path labs)
     Get _ _ e -> fromLabel e
     Arg _ _ -> []
@@ -684,3 +766,8 @@ expLabelParents = \case
     collect DLNil = []
     collect (DLScalar lab) = [AnyLabel lab]
     collect (DLPair labs1 labs2) = collect labs1 ++ collect labs2
+
+dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
+dmapFind mp elt = case DMap.lookup elt mp of
+                    Just res -> res
+                    Nothing -> error "dmapFind: not found"
