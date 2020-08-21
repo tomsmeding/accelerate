@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
 module Main where
@@ -73,8 +74,12 @@ adtest = do
 adtest2 :: IO ()
 adtest2 = do
   print (I.run (A.map (A.gradientE (\x -> x * x))
-                      (A.generate (A.index1 15) (\i -> A.toFloating (A.unindex1 i :: A.Exp Int) :: A.Exp Float))))
-  print $ I.run (A.unit (A.gradientE (\x -> A.cond (x A.> 0) (x + 1) (x * 2)) (3 :: A.Exp Float)))
+                      (A.generate (A.index1 15) (\i -> A.toFloating @Int @Float (A.unindex1 i)))))
+adtest3 :: IO ()
+adtest3 = do
+  print $ I.run (A.unit (A.gradientE (\x -> A.toFloating @Int @Float (A.round x * 2)) (3 :: A.Exp Float)))
+  print $ I.run (A.map (A.gradientE (\x -> A.cond (x A.> 0) (x + 1) (x * 2)))
+                       (A.use (A.fromList (Z :. (11 :: Int)) [-5::Float .. 5])))
 
 main :: IO ()
 main = do
@@ -83,5 +88,6 @@ main = do
   -- indexing
   -- apply
   -- ignoretest
-  adtest
-  adtest2
+  -- adtest
+  -- adtest2
+  adtest3

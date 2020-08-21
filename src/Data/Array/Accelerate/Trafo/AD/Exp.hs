@@ -74,6 +74,12 @@ data OpenExp env lab args t where
 
     Nil     :: OpenExp env lab args ()
 
+    Cond    :: TypeR a
+            -> OpenExp env lab args A.PrimBool
+            -> OpenExp env lab args a
+            -> OpenExp env lab args a
+            -> OpenExp env lab args a
+
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
     Get     :: TypeR s
@@ -171,6 +177,12 @@ showsExpr labf seed env _ (Pair _ e1 e2) =
         showsExpr labf seed env 0 e2 . showString ")"
 showsExpr _ _ _ _ Nil =
     showString "()"
+showsExpr labf seed env d (Cond _ c t e) =
+    showParen (d > 10) $
+        showString "cond " .
+            showsExpr labf seed env 11 c . showString " " .
+            showsExpr labf seed env 11 t . showString " " .
+            showsExpr labf seed env 11 e
 showsExpr labf seed env d (Get _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsExpr labf seed env 10 e
   where
@@ -246,6 +258,7 @@ typeOf (Const ty _) = TupRsingle ty
 typeOf (PrimApp ty _ _) = ty
 typeOf (Pair ty _ _) = ty
 typeOf Nil = TupRunit
+typeOf (Cond ty _ _ _) = ty
 typeOf (Get ty _ _) = ty
 typeOf (Let _ _ body) = typeOf body
 typeOf (Var (A.Var ty _)) = TupRsingle ty
@@ -281,8 +294,13 @@ prettyPrimFun Infix (A.PrimAdd _) = "+"
 prettyPrimFun Infix (A.PrimMul _) = "*"
 prettyPrimFun Infix (A.PrimFDiv _) = "/"
 prettyPrimFun Infix (A.PrimNeg _) = "-"
+prettyPrimFun Infix (A.PrimLt _) = "<"
 prettyPrimFun Infix (A.PrimLtEq _) = "<="
+prettyPrimFun Infix (A.PrimGt _) = ">"
+prettyPrimFun Infix (A.PrimGtEq _) = ">="
 prettyPrimFun Prefix (A.PrimLog _) = "log"
+prettyPrimFun Prefix (A.PrimToFloating _ _) = "toFloating"
+prettyPrimFun Prefix (A.PrimRound _ _) = "round"
 prettyPrimFun Prefix op = '(' : prettyPrimFun Infix op ++ ")"
 prettyPrimFun fixity op =
     error ("prettyPrimFun: not defined for " ++ show fixity ++ " " ++ showPrimFun op)

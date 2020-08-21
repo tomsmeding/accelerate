@@ -23,22 +23,25 @@ translateExp expr = case expr of
     A.Evar (A.Var rep idx) -> D.Var (A.Var rep idx)
     A.Let lhs def body -> D.Let lhs (translateExp def) (translateExp body)
     A.Nil -> D.Nil
+    A.Cond c t e -> D.Cond (A.expType t) (translateExp c) (translateExp t) (translateExp e)
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
 
-untranslateExp :: D.OpenExp env lab args t -> A.OpenExp env aenv t
-untranslateExp expr = case expr of
-    D.Const ty con -> A.Const ty con
-    D.PrimApp _ f e -> A.PrimApp f (untranslateExp e)
-    D.Var (A.Var rep idx) -> A.Evar (A.Var rep idx)
-    D.Let lhs def body -> A.Let lhs (untranslateExp def) (untranslateExp body)
-    D.Nil -> A.Nil
-    D.Pair _ e1 e2 -> A.Pair (untranslateExp e1) (untranslateExp e2)
-    D.Get _ path e
-      | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
-      -> A.Let lhs (untranslateExp e) body
-    D.Arg _ _ -> internalError "AD.untranslateExp: Unexpected Arg in untranslate!"
-    D.Label _ -> internalError "AD.untranslateExp: Unexpected Label in untranslate!"
+-- TODO: remove
+-- untranslateExp :: D.OpenExp env lab args t -> A.OpenExp env aenv t
+-- untranslateExp expr = case expr of
+--     D.Const ty con -> A.Const ty con
+--     D.PrimApp _ f e -> A.PrimApp f (untranslateExp e)
+--     D.Var (A.Var rep idx) -> A.Evar (A.Var rep idx)
+--     D.Let lhs def body -> A.Let lhs (untranslateExp def) (untranslateExp body)
+--     D.Nil -> A.Nil
+--     D.Pair _ e1 e2 -> A.Pair (untranslateExp e1) (untranslateExp e2)
+--     D.Cond _ e1 e2 e3 -> A.Cond (untranslateExp e1) (untranslateExp e2) (untranslateExp e3)
+--     D.Get _ path e
+--       | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
+--       -> A.Let lhs (untranslateExp e) body
+--     D.Arg _ _ -> internalError "AD.untranslateExp: Unexpected Arg in untranslate!"
+--     D.Label _ -> internalError "AD.untranslateExp: Unexpected Label in untranslate!"
 
 data PartialVal topenv env where
     PTEmpty :: PartialVal topenv topenv
@@ -80,11 +83,12 @@ untranslateLHSboundExp toplhs topexpr
           -> A.Let lhs' (go def pv) (go body (pvalPushLHS lhs' pv))
         D.Nil -> A.Nil
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
+        D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
         D.Get _ path e
           | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
           -> A.Let lhs (go e pv) body
-        D.Arg _ _ -> internalError "AD.untranslateExp: Unexpected Arg in untranslate!"
-        D.Label _ -> internalError "AD.untranslateExp: Unexpected Label in untranslate!"
+        D.Arg _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
+        D.Label _ -> internalError "AD.untranslateLHSboundExp: Unexpected Label in untranslate!"
 
 data LetBoundExp env aenv t s =
     forall env'. LetBoundExp (A.ELeftHandSide t env env') (A.OpenExp env' aenv s)
