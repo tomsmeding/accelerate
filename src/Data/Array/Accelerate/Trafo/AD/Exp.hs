@@ -208,7 +208,7 @@ showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
     namifyLHS seed (A.LeftHandSideSingle _) =
       let (n, seed') = namifyVar seed
       in (n, [n], seed')
-    namifyLHS seed (A.LeftHandSideWildcard _) = ("_", ["_"], seed)
+    namifyLHS seed (A.LeftHandSideWildcard _) = ("_", [], seed)
     namifyLHS seed (A.LeftHandSidePair lhs1 lhs2) =
       let (descr1, descrs1, seed1) = namifyLHS seed lhs1
           (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
