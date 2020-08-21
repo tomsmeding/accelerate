@@ -69,7 +69,7 @@ adtest = do
                (\x -> let (y, z)   =      (log (x * x),  log x) in y * z + z * y)
                5
 
-  print $ I.run (A.unit (A.gradientE (\x -> x * x + x) (4 :: A.Exp Float)))
+  print $ I.run (A.unit (A.gradientE @Float (\x -> x * x + x) 4))
 
 adtest2 :: IO ()
 adtest2 = do
@@ -77,9 +77,30 @@ adtest2 = do
                       (A.generate (A.index1 15) (\i -> A.toFloating @Int @Float (A.unindex1 i)))))
 adtest3 :: IO ()
 adtest3 = do
-  print $ I.run (A.unit (A.gradientE (\x -> A.toFloating @Int @Float (A.round x * 2)) (3 :: A.Exp Float)))
-  print $ I.run (A.map (A.gradientE (\x -> A.cond (x A.> 0) (x + 1) (x * 2)))
-                       (A.use (A.fromList (Z :. (11 :: Int)) [-5::Float .. 5])))
+  print $ I.run (A.unit (A.gradientE @Float (\x -> A.toFloating @Int @Float (A.round x * 2)) 3))
+  print $ I.run (A.map (A.gradientE @Float (\x -> A.cond (x A.> 0) (x + 1) (x * 2)))
+                       (A.use (A.fromList (Z :. (11 :: Int)) [-5..5])))
+
+adtuple1 :: IO ()
+adtuple1 = do
+  print . I.run . A.unit $ A.gradientE @Float
+    (\x -> let swap (A.T2 a b) = A.T2 b a
+               x1 = A.T2 (A.T2 x (2 * x)) (3 * x)
+               A.T2 y1 x2 = swap x1
+               A.T2 _ y3 = x2
+           in (3 * x) + y1 * x * y3)
+    42
+
+adtuple2 :: IO ()
+adtuple2 = do
+  print . I.run . A.unit $ A.gradientE @Float
+    (\x -> let swap (A.T2 a b) = A.T2 b a
+               x1 = A.cond (x A.> 0) (A.T2 3 4) (A.T2 1 2) :: A.Exp (Float, Float)
+               x2 = A.T2 x1 (swap x1)
+               A.T2 _ (A.T2 y2 _) = x2
+               A.T2 y1 _ = x1
+           in x * y1 * y2)
+    42
 
 main :: IO ()
 main = do
@@ -90,4 +111,6 @@ main = do
   -- ignoretest
   -- adtest
   -- adtest2
-  adtest3
+  -- adtest3
+  -- adtuple1
+  adtuple2
