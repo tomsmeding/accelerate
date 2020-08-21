@@ -274,7 +274,10 @@ isInfixOp :: A.PrimFun ((a, b) -> c) -> Bool
 isInfixOp (A.PrimAdd _) = True
 isInfixOp (A.PrimMul _) = True
 isInfixOp (A.PrimFDiv _) = True
+isInfixOp (A.PrimLt _) = True
 isInfixOp (A.PrimLtEq _) = True
+isInfixOp (A.PrimGt _) = True
+isInfixOp (A.PrimGtEq _) = True
 isInfixOp _ = False
 
 precedence :: A.PrimFun sig -> Int
@@ -283,7 +286,10 @@ precedence (A.PrimMul _) = 7
 precedence (A.PrimFDiv _) = 7
 precedence (A.PrimNeg _) = 7  -- ?
 precedence (A.PrimLog _) = 10
+precedence (A.PrimLt _) = 4
 precedence (A.PrimLtEq _) = 4
+precedence (A.PrimGt _) = 4
+precedence (A.PrimGtEq _) = 4
 precedence _ = 10  -- ?
 
 data Fixity = Prefix | Infix
