@@ -366,21 +366,21 @@ primal' nodemap lbl labelenv cont
           -- computed if needed
           Cond restype (Label (DLScalar condlab)) (Label (DLScalar thenlab)) (Label (DLScalar elselab))
             | TupRsingle restypeS <- restype ->
-              primal' nodemap condlab labelenv $ \labelenv1 ->
-              primal' nodemap thenlab labelenv1 $ \labelenv2 ->
-              primal' nodemap elselab labelenv2 $ \labelenv' ->
-                  case (labValFind labelenv' (fmapLabel P condlab)
-                       ,labValFind labelenv' (fmapLabel P thenlab)
-                       ,labValFind labelenv' (fmapLabel P elselab)) of
-                      (Just condidx, Just thenidx, Just elseidx) ->
-                          let subexp = cont (LPush labelenv' (fmapLabel P lbl))
-                          in Let (A.LeftHandSideSingle restypeS)
-                                 (Cond restype (Var (A.Var (labelType condlab) condidx))
-                                               (Var (A.Var (labelType thenlab) thenidx))
-                                               (Var (A.Var (labelType elselab) elseidx)))
-                                 subexp
-                      _ ->
-                          error "primal: Cond arguments did not compute arguments"
+                primal' nodemap condlab labelenv $ \labelenv1 ->
+                primal' nodemap thenlab labelenv1 $ \labelenv2 ->
+                primal' nodemap elselab labelenv2 $ \labelenv' ->
+                    case (labValFind labelenv' (fmapLabel P condlab)
+                         ,labValFind labelenv' (fmapLabel P thenlab)
+                         ,labValFind labelenv' (fmapLabel P elselab)) of
+                        (Just condidx, Just thenidx, Just elseidx) ->
+                            let subexp = cont (LPush labelenv' (fmapLabel P lbl))
+                            in Let (A.LeftHandSideSingle restypeS)
+                                   (Cond restype (Var (A.Var (labelType condlab) condidx))
+                                                 (Var (A.Var (labelType thenlab) thenidx))
+                                                 (Var (A.Var (labelType elselab) elseidx)))
+                                   subexp
+                        _ ->
+                            error "primal: Cond arguments did not compute arguments"
 
           Get restype path (Label arglabs)
             -- We can do this because 'labelType lbl' is a ScalarType, and that's
