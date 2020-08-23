@@ -102,6 +102,14 @@ adtuple2 = do
            in x * y1 * y2)
     42
 
+adtuple3 :: IO ()
+adtuple3 = do
+  print . I.run $
+    A.map (A.gradientE @Float
+                (\x -> let A.T2 a b = A.cond (x A.> 0) (A.T2 x 2) (A.T2 x 3) :: A.Exp (Float, Float)
+                       in a * b))
+          (A.use (A.fromList (Z :. (5 :: Int)) [-3, -2, 0, 2, 3]))
+
 main :: IO ()
 main = do
   -- logistic
@@ -113,4 +121,5 @@ main = do
   -- adtest2
   -- adtest3
   -- adtuple1
-  adtuple2
+  -- adtuple2
+  adtuple3
