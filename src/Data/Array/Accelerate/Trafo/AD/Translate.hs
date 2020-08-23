@@ -93,7 +93,7 @@ untranslateLHSboundExp toplhs topexpr
 data LetBoundExp env aenv t s =
     forall env'. LetBoundExp (A.ELeftHandSide t env env') (A.OpenExp env' aenv s)
 
-untranslateGet :: TypeR t -> D.TupleIdx s t -> LetBoundExp env aenv t s
+untranslateGet :: TypeR t -> D.TupleIdx t s -> LetBoundExp env aenv t s
 untranslateGet ty D.TIHere = lhsCopy ty
 untranslateGet (TupRpair t1 t2) (D.TILeft path)
   | LetBoundExp lhs1 ex1 <- untranslateGet t1 path

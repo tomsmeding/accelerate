@@ -8,11 +8,6 @@ import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.Type
 
 
-showTupR :: TupR ScalarType arrs -> String
-showTupR TupRunit = "()"
-showTupR (TupRsingle rep) = show rep
-showTupR (TupRpair a b) = "(" ++ showTupR a ++ ", " ++ showTupR b ++ ")"
-
 showTupRA :: TupR ArrayR arrs -> String
 showTupRA TupRunit = "()"
 showTupRA (TupRsingle rep) = show rep
@@ -20,7 +15,7 @@ showTupRA (TupRpair a b) = "(" ++ showTupRA a ++ ", " ++ showTupRA b ++ ")"
 
 showLHS :: LeftHandSide ScalarType arrs aenv aenv' -> String
 showLHS (LeftHandSideSingle s) = show s
-showLHS (LeftHandSideWildcard r) = showTupR r
+showLHS (LeftHandSideWildcard r) = show r
 showLHS (LeftHandSidePair as bs) = "(" ++ showLHS as ++ ", " ++ showLHS bs ++ ")"
 
 showLHSA :: LeftHandSide ArrayR arrs aenv aenv' -> String
