@@ -267,6 +267,7 @@ isInfixOp (A.PrimLt _) = True
 isInfixOp (A.PrimLtEq _) = True
 isInfixOp (A.PrimGt _) = True
 isInfixOp (A.PrimGtEq _) = True
+isInfixOp (A.PrimIDiv _) = True
 isInfixOp _ = False
 
 precedence :: A.PrimFun sig -> Int
@@ -293,6 +294,7 @@ prettyPrimFun Infix (A.PrimLt _) = "<"
 prettyPrimFun Infix (A.PrimLtEq _) = "<="
 prettyPrimFun Infix (A.PrimGt _) = ">"
 prettyPrimFun Infix (A.PrimGtEq _) = ">="
+prettyPrimFun Infix (A.PrimIDiv _) = "`div`"
 prettyPrimFun Prefix (A.PrimLog _) = "log"
 prettyPrimFun Prefix (A.PrimToFloating _ _) = "toFloating"
 prettyPrimFun Prefix (A.PrimRound _ _) = "round"
