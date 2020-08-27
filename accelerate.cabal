@@ -418,6 +418,7 @@ library
         Data.Array.Accelerate.Trafo.AD
         Data.Array.Accelerate.Trafo.AD.Algorithms
         Data.Array.Accelerate.Trafo.AD.ADDep
+        Data.Array.Accelerate.Trafo.AD.Common
         Data.Array.Accelerate.Trafo.AD.Exp
         Data.Array.Accelerate.Trafo.AD.Orphans
         Data.Array.Accelerate.Trafo.AD.Sink

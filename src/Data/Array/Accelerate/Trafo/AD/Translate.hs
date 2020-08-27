@@ -10,6 +10,7 @@ import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import qualified Data.Array.Accelerate.Trafo.Substitution as A
 import Data.Array.Accelerate.Error
+import qualified Data.Array.Accelerate.Trafo.AD.Common as D
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Analysis.Match (matchTypeR, (:~:)(Refl))

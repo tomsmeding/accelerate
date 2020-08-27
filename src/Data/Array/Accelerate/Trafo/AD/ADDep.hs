@@ -15,7 +15,6 @@ module Data.Array.Accelerate.Trafo.AD.ADDep (
 ) where
 
 import Control.Monad.State.Strict
-import Data.Char (isDigit)
 import Data.List (intercalate, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
@@ -38,6 +37,7 @@ import Data.Array.Accelerate.Error (internalError, HasCallStack)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Algorithms
+import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.TupleZip
 import Data.Array.Accelerate.Trafo.AD.Sink
@@ -51,13 +51,13 @@ evalIdGen :: IdGen a -> a
 evalIdGen (IdGen s) = evalState s 1
 
 -- TODO: make genId and genScalarId instances of the obvious generic function
-genId :: TypeR t -> IdGen (DLabelT Int t)
+genId :: TypeR t -> IdGen (EDLabelT Int t)
 genId ty = state (\s -> (DLabel ty s, succ s))
 
-genScalarId :: ScalarType t -> IdGen (DLabelS Int t)
+genScalarId :: ScalarType t -> IdGen (EDLabel Int t)
 genScalarId ty = state (\s -> (DLabel ty s, succ s))
 
-genScalarIds :: TypeR t -> IdGen (GenLHS ScalarType env t, TupR (DLabel ScalarType Int) t)
+genScalarIds :: TypeR t -> IdGen (GenLHS ScalarType env t, TupR (EDLabel Int) t)
 genScalarIds TupRunit = return (GenLHS (A.LeftHandSideWildcard TupRunit), TupRunit)
 genScalarIds (TupRsingle ty) = (GenLHS (A.LeftHandSideSingle ty),) . TupRsingle <$> genScalarId ty
 genScalarIds (TupRpair t1 t2) = do
@@ -67,13 +67,13 @@ genScalarIds (TupRpair t1 t2) = do
 
 
 -- TODO: make this a data definition, not a tuple
-type Exploded lab args res = (DLabelT lab res, DMap (DLabel TypeR lab) (Exp lab args), DMap (A.Idx args) (DLabel TypeR lab))
+type Exploded lab args res = (EDLabelT lab res, DMap (EDLabelT lab) (Exp lab args), DMap (A.Idx args) (EDLabelT lab))
 
 showExploded :: (Ord lab, Show lab) => Exploded lab args t -> String
 showExploded (endlab, nodemap, argmap) =
     "(" ++ showDLabel endlab ++ ", " ++ showNodemap nodemap ++ ", " ++ showArgmap argmap ++ ")"
 
-showNodemap :: (Ord lab, Show lab) => DMap (DLabel TypeR lab) (Exp lab args) -> String
+showNodemap :: (Ord lab, Show lab) => DMap (EDLabelT lab) (Exp lab args) -> String
 showNodemap nodemap =
     let tups = sortOn fst [(lab, (showDLabel dlab, show expr))
                           | dlab@(DLabel _ lab) :=> expr <- DMap.assocs nodemap]
@@ -81,18 +81,11 @@ showNodemap nodemap =
                              | (_, (dlabshow, exprshow)) <- tups]
     in "[" ++ s ++ "]"
 
-showArgmap :: Show lab => DMap (A.Idx args) (DLabel TypeR lab) -> String
+showArgmap :: Show lab => DMap (A.Idx args) (EDLabelT lab) -> String
 showArgmap argmap =
     let s = intercalate ", " ['A' : show (A.idxToInt argidx) ++ " :=> " ++ showDLabel dlab
                              | argidx :=> dlab <- DMap.assocs argmap]
     in "[" ++ s ++ "]"
-
-showDLabel :: (Show (s t), Show lab) => DLabel s lab t -> String
-showDLabel (DLabel ty lab) =
-    let labshow = show lab
-    in if all isDigit labshow
-           then "L" ++ labshow ++ " :: " ++ show ty
-           else labshow ++ " :: " ++ show ty
 
 data ExpandLHS s t env env1
     = forall env2. ExpandLHS (A.LeftHandSide s t env env2) (env1 A.:> env2)
@@ -184,7 +177,7 @@ reverseAD paramlhs expr
           ex2 = varsToArgs vars2
       in Pair (TupRpair (typeOf ex1) (typeOf ex2)) ex1 ex2
 
-    produceGradient :: DMap (Idx args) (DLabel TypeR Int)
+    produceGradient :: DMap (Idx args) (EDLabelT Int)
                     -> Context Int env
                     -> OpenExp () unused args t
                     -> OpenExp env (PD Int) args' t
@@ -195,7 +188,7 @@ reverseAD paramlhs expr
         Arg ty idx
           | Just lab <- DMap.lookup idx argLabelMap
           , Just labs <- DMap.lookup (fmapLabel D lab) bindmap
-          , Just vars <- labValFinds labelenv labs
+          , Just vars <- elabValFinds labelenv labs
               -> evars vars
           | otherwise
               -> error $ "produceGradient: Adjoint of Arg (" ++ show ty ++ ") " ++
@@ -226,12 +219,12 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- Map will NOT contain:
 -- - Let or Var
 -- - Label: the original expression should not have included Label
-explode :: LabVal Int env -> OpenExp env unused args t -> IdGen (Exploded Int args t)
+explode :: ELabVal Int env -> OpenExp env unused args t -> IdGen (Exploded Int args t)
 explode labelenv e =
     trace ("explode: exploding " ++ showsExpr (const "L?") 0 [] 9 e "") $
     explode' labelenv e
 
-explode' :: LabVal Int env -> OpenExp env unused args t -> IdGen (Exploded Int args t)
+explode' :: ELabVal Int env -> OpenExp env unused args t -> IdGen (Exploded Int args t)
 explode' env = \case
     Const ty x -> do
         lab <- genId (TupRsingle ty)
@@ -281,7 +274,7 @@ explode' env = \case
     Get _ _ _ -> error "explode: Unexpected Get"
     Label _ -> error "explode: Unexpected Label"
   where
-    lpushLHS_Get :: A.ELeftHandSide t env env' -> TupR (DLabel ScalarType Int) t -> LabVal Int env -> Exp Int args t -> (LabVal Int env', DMap (DLabel TypeR Int) (Exp Int args))
+    lpushLHS_Get :: A.ELeftHandSide t env env' -> TupR (EDLabel Int) t -> ELabVal Int env -> Exp Int args t -> (ELabVal Int env', DMap (EDLabelT Int) (Exp Int args))
     lpushLHS_Get lhs labs labelenv rhs = case (lhs, labs) of
         (A.LeftHandSidePair lhs1 lhs2, TupRpair labs1 labs2) ->
             let (labelenv1, mp1) = lpushLHS_Get lhs1 labs1 labelenv (smartFst rhs)
@@ -322,20 +315,20 @@ data PD a = P a | D a
 -- Since the Let bindings are on the scalar level (because Accelerate forces
 --   tuple-destructuring), the labels in the environment are scalar labels.
 --   These thus also have no tag.
-data Context lab env = Context (LabVal lab env) (DMap (DLabel TypeR (PD lab)) (TupR (DLabel ScalarType lab)))
+data Context lab env = Context (ELabVal lab env) (DMap (EDLabelT (PD lab)) (TupR (EDLabel lab)))
 
 showContext :: (Ord lab, Show lab) => Context lab env -> String
 showContext (Context labelenv bindmap) = "Context " ++ showLabelenv labelenv ++ " " ++ showBindmap bindmap
 
-showLabelenv :: Show lab => LabVal lab env -> String
+showLabelenv :: Show lab => ELabVal lab env -> String
 showLabelenv LEmpty = "[]"
 showLabelenv (LPush env lab) = "[" ++ go env ++ showDLabel lab ++ "]"
   where
-    go :: Show lab => LabVal lab env -> String
+    go :: Show lab => ELabVal lab env -> String
     go LEmpty = ""
     go (LPush env' lab') = go env' ++ showDLabel lab' ++ ", "
 
-showBindmap :: (Ord lab, Show lab) => DMap (DLabel TypeR (PD lab)) (TupR (DLabel ScalarType lab)) -> String
+showBindmap :: (Ord lab, Show lab) => DMap (EDLabelT (PD lab)) (TupR (EDLabel lab)) -> String
 showBindmap bindmap =
     let tups = sortOn fst [(lab, (showDLabel dlab, showTupR showDLabel labs))
                           | dlab@(DLabel _ lab) :=> labs <- DMap.assocs bindmap]
@@ -355,8 +348,8 @@ primal :: Exploded Int args res
        -> IdGen (Exp (PD Int) args t)
 primal (endlab, nodemap, _) = primal' nodemap endlab (Context LEmpty mempty)
 
-primal' :: DMap (DLabel TypeR Int) (Exp Int args)
-        -> DLabelT Int t
+primal' :: DMap (EDLabelT Int) (Exp Int args)
+        -> EDLabelT Int t
         -> Context Int env
         -> (forall env'. Context Int env' -> IdGen (OpenExp env' (PD Int) args res))
         -> IdGen (OpenExp env (PD Int) args res)
@@ -394,7 +387,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
           PrimApp restype oper (Label arglab) ->
               primal' nodemap arglab (Context labelenv bindmap) $ \(Context labelenv' bindmap') ->
                   let arglabs = bindmap' `dmapFind` fmapLabel P arglab
-                  in case labValFinds labelenv' arglabs of
+                  in case elabValFinds labelenv' arglabs of
                       Just vars -> do
                           (GenLHS lhs, labs) <- genScalarIds restype
                           Let lhs (PrimApp restype oper (evars vars))
@@ -418,9 +411,9 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                   let condlabs = bindmap' `dmapFind` fmapLabel P condlab
                       thenlabs = bindmap' `dmapFind` fmapLabel P thenlab
                       elselabs = bindmap' `dmapFind` fmapLabel P elselab
-                  in case (labValFinds labelenv' condlabs
-                          ,labValFinds labelenv' thenlabs
-                          ,labValFinds labelenv' elselabs) of
+                  in case (elabValFinds labelenv' condlabs
+                          ,elabValFinds labelenv' thenlabs
+                          ,elabValFinds labelenv' elselabs) of
                       (Just condvars, Just thenvars, Just elsevars) -> do
                           (GenLHS lhs, labs) <- genScalarIds restype
                           Let lhs (Cond restype (evars condvars) (evars thenvars) (evars elsevars))
@@ -463,10 +456,6 @@ newtype AdjList lab args t = AdjList (forall env. Context lab env -> [OpenExp en
 
 data AnyLabel s lab = forall t. AnyLabel (DLabel s lab t)
 type AnyLabelT = AnyLabel TypeR
-type AnyLabelS = AnyLabel ScalarType
-
-instance Show lab => Show (AnyLabel ScalarType lab) where
-    showsPrec d (AnyLabel lab) = showParen (d > 9) (showString "AnyLabel " . showsPrec 9 lab)
 
 -- The Ord and Eq instances refer only to 'a'.
 data OrdBox a b = OrdBox { _ordboxTag :: a, ordboxAuxiliary :: b }
@@ -509,10 +498,10 @@ dual (endlab, nodemap, _) context cont =
                           alllabels
                           (\(AnyLabel l) -> parentmap Map.! labelLabel l)
 
-dual' :: DMap (DLabel TypeR Int) (Exp Int args)
+dual' :: DMap (EDLabelT Int) (Exp Int args)
       -> [AnyLabelT Int]
       -> Context Int env
-      -> DMap (DLabel TypeR (PD Int)) (AdjList Int args)
+      -> DMap (EDLabelT (PD Int)) (AdjList Int args)
       -> (forall env'. Context Int env' -> IdGen (OpenExp env' (PD Int) args res))
       -> IdGen (OpenExp env (PD Int) args res)
 dual' _ [] context _ cont = cont context
@@ -689,8 +678,8 @@ tlmap f (x :@ xs) = f x :@ tlmap f xs
 
 data Contribution node args =
     forall parents t.
-        Contribution (DLabel TypeR Int t)  -- to which label are we contributing an adjoint
-                     (TypedList (DLabel TypeR Int) parents)  -- labels you need the primary value of
+        Contribution (EDLabelT Int t)  -- to which label are we contributing an adjoint
+                     (TypedList (EDLabelT Int) parents)  -- labels you need the primary value of
                      (forall env. A.ExpVars env node                  -- current node's adjoint
                                -> TypedList (A.ExpVars env) parents   -- requested primal values
                                -> OpenExp env (PD Int) args t)        -- contribution
@@ -704,38 +693,38 @@ data Contribution node args =
 -- the typing of Contribution) removes the need of the branches of dual' to
 -- have a separate type signature, significantly simplifying the structure of
 -- the code.
-updateContribmap :: DLabelT Int node
+updateContribmap :: EDLabelT Int node
                  -> [Contribution node args]
-                 -> DMap (DLabel TypeR (PD Int)) (AdjList Int args)
-                 -> DMap (DLabel TypeR (PD Int)) (AdjList Int args)
+                 -> DMap (EDLabelT (PD Int)) (AdjList Int args)
+                 -> DMap (EDLabelT (PD Int)) (AdjList Int args)
 updateContribmap lbl =
     flip . foldr $ \(Contribution lab parentlabs gen) ->
         addContribution (fmapLabel D lab) $ \(Context labelenv bindmap) ->
             let currentlabs = bindmap `dmapFind` fmapLabel D lbl
-            in case (labValFinds labelenv currentlabs, findAll (Context labelenv bindmap) parentlabs) of
+            in case (elabValFinds labelenv currentlabs, findAll (Context labelenv bindmap) parentlabs) of
                 (Just adjvars, parvars) -> gen adjvars parvars
                 _ -> error $ "updateContribmap: node D " ++ show lbl ++ " was not computed"
   where
-    findAll :: Context Int env -> TypedList (DLabel TypeR Int) parents -> TypedList (A.ExpVars env) parents
+    findAll :: Context Int env -> TypedList (EDLabelT Int) parents -> TypedList (A.ExpVars env) parents
     findAll (Context labelenv bindmap) =
         tlmap $ \lab ->
             let labs = bindmap `dmapFind` fmapLabel P lab
-            in fromMaybe (err lab) (labValFinds labelenv labs)
+            in fromMaybe (err lab) (elabValFinds labelenv labs)
       where err lab = error $ "updateContribmap: arg P " ++ show lab ++ " was not computed"
 
 addContribution :: Ord lab
-                => DLabelT (PD lab) t
+                => EDLabelT (PD lab) t
                 -> (forall env. Context lab env -> OpenExp env (PD lab) args t)
-                -> DMap (DLabel TypeR (PD lab)) (AdjList lab args)
-                -> DMap (DLabel TypeR (PD lab)) (AdjList lab args)
+                -> DMap (EDLabelT (PD lab)) (AdjList lab args)
+                -> DMap (EDLabelT (PD lab)) (AdjList lab args)
 -- TODO: function body not yet updated, only type
 addContribution lbl contribution =
     DMap.insertWith (\(AdjList f1) (AdjList f2) -> AdjList (\context -> f1 context ++ f2 context))
                     lbl
                     (AdjList (pure . contribution))
 
-collectAdjoint :: DMap (DLabel TypeR (PD Int)) (AdjList Int args)
-               -> DLabelT Int item
+collectAdjoint :: DMap (EDLabelT (PD Int)) (AdjList Int args)
+               -> EDLabelT Int item
                -> Context Int env
                -> OpenExp env (PD Int) args item
 collectAdjoint contribmap lbl (Context labelenv bindmap) =
@@ -858,7 +847,7 @@ dmapFind mp elt = case DMap.lookup elt mp of
                     Just res -> res
                     Nothing -> error "dmapFind: not found"
 
-lpushLabTup :: LabVal lab env -> A.LeftHandSide s t env env' -> TupR (DLabel ScalarType lab) t -> LabVal lab env'
+lpushLabTup :: ELabVal lab env -> A.LeftHandSide s t env env' -> TupR (EDLabel lab) t -> ELabVal lab env'
 lpushLabTup labelenv (A.LeftHandSideWildcard _) TupRunit = labelenv
 lpushLabTup labelenv (A.LeftHandSideSingle _) (TupRsingle lab) = LPush labelenv lab
 lpushLabTup labelenv (A.LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) =
