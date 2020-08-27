@@ -80,6 +80,7 @@ adtest3 = do
   print $ I.run (A.unit (A.gradientE @Float (\x -> A.toFloating @Int @Float (A.round x * 2)) 3))
   print $ I.run (A.map (A.gradientE @Float (\x -> A.cond (x A.> 0) (x + 1) (x * 2)))
                        (A.use (A.fromList (Z :. (11 :: Int)) [-5..5])))
+  print . I.run . A.unit $ A.gradientE (\(A.T2 x i) -> x * A.toFloating (i `div` 2)) (A.T2 (42 :: A.Exp Float) (3 :: A.Exp Int))
 
 adtuple1 :: IO ()
 adtuple1 = do
