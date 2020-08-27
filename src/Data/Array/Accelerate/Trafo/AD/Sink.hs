@@ -13,6 +13,7 @@ import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Analysis.Match (matchTypeR, (:~:)(Refl))
+import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 
 
@@ -40,13 +41,13 @@ generaliseLHS (A.LeftHandSidePair lhs1 lhs2)
   , GenLHS lhs2' <- generaliseLHS lhs2 =
       GenLHS (A.LeftHandSidePair lhs1' lhs2')
 
-checkLocal :: A.ExpVar env t -> TagVal () env2 -> Maybe (A.ExpVar env2 t)
+checkLocal :: A.ExpVar env t -> TagVal A.TypeR env2 -> Maybe (A.ExpVar env2 t)
 checkLocal _ TEmpty = Nothing
-checkLocal (A.Var sty A.ZeroIdx) (TPush _ _ sty')
+checkLocal (A.Var sty A.ZeroIdx) (TPush _ sty')
   | Just Refl <- matchTypeR (A.TupRsingle sty) sty' =
       Just (A.Var sty ZeroIdx)
   | otherwise = Nothing
-checkLocal (A.Var sty (A.SuccIdx idx)) (TPush tagval _ _)
+checkLocal (A.Var sty (A.SuccIdx idx)) (TPush tagval _)
   | Just (A.Var sty' idx') <- checkLocal (A.Var sty idx) tagval =
       Just (A.Var sty' (SuccIdx idx'))
   | otherwise = Nothing
@@ -61,7 +62,7 @@ checkClosedInLHS :: A.ELeftHandSide t' () env
                  -> Maybe (OpenExp env lab args t)
 checkClosedInLHS lhs expr = checkClosedInTagval (valPushLHS lhs TEmpty) expr
 
-checkClosedInTagval :: TagVal () env2 -> OpenExp env lab args t -> Maybe (OpenExp env2 lab args t)
+checkClosedInTagval :: TagVal A.TypeR env2 -> OpenExp env lab args t -> Maybe (OpenExp env2 lab args t)
 checkClosedInTagval tv expr = case expr of
     Const ty x -> Just (Const ty x)
     PrimApp ty op e -> PrimApp ty op <$> checkClosedInTagval tv e
@@ -76,7 +77,7 @@ checkClosedInTagval tv expr = case expr of
     Arg ty idx -> Just (Arg ty idx)
     Label lab -> Just (Label lab)
 
-valPushLHS :: A.ELeftHandSide t env env' -> TagVal () env -> TagVal () env'
+valPushLHS :: A.ELeftHandSide t env env' -> TagVal A.TypeR env -> TagVal A.TypeR env'
 valPushLHS (A.LeftHandSideWildcard _) tv = tv
-valPushLHS (A.LeftHandSideSingle sty) tv = TPush tv () (A.TupRsingle sty)
+valPushLHS (A.LeftHandSideSingle sty) tv = TPush tv (A.TupRsingle sty)
 valPushLHS (A.LeftHandSidePair lhs1 lhs2) tv = valPushLHS lhs2 (valPushLHS lhs1 tv)

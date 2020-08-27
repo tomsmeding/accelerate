@@ -9,7 +9,6 @@ module Data.Array.Accelerate.Trafo.AD.Exp (
 ) where
 
 import Data.List (intercalate)
-import Data.GADT.Compare
 import Data.GADT.Show
 
 import Data.Array.Accelerate.Representation.Type
@@ -20,39 +19,18 @@ import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Shows
+import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
 
 
--- De Bruijn
--- ---------
+type ELabVal = LabVal ScalarType
 
--- TODO: check whether this type is actually used anywhere
-data TagVal tag env where
-    TEmpty :: TagVal tag ()
-    TPush :: TagVal tag env -> tag -> TypeR t -> TagVal tag (env, t)
+type EDLabel = DLabel ScalarType
+type EDLabelT = DLabel TypeR
 
-data LabVal lab env where
-    LEmpty :: LabVal lab ()
-    LPush :: LabVal lab env -> DLabelS lab t -> LabVal lab (env, t)
-
--- Tuples
--- ------
-
-data TupleIdx t t' where
-    TIHere  :: TupleIdx s s
-    TILeft  :: TupleIdx a t -> TupleIdx (a, b) t
-    TIRight :: TupleIdx b t -> TupleIdx (a, b) t
 
 -- Expressions
 -- -----------
-
-data DLabel s lab t =
-    DLabel { labelType :: s t
-           , labelLabel :: lab }
-  deriving (Show)
-
-type DLabelT lab t = DLabel TypeR lab t
-type DLabelS lab t = DLabel ScalarType lab t
 
 -- TODO: Check how many reified types can be removed in this AST
 data OpenExp env lab args t where
@@ -97,7 +75,7 @@ data OpenExp env lab args t where
             -> Idx args t
             -> OpenExp env lab args t
 
-    Label   :: DLabelT lab t
+    Label   :: EDLabelT lab t
             -> OpenExp env lab args t
 
 type Exp = OpenExp ()
@@ -114,41 +92,6 @@ deriving instance Show AnyScalarType
 
 -- Instances
 -- ---------
-
-showScalar :: ScalarType t -> t -> String
-showScalar = \topty -> case topty of
-    SingleScalarType ty -> showSingle ty
-    VectorScalarType _ -> const "[vector?]"
-  where
-    showSingle :: SingleType t -> t -> String
-    showSingle (NumSingleType ty) = showNum ty
-
-    showNum :: NumType t -> t -> String
-    showNum (IntegralNumType ty) = showIntegral ty
-    showNum (FloatingNumType ty) = showFloating ty
-
-    showIntegral :: IntegralType t -> t -> String
-    showIntegral TypeInt = show
-    showIntegral TypeInt8 = show
-    showIntegral TypeInt16 = show
-    showIntegral TypeInt32 = show
-    showIntegral TypeInt64 = show
-    showIntegral TypeWord = show
-    showIntegral TypeWord8 = show
-    showIntegral TypeWord16 = show
-    showIntegral TypeWord32 = show
-    showIntegral TypeWord64 = show
-
-    showFloating :: FloatingType t -> t -> String
-    showFloating TypeHalf = show
-    showFloating TypeFloat = show
-    showFloating TypeDouble = show
-
-showTuple :: TypeR t -> t -> String
-showTuple TupRunit () = "()"
-showTuple (TupRsingle ty) s = showScalar ty s
-showTuple (TupRpair t1 t2) (a, b) =
-    "(" ++ showTuple t1 a ++ ", " ++ showTuple t2 b ++ ")"
 
 showsExpr :: (lab -> String) -> Int -> [String] -> Int -> OpenExp env lab args t -> ShowS
 showsExpr _ _ _ _ (Const ty x) = showString (showScalar ty x)
@@ -220,29 +163,8 @@ showsExpr labf _ _ d (Label lab) = showParen (d > 0) $
 instance Show lab => Show (OpenExp env lab args t) where
     showsPrec = showsExpr show 0 []
 
-instance Show lab => GShow (DLabel TypeR lab) where
-    gshowsPrec = showsPrec
-
-instance Show lab => GShow (DLabel ScalarType lab) where
-    gshowsPrec = showsPrec
-
 instance Show lab => GShow (OpenExp env lab args) where
     gshowsPrec = showsPrec
-
-instance GEq s => GEq (DLabel s lab) where
-    geq (DLabel ty1 _) (DLabel ty2 _) = do
-        Refl <- geq ty1 ty2
-        return Refl
-
-instance (Ord lab, GCompare s) => GCompare (DLabel s lab) where
-    gcompare (DLabel ty1 lab1) (DLabel ty2 lab2) =
-        case gcompare ty1 ty2 of
-          GLT -> GLT
-          GGT -> GGT
-          GEQ -> case compare lab1 lab2 of
-                   LT -> GLT
-                   EQ -> GEQ
-                   GT -> GGT
 
 -- Auxiliary functions
 -- -------------------
@@ -302,80 +224,28 @@ prettyPrimFun Prefix op = '(' : prettyPrimFun Infix op ++ ")"
 prettyPrimFun fixity op =
     error ("prettyPrimFun: not defined for " ++ show fixity ++ " " ++ showPrimFun op)
 
-pickDLabels :: TupleIdx t t' -> TupR (DLabel s lab) t -> TupR (DLabel s lab) t'
-pickDLabels TIHere labs = labs
-pickDLabels (TILeft path) (TupRpair lab _) = pickDLabels path lab
-pickDLabels (TIRight path) (TupRpair _ lab) = pickDLabels path lab
-pickDLabels _ _ = error "pickDLabels: impossible GADTs"
-
-prjL :: Idx env t -> LabVal lab env -> DLabelS lab t
-prjL ZeroIdx (LPush _ x) = x
-prjL (SuccIdx idx) (LPush env _) = prjL idx env
-
-mapLabVal :: (lab -> lab') -> LabVal lab env -> LabVal lab' env
-mapLabVal _ LEmpty = LEmpty
-mapLabVal f (LPush env (DLabel ty lab)) = LPush (mapLabVal f env) (DLabel ty (f lab))
-
-labValContains :: Eq lab => LabVal lab env -> lab -> Bool
-labValContains LEmpty _ = False
-labValContains (LPush env (DLabel _ lab)) x =
-    x == lab || labValContains env x
-
-uniqueLabVal :: Eq lab => LabVal lab env -> Bool
-uniqueLabVal LEmpty = True
-uniqueLabVal (LPush env (DLabel _ lab)) =
-    not (labValContains env lab) && uniqueLabVal env
-
-data FoundTag env = forall t. FoundTag (ScalarType t) (Idx env t)
-
-labValFind' :: Eq lab => LabVal lab env -> lab -> Maybe (FoundTag env)
-labValFind' LEmpty _ = Nothing
-labValFind' (LPush env (DLabel ty lab)) target
-    | lab == target = Just (FoundTag ty ZeroIdx)
-    | otherwise =
-        case labValFind' env target of
-            Just (FoundTag ty' idx) -> Just (FoundTag ty' (SuccIdx idx))
-            Nothing -> Nothing
-
-labValFind :: Eq lab => LabVal lab env -> DLabelS lab t -> Maybe (Idx env t)
-labValFind LEmpty _ = Nothing
-labValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
+elabValFind :: Eq lab => ELabVal lab env -> EDLabel lab t -> Maybe (Idx env t)
+elabValFind LEmpty _ = Nothing
+elabValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
     | Just Refl <- matchScalarType ty ty2
     , lab == lab2 = Just ZeroIdx
     | otherwise =
         -- TODO: fmap
-        case labValFind env target of
+        case elabValFind env target of
             Just idx -> Just (SuccIdx idx)
             Nothing -> Nothing
 
-labValFinds :: Eq lab => LabVal lab env -> TupR (DLabel ScalarType lab) t -> Maybe (A.ExpVars env t)
-labValFinds _ TupRunit = Just TupRunit
-labValFinds labelenv (TupRsingle lab) =
-    TupRsingle . A.Var (labelType lab) <$> labValFind labelenv lab
-labValFinds labelenv (TupRpair labs1 labs2) =
-    TupRpair <$> labValFinds labelenv labs1 <*> labValFinds labelenv labs2
+elabValFinds :: Eq lab => ELabVal lab env -> TupR (DLabel ScalarType lab) t -> Maybe (A.ExpVars env t)
+elabValFinds _ TupRunit = Just TupRunit
+elabValFinds labelenv (TupRsingle lab) =
+    TupRsingle . A.Var (labelType lab) <$> elabValFind labelenv lab
+elabValFinds labelenv (TupRpair labs1 labs2) =
+    TupRpair <$> elabValFinds labelenv labs1 <*> elabValFinds labelenv labs2
 
-fmapLabel :: (lab -> lab') -> DLabel s lab t -> DLabel s lab' t
-fmapLabel f (DLabel ty lab) = DLabel ty (f lab)
-
-fmapLabels :: (lab -> lab') -> TupR (DLabel s lab) t -> TupR (DLabel s lab') t
-fmapLabels _ TupRunit = TupRunit
-fmapLabels f (TupRsingle lab) = TupRsingle (fmapLabel f lab)
-fmapLabels f (TupRpair labs1 labs2) = TupRpair (fmapLabels f labs1) (fmapLabels f labs2)
-
-labValToList :: LabVal lab env -> [(AnyScalarType, lab)]
-labValToList LEmpty = []
-labValToList (LPush env (DLabel ty lab)) =
-    (AnyScalarType ty, lab) : labValToList env
-
--- TODO: is this function actually used?
-scalarLabel :: ScalarType t -> DLabelT lab t -> DLabelS lab t
-scalarLabel ty (DLabel (TupRsingle ty') lab)
-  | Just Refl <- geq ty ty' = DLabel ty' lab  -- The runtime equality check is only to eliminate bottoms
-scalarLabel _ _ = error "Invalid GADTs"
-
-tupleLabel :: DLabelS lab t -> DLabelT lab t
-tupleLabel (DLabel ty lab) = DLabel (TupRsingle ty) lab
+elabValToList :: ELabVal lab env -> [(AnyScalarType, lab)]
+elabValToList LEmpty = []
+elabValToList (LPush env (DLabel ty lab)) =
+    (AnyScalarType ty, lab) : elabValToList env
 
 evars :: A.ExpVars env t -> OpenExp env lab args t
 evars = snd . evars'
@@ -387,8 +257,3 @@ evars = snd . evars'
         let (t1, e1) = evars' vars1
             (t2, e2) = evars' vars2
         in (TupRpair t1 t2, Pair (TupRpair t1 t2) e1 e2)
-
-showTupR :: (forall t'. s t' -> String) -> TupR s t -> String
-showTupR _ TupRunit       = "()"
-showTupR s (TupRsingle t) = s t
-showTupR s (TupRpair a b) = "(" ++ showTupR s a ++ "," ++ showTupR s b ++")"
