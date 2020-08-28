@@ -373,6 +373,8 @@ convertSharingAcc config alyt aenv (ScopedAcc lams (AccSharing _ preAcc))
                         (cvtA acc1)
                         (convertSharingBoundary config alyt aenv' shr bndy2)
                         (cvtA acc2)
+      GradientA tp t f e
+        -> AST.GradientA tp t (cvtAfun1 tp f) (cvtA e)
       -- Collect seq -> AST.Collect (convertSharingSeq config alyt EmptyLayout aenv' [] seq)
 
 {--
@@ -1559,6 +1561,11 @@ makeOccMapSharingAcc config accOccMap = traverseAcc
                                              (acc2', h5) <- traverseAcc lvl acc2
                                              return (Stencil2 s1 s2 tp f' bnd1' acc1' bnd2' acc2',
                                                      h1 `max` h2 `max` h3 `max` h4 `max` h5 + 1)
+            GradientA ty oty fun arg    -> do
+                                             (fun', h1) <- traverseAfun1 lvl ty fun
+                                             (arg', h2) <- traverseAcc lvl arg
+                                             return (GradientA ty oty fun' arg'
+                                                    , h1 `max` h2 + 1)
             -- Collect s                   -> do
             --                                  (s', h) <- traverseSeq lvl s
             --                                  return (Collect s', h + 1)
@@ -2427,6 +2434,15 @@ determineScopesSharingAcc config accOccMap = scopesAcc
                                      in
                                      reconstruct (Stencil2 s1 s2 tp st' bnd1' acc1' bnd2' acc2')
                                        (accCount1 +++ accCount2 +++ accCount3 +++ accCount4 +++ accCount5)
+
+          GradientA ty oty fun arg
+                                  -> let
+                                       (fun', accCount1) = scopesAfun1 fun
+                                       (arg', accCount2) = scopesAcc arg
+                                     in
+                                     reconstruct (GradientA ty oty fun' arg')
+                                                 (accCount1 +++ accCount2)
+
           -- Collect seq             -> let
           --                              (seq', accCount1) = scopesSeq seq
           --                            in

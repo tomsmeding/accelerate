@@ -454,6 +454,13 @@ data PreSmartAcc acc exp as where
                 -> acc (Array sh b)
                 -> PreSmartAcc acc exp (Array sh c)
 
+  GradientA     :: ArraysR a
+                -> ArrayR (Array () t)
+                -> (SmartAcc a -> acc (Array () t))
+                -> acc a
+                -- -> PreSmartAcc acc exp (((), t), a)
+                -> PreSmartAcc acc exp a
+
 
 -- Embedded expressions of the surface language
 -- --------------------------------------------
@@ -829,6 +836,7 @@ instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
                                  in  TupRsingle (ArrayR shr tp)
     Stencil s tp _ _ _        -> TupRsingle $ ArrayR (stencilShapeR s) tp
     Stencil2 s _ tp _ _ _ _ _ -> TupRsingle $ ArrayR (stencilShapeR s) tp
+    GradientA t _ _ _         -> t
 
 
 class HasTypeR f where
@@ -1331,6 +1339,7 @@ showPreAccOp Backpermute{}         = "Backpermute"
 showPreAccOp Stencil{}             = "Stencil"
 showPreAccOp Stencil2{}            = "Stencil2"
 showPreAccOp Aforeign{}            = "Aforeign"
+showPreAccOp GradientA{}           = "GradientA"
 
 showsDirection :: Direction -> ShowS
 showsDirection LeftToRight = ('l':)

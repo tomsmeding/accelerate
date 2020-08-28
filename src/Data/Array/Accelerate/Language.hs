@@ -89,7 +89,7 @@ module Data.Array.Accelerate.Language (
   cond,  while,
 
   -- * Automatic differentiation
-  gradientE,
+  gradientE, gradientA,
 
   -- * Array operations with a scalar result
   (!), (!!), shape, size, shapeSize,
@@ -112,6 +112,7 @@ import Data.Array.Accelerate.Sugar.Array                            ( Arrays(..)
 import Data.Array.Accelerate.Sugar.Elt
 import Data.Array.Accelerate.Sugar.Foreign
 import Data.Array.Accelerate.Sugar.Shape                            ( Shape(..), Slice(..), (:.) )
+import qualified Data.Array.Accelerate.Sugar.Shape                  as Shape
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Representation.Array         as R
 
@@ -1357,6 +1358,17 @@ gradientE f (Exp e) = mkExp $ GradientE @(EltR t) @(EltR e) (eltR @t) (restrictS
     restrictScalars :: TypeR a -> ScalarType a
     restrictScalars (TupRsingle s) = s
     restrictScalars _ = error "Function under operator gradientE must return scalar"
+
+gradientA :: forall a t. (Arrays a, Elt t)
+          => (Acc a -> Acc (Array Shape.Z t))
+          -> Acc a
+          -- -> Acc (t, a)
+          -> Acc a
+gradientA = Acc $$ applyAcc $ GradientA (arraysR @a) (arrayR @Shape.Z @t)
+  -- where
+  --   restrictScalars :: TypeR a -> ScalarType a
+  --   restrictScalars (TupRsingle s) = s
+  --   restrictScalars _ = error "Function under operator gradientE must return scalar"
 
 
 -- Array operations with a scalar result

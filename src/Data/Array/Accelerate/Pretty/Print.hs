@@ -183,6 +183,7 @@ prettyPreOpenAcc ctx prettyAcc extractAcc aenv pacc =
     Stencil s _ f b a        -> "stencil"        .$ [ ppF f,  ppB (stencilEltR s) b, ppA a ]
     Stencil2 s1 s2 _ f b1 a1 b2 a2
                              -> "stencil2"       .$ [ ppF f,  ppB (stencilEltR s1) b1, ppA a1, ppB (stencilEltR s2) b2, ppA a2 ]
+    GradientA _ _ f a        -> "gradientA"      .$ [ ppAF f, ppA a ]
   where
     infixr 0 .$
     f .$ xs

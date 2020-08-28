@@ -570,6 +570,7 @@ usesOfPreAcc withShape countAcc idx = count
       Backpermute _ sh f a       -> countE sh + countF f  + countA a
       Stencil _ _ f _ a          -> countF f  + countA a
       Stencil2 _ _ _ f _ a1 _ a2 -> countF f  + countA a1 + countA a2
+      GradientA _ _ f a          -> countA a  + countAF f idx  -- TODO: is this counting correct?
       -- Collect s                 -> countS s
 
     countE :: OpenExp env aenv e -> Int
@@ -599,7 +600,7 @@ usesOfPreAcc withShape countAcc idx = count
         | otherwise              -> 0
       Foreign _ _ _ e            -> countE e
       Coerce _ _ e               -> countE e
-      GradientE _ _ f e          -> countE e  + countF f
+      GradientE _ _ f e          -> countE e  + countF f  -- TODO: is this counting correct?
 
     countME :: Maybe (OpenExp env aenv e) -> Int
     countME = maybe 0 countE

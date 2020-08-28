@@ -703,6 +703,7 @@ rebuildPreOpenAcc k av acc =
     Stencil2 s1 s2 tp f b1 a1 b2 a2
                               -> Stencil2 s1 s2 tp <$> rebuildFun (pure . IE) av' f <*> rebuildBoundary av' b1 <*> k av a1 <*> rebuildBoundary av' b2 <*> k av a2
     Aforeign repr ff afun as  -> Aforeign repr ff afun <$> k av as
+    GradientA a t f arg       -> GradientA a t   <$> rebuildAfun k av f <*> k av arg
     -- Collect seq             -> Collect      <$> rebuildSeq k av seq
   where
     av' = reindexAvar av

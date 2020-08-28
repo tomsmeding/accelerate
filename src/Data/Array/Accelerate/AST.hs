@@ -442,6 +442,17 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
               -> acc             aenv (Array sh b)                -- source array #2
               -> PreOpenAcc acc  aenv (Array sh c)
 
+  -- Take the automatic derivative of the expression (of type F^n -> F, for some scalar type F).
+  -- Note that the function under the gradient operator must be closed, i.e. not have free variables.
+  -- Note the return type of this operator; (((), e), t) is the representation
+  -- type of (e', t'), if e and t are the representation types of e' and t'.
+  GradientA     :: ArraysR a
+                -> ArrayR (Array () t)
+                -> PreOpenAfun acc aenv (a -> Array () t)  -- TJS: should be closed, but GHC doesn't like me
+                -> acc aenv a
+                -- -> PreOpenAcc acc aenv (((), e), a)
+                -> PreOpenAcc acc aenv a
+
 
 data Direction = LeftToRight | RightToLeft
   deriving Eq
@@ -797,6 +808,7 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
                                          in arraysRarray sh tR
   arraysR (Stencil2 _ _ tR _ _ a _ _) = let ArrayR sh _ = arrayR a
                                          in arraysRarray sh tR
+  arraysR (GradientA t _ _ _)         = t
 
 expType :: HasCallStack => OpenExp aenv env t -> TypeR t
 expType = \case
@@ -1016,6 +1028,7 @@ rnfPreOpenAcc rnfA pacc =
         repr1 = ArrayR shr $ stencilEltR sr1
         repr2 = ArrayR shr $ stencilEltR sr2
       in rnfStencilR sr1 `seq` rnfStencilR sr2 `seq` rnfTupR rnfScalarType tp `seq` rnfF f `seq` rnfB repr1 b1 `seq` rnfB repr2 b2 `seq` rnfA a1 `seq` rnfA a2
+    GradientA a t f arg       -> rnfTupR rnfArrayR a `seq` rnfArrayR t `seq` rnfAF f `seq` rnfA arg
 
 rnfArrayVar :: ArrayVar aenv a -> ()
 rnfArrayVar = rnfVar rnfArrayR
@@ -1225,6 +1238,7 @@ liftPreOpenAcc liftA pacc =
         repr1 = ArrayR shr $ stencilEltR sr1
         repr2 = ArrayR shr $ stencilEltR sr2
       in [|| Stencil2 $$(liftStencilR sr1) $$(liftStencilR sr2) $$(liftTypeR tp) $$(liftF f) $$(liftB repr1 b1) $$(liftA a1) $$(liftB repr2 b2) $$(liftA a2) ||]
+    GradientA a t f arg       -> [|| GradientA $$(liftArraysR a) $$(liftArrayR t) $$(liftAF f) $$(liftA arg) ||]
 
 
 liftALeftHandSide :: ALeftHandSide arrs aenv aenv' -> Q (TExp (ALeftHandSide arrs aenv aenv'))
@@ -1402,6 +1416,7 @@ showPreAccOp Permute{}           = "Permute"
 showPreAccOp Backpermute{}       = "Backpermute"
 showPreAccOp Stencil{}           = "Stencil"
 showPreAccOp Stencil2{}          = "Stencil2"
+showPreAccOp GradientA{}         = "GradientA"
 
 showsDirection :: Direction -> ShowS
 showsDirection LeftToRight = ('l':)

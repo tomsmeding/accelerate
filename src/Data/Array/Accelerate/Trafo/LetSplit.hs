@@ -58,6 +58,7 @@ convertPreOpenAcc = \case
   Backpermute shr sh f a          -> Backpermute shr sh f (convertAcc a)
   Stencil s tp f b a              -> Stencil s tp f b (convertAcc a)
   Stencil2 s1 s2 tp f b1 a1 b2 a2 -> Stencil2 s1 s2 tp f b1 (convertAcc a1) b2 (convertAcc a2)
+  GradientA a t f arg             -> GradientA a t (convertAfun f) (convertAcc arg)
 
 convertLHS
     :: ALeftHandSide bnd aenv aenv'

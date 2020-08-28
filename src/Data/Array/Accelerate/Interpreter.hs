@@ -228,6 +228,7 @@ evalOpenAcc (AST.Manifest pacc) aenv =
     Use repr arr                  -> (TupRsingle repr, arr)
     Unit tp e                     -> unitOp tp (evalE e)
     -- Collect s                     -> evalSeq defaultSeqConfig s aenv
+    GradientA _ _ _ _             -> internalError "GradientA unimplemented in Interpreter"
 
     -- Producers
     -- ---------
