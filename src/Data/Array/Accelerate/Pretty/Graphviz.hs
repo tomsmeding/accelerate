@@ -220,6 +220,15 @@ prettyDelayedOpenAcc detail ctx aenv (Manifest pacc) =
           loop                            = nest 2 (sep ["awhile", pretty p', pretty f', xb ])
       return $ PNode ident (Leaf (Nothing,loop)) fvs
 
+    GradientA _ _ f x        -> do  -- TODO: does this even remotely make sense?
+      ident <- genNodeId
+      x'    <- replant =<< prettyDelayedOpenAcc detail app aenv x
+      f'    <- prettyDelayedAfun detail aenv f
+      --
+      let PNode _ (Leaf (Nothing,xb)) fvs = x'
+          loop                            = nest 2 (sep ["gradientA", pretty f', xb ])
+      return $ PNode ident (Leaf (Nothing,loop)) fvs
+
     Apair a1 a2              -> genNodeId >>= prettyDelayedApair detail aenv a1 a2
 
     Anil                            -> "()"             .$ []

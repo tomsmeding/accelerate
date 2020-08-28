@@ -212,6 +212,9 @@ module Data.Array.Accelerate (
   (?|), acond, awhile,
   IfThenElse(..),
 
+  -- *** Automatic differentiation
+  gradientA,
+
   -- *** Controlling execution
   (>->),
   compute,

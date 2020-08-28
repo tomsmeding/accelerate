@@ -111,6 +111,12 @@ adtuple3 = do
                        in a * b))
           (A.use (A.fromList (Z :. (5 :: Int)) [-3, -2, 0, 2, 3]))
 
+arrad :: IO ()
+arrad = do
+  print . I.run $
+    A.gradientA (\arr -> A.sum (A.map (\x -> x * x) arr))
+                (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
+
 main :: IO ()
 main = do
   -- logistic
@@ -123,4 +129,5 @@ main = do
   -- adtest3
   -- adtuple1
   -- adtuple2
-  adtuple3
+  -- adtuple3
+  arrad

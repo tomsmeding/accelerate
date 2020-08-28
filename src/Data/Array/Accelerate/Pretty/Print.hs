@@ -192,7 +192,6 @@ prettyPreOpenAcc config ctx prettyAcc extractAcc aenv pacc =
                       , hang shiftwidth (sep [ then_, t' ])
                       , hang shiftwidth (sep [ else_, e' ]) ]
 
-
     Atrace (Message _ _ msg) as bs  -> ppN "atrace"      .$ [ fromString (show msg), ppA as, ppA bs ]
     Aforeign _ ff _ a               -> ppN "aforeign"    .$ [ pretty (strForeign ff), ppA a ]
     Awhile p f a                    -> ppN "awhile"      .$ [ ppAF p, ppAF f, ppA a ]
@@ -216,6 +215,7 @@ prettyPreOpenAcc config ctx prettyAcc extractAcc aenv pacc =
     Backpermute _ sh f a            -> ppN "backpermute" .$ [ ppE sh, ppF f, ppA a ]
     Stencil s _ f b a               -> ppN "stencil"     .$ [ ppF f,  ppB (stencilEltR s) b, ppA a ]
     Stencil2 s1 s2 _ f b1 a1 b2 a2  -> ppN "stencil2"    .$ [ ppF f,  ppB (stencilEltR s1) b1, ppA a1, ppB (stencilEltR s2) b2, ppA a2 ]
+    GradientA _ _ f a               -> ppN "gradientA"   .$ [ ppAF f, ppA a ]
   where
     infixr 0 .$
     f .$ xs
