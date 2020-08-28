@@ -39,7 +39,7 @@ translateExp expr = case expr of
 --     D.Pair _ e1 e2 -> A.Pair (untranslateExp e1) (untranslateExp e2)
 --     D.Cond _ e1 e2 e3 -> A.Cond (untranslateExp e1) (untranslateExp e2) (untranslateExp e3)
 --     D.Get _ path e
---       | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
+--       | LetBoundExp lhs body <- untranslateGet (D.etypeOf e) path
 --       -> A.Let lhs (untranslateExp e) body
 --     D.Arg _ _ -> internalError "AD.untranslateExp: Unexpected Arg in untranslate!"
 --     D.Label _ -> internalError "AD.untranslateExp: Unexpected Label in untranslate!"
@@ -86,7 +86,7 @@ untranslateLHSboundExp toplhs topexpr
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
         D.Get _ path e
-          | LetBoundExp lhs body <- untranslateGet (D.typeOf e) path
+          | LetBoundExp lhs body <- untranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e pv) body
         D.Arg _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
         D.Label _ -> internalError "AD.untranslateLHSboundExp: Unexpected Label in untranslate!"

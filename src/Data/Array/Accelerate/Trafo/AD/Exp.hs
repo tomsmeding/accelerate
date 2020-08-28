@@ -93,32 +93,32 @@ deriving instance Show AnyScalarType
 -- Instances
 -- ---------
 
-showsExpr :: (lab -> String) -> Int -> [String] -> Int -> OpenExp env lab args t -> ShowS
-showsExpr _ _ _ _ (Const ty x) = showString (showScalar ty x)
-showsExpr labf seed env d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
+showsExp :: (lab -> String) -> Int -> [String] -> Int -> OpenExp env lab args t -> ShowS
+showsExp _ _ _ _ (Const ty x) = showString (showScalar ty x)
+showsExp labf seed env d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
     let prec = precedence f
         ops = prettyPrimFun Infix f
     in showParen (d > prec) $
-            showsExpr labf seed env (prec+1) e1 . showString (' ' : ops ++ " ") .
-                showsExpr labf seed env (prec+1) e2
-showsExpr labf seed env d (PrimApp _ f e) =
+            showsExp labf seed env (prec+1) e1 . showString (' ' : ops ++ " ") .
+                showsExp labf seed env (prec+1) e2
+showsExp labf seed env d (PrimApp _ f e) =
     let prec = precedence f
         ops = prettyPrimFun Prefix f
     in showParen (d > prec) $
-            showString (ops ++ " ") . showsExpr labf seed env (prec+1) e
-showsExpr labf seed env _ (Pair _ e1 e2) =
-    showString "(" . showsExpr labf seed env 0 e1 . showString ", " .
-        showsExpr labf seed env 0 e2 . showString ")"
-showsExpr _ _ _ _ Nil =
+            showString (ops ++ " ") . showsExp labf seed env (prec+1) e
+showsExp labf seed env _ (Pair _ e1 e2) =
+    showString "(" . showsExp labf seed env 0 e1 . showString ", " .
+        showsExp labf seed env 0 e2 . showString ")"
+showsExp _ _ _ _ Nil =
     showString "()"
-showsExpr labf seed env d (Cond _ c t e) =
+showsExp labf seed env d (Cond _ c t e) =
     showParen (d > 10) $
         showString "cond " .
-            showsExpr labf seed env 11 c . showString " " .
-            showsExpr labf seed env 11 t . showString " " .
-            showsExpr labf seed env 11 e
-showsExpr labf seed env d (Get _ ti e) = showParen (d > 10) $
-    showString (tiPrefix ti) . showsExpr labf seed env 10 e
+            showsExp labf seed env 11 c . showString " " .
+            showsExp labf seed env 11 t . showString " " .
+            showsExp labf seed env 11 e
+showsExp labf seed env d (Get _ ti e) = showParen (d > 10) $
+    showString (tiPrefix ti) . showsExp labf seed env 10 e
   where
     tiPrefix :: TupleIdx t t' -> String
     tiPrefix = (++ " ") . intercalate "." . reverse . tiPrefix'
@@ -127,11 +127,11 @@ showsExpr labf seed env d (Get _ ti e) = showParen (d > 10) $
     tiPrefix' TIHere = []
     tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
     tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
-showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
+showsExp labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
     let (descr, descrs, seed') = namifyLHS topseed toplhs
         env' = descrs ++ env
-    in showString ("let " ++ descr ++ " = ") . showsExpr labf seed' env 0 rhs .
-            showString " in " . showsExpr labf seed' env' 0 body
+    in showString ("let " ++ descr ++ " = ") . showsExp labf seed' env 0 rhs .
+            showString " in " . showsExp labf seed' env' 0 body
   where
     namifyVar :: Int -> (String, Int)
     namifyVar seed =
@@ -147,21 +147,21 @@ showsExpr labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
       let (descr1, descrs1, seed1) = namifyLHS seed lhs1
           (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
       in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", descrs2 ++ descrs1,seed2)
-showsExpr _ _ _ d (Arg ty idx) = showParen (d > 0) $
+showsExp _ _ _ d (Arg ty idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx) ++ " :: " ++ show ty)
-showsExpr _ _ env _ (Var (A.Var _ idx)) =
+showsExp _ _ env _ (Var (A.Var _ idx)) =
     case drop (idxToInt idx) env of
         descr : _ -> showString descr
-        [] -> error $ "Var out of env range in showsExpr: " ++
+        [] -> error $ "Var out of env range in showsExp: " ++
                       show (idxToInt idx) ++ " in " ++ show env
-showsExpr labf _ _ d (Label lab) = showParen (d > 0) $
+showsExp labf _ _ d (Label lab) = showParen (d > 0) $
     showString ('L' : labf (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
 -- instance Show (OpenExp env Int t) where
---     showsPrec = showsExpr subscript 0 []
+--     showsPrec = showsExp subscript 0 []
 
 instance Show lab => Show (OpenExp env lab args t) where
-    showsPrec = showsExpr show 0 []
+    showsPrec = showsExp show 0 []
 
 instance Show lab => GShow (OpenExp env lab args) where
     gshowsPrec = showsPrec
@@ -169,17 +169,17 @@ instance Show lab => GShow (OpenExp env lab args) where
 -- Auxiliary functions
 -- -------------------
 
-typeOf :: OpenExp env lab args t -> TypeR t
-typeOf (Const ty _) = TupRsingle ty
-typeOf (PrimApp ty _ _) = ty
-typeOf (Pair ty _ _) = ty
-typeOf Nil = TupRunit
-typeOf (Cond ty _ _ _) = ty
-typeOf (Get ty _ _) = ty
-typeOf (Let _ _ body) = typeOf body
-typeOf (Var (A.Var ty _)) = TupRsingle ty
-typeOf (Arg ty _) = TupRsingle ty
-typeOf (Label lab) = labelType lab
+etypeOf :: OpenExp env lab args t -> TypeR t
+etypeOf (Const ty _) = TupRsingle ty
+etypeOf (PrimApp ty _ _) = ty
+etypeOf (Pair ty _ _) = ty
+etypeOf Nil = TupRunit
+etypeOf (Cond ty _ _ _) = ty
+etypeOf (Get ty _ _) = ty
+etypeOf (Let _ _ body) = etypeOf body
+etypeOf (Var (A.Var ty _)) = TupRsingle ty
+etypeOf (Arg ty _) = TupRsingle ty
+etypeOf (Label lab) = labelType lab
 
 isInfixOp :: A.PrimFun ((a, b) -> c) -> Bool
 isInfixOp (A.PrimAdd _) = True
@@ -229,11 +229,7 @@ elabValFind LEmpty _ = Nothing
 elabValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
     | Just Refl <- matchScalarType ty ty2
     , lab == lab2 = Just ZeroIdx
-    | otherwise =
-        -- TODO: fmap
-        case elabValFind env target of
-            Just idx -> Just (SuccIdx idx)
-            Nothing -> Nothing
+    | otherwise = SuccIdx <$> elabValFind env target
 
 elabValFinds :: Eq lab => ELabVal lab env -> TupR (DLabel ScalarType lab) t -> Maybe (A.ExpVars env t)
 elabValFinds _ TupRunit = Just TupRunit
