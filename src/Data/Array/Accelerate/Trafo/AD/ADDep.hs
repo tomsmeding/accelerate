@@ -175,7 +175,7 @@ reverseAD paramlhs expr
     varsToArgs (TupRpair vars1 vars2) =
       let ex1 = varsToArgs vars1
           ex2 = varsToArgs vars2
-      in Pair (TupRpair (typeOf ex1) (typeOf ex2)) ex1 ex2
+      in Pair (TupRpair (etypeOf ex1) (etypeOf ex2)) ex1 ex2
 
     produceGradient :: DMap (Idx args) (EDLabelT Int)
                     -> Context Int env
@@ -221,7 +221,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- - Label: the original expression should not have included Label
 explode :: ELabVal Int env -> OpenExp env unused args t -> IdGen (Exploded Int args t)
 explode labelenv e =
-    trace ("explode: exploding " ++ showsExpr (const "L?") 0 [] 9 e "") $
+    trace ("explode: exploding " ++ showsExp (const "L?") 0 [] 9 e "") $
     explode' labelenv e
 
 explode' :: ELabVal Int env -> OpenExp env unused args t -> IdGen (Exploded Int args t)
@@ -260,7 +260,7 @@ explode' env = \case
         return (lab, mp, argmp)
     Let lhs rhs body -> do
         (lab1, mp1, argmp1) <- explode' env rhs
-        (_, labs) <- genScalarIds (typeOf rhs)
+        (_, labs) <- genScalarIds (etypeOf rhs)
         let (env', mpLHS) = lpushLHS_Get lhs labs env (Label lab1)
         (lab2, mp2, argmp2) <- explode' env' body
         let mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mpLHS, mp2]
@@ -292,7 +292,7 @@ explode' env = \case
             insertFst (TILeft ti) = TILeft (insertFst ti)
             insertFst (TIRight ti) = TIRight (insertFst ti)
     smartFst ex
-      | TupRpair t1 _ <- typeOf ex
+      | TupRpair t1 _ <- etypeOf ex
       = Get t1 (TILeft TIHere) ex
     smartFst _ = error "smartFst: impossible GADTs"
 
@@ -303,7 +303,7 @@ explode' env = \case
             insertSnd (TILeft ti) = TILeft (insertSnd ti)
             insertSnd (TIRight ti) = TIRight (insertSnd ti)
     smartSnd ex
-      | TupRpair _ t2 <- typeOf ex
+      | TupRpair _ t2 <- etypeOf ex
       = Get t2 (TIRight TIHere) ex
     smartSnd _ = error "smartSnd: impossible GADTs"
 
@@ -646,7 +646,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
       expr -> trace ("\n!! " ++ show expr) undefined
   where
     smartPair :: OpenExp env lab args a -> OpenExp env lab args b -> OpenExp env lab args (a, b)
-    smartPair a b = Pair (TupRpair (typeOf a) (typeOf b)) a b
+    smartPair a b = Pair (TupRpair (etypeOf a) (etypeOf b)) a b
 
 -- TODO: make a new abstraction after the refactor, possibly inspired by this function, which was the abstraction pre-refactor
 -- dualStoreAdjoint

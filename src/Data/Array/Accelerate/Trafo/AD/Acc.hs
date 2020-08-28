@@ -18,7 +18,9 @@ import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.Analysis.Match
+import Data.Array.Accelerate.Shows
 import Data.Array.Accelerate.Trafo.AD.Common
+import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
 
 
@@ -31,18 +33,10 @@ type ADLabelT = DLabel ArraysR
 -- Array programs
 -- --------------
 
-data OpenExp env lab args t where
-    OpenExpIsDefinedInAnotherFile :: OpenExp env lab args t
-
-type Exp = OpenExp ()
-
-instance Show lab => Show (OpenExp env lab args t) where
-    showsPrec = undefined
-
+-- Expression-level function
 data OpenFun env lab t where
     Body :: OpenExp env lab () t -> OpenFun env lab t
     Lam :: A.ELeftHandSide a env env' -> OpenFun env' lab t -> OpenFun env lab (a -> t)
-
 
 -- TODO: Check how many reified types can be removed in this AST
 data OpenAcc aenv lab args t where
@@ -119,23 +113,23 @@ showsAcc labf seed env _ (Apair _ e1 e2) =
         showsAcc labf seed env 0 e2 . showString ")"
 showsAcc _ _ _ _ Anil =
     showString "()"
-showsAcc labf seed env d (Acond _ _c t e) =
+showsAcc labf seed env d (Acond _ c t e) =
     showParen (d > 10) $
         showString "acond " .
-            showString "?exp?" . showString " " .
+            showsExp labf 0 [] 11 c . showString " " .
             showsAcc labf seed env 11 t . showString " " .
             showsAcc labf seed env 11 e
-showsAcc labf seed env d (Map _ _f e) =
+showsAcc labf seed env d (Map _ f e) =
     showParen (d > 10) $
         showString "map " .
-            showString "?fun?" . showString " " .
-              showsAcc labf seed env 11 e
-showsAcc labf seed env d (ZipWith _ _f e1 e2) =
+            showsFun labf 11 f . showString " " .
+            showsAcc labf seed env 11 e
+showsAcc labf seed env d (ZipWith _ f e1 e2) =
     showParen (d > 10) $
         showString "map " .
-            showString "?fun?" . showString " " .
-              showsAcc labf seed env 11 e1 . showString " " .
-              showsAcc labf seed env 11 e2
+            showsFun labf 11 f . showString " " .
+            showsAcc labf seed env 11 e1 . showString " " .
+            showsAcc labf seed env 11 e2
 showsAcc labf seed env d (Aget _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsAcc labf seed env 10 e
   where
@@ -176,6 +170,11 @@ showsAcc _ _ env _ (Avar (A.Var _ idx)) =
 showsAcc labf _ _ d (Alabel lab) = showParen (d > 0) $
     showString ('L' : labf (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
+showsFun :: (lab -> String) -> Int -> OpenFun env lab t -> ShowS
+showsFun labf d (Body expr) = showsExp labf 0 [] d expr
+showsFun labf d (Lam lhs fun) = showParen (d > 0) $
+    showString "\\" . showString (showLHS lhs) . showString " -> " . showsFun labf 0 fun
+
 instance Show lab => Show (OpenAcc aenv lab args t) where
     showsPrec = showsAcc show 0 []
 
@@ -185,29 +184,25 @@ instance Show lab => GShow (OpenAcc aenv lab args) where
 -- Auxiliary functions
 -- -------------------
 
-typeOf :: OpenAcc aenv lab args t -> ArraysR t
-typeOf (Aconst ty _) = TupRsingle ty
-typeOf (Apair ty _ _) = ty
-typeOf Anil = TupRunit
-typeOf (Acond ty _ _ _) = ty
-typeOf (Map ty _ _) = ty
-typeOf (ZipWith ty _ _ _) = ty
-typeOf (Aget ty _ _) = ty
-typeOf (Alet _ _ body) = typeOf body
-typeOf (Avar (A.Var ty _)) = TupRsingle ty
-typeOf (Aarg ty _) = TupRsingle ty
-typeOf (Alabel lab) = labelType lab
+atypeOf :: OpenAcc aenv lab args t -> ArraysR t
+atypeOf (Aconst ty _) = TupRsingle ty
+atypeOf (Apair ty _ _) = ty
+atypeOf Anil = TupRunit
+atypeOf (Acond ty _ _ _) = ty
+atypeOf (Map ty _ _) = ty
+atypeOf (ZipWith ty _ _ _) = ty
+atypeOf (Aget ty _ _) = ty
+atypeOf (Alet _ _ body) = atypeOf body
+atypeOf (Avar (A.Var ty _)) = TupRsingle ty
+atypeOf (Aarg ty _) = TupRsingle ty
+atypeOf (Alabel lab) = labelType lab
 
 alabValFind :: Eq lab => ALabVal lab env -> ADLabel lab t -> Maybe (Idx env t)
 alabValFind LEmpty _ = Nothing
 alabValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
     | Just Refl <- matchArrayR ty ty2
     , lab == lab2 = Just ZeroIdx
-    | otherwise =
-        -- TODO: fmap
-        case alabValFind env target of
-            Just idx -> Just (SuccIdx idx)
-            Nothing -> Nothing
+    | otherwise = SuccIdx <$> alabValFind env target
 
 alabValFinds :: Eq lab => ALabVal lab env -> TupR (DLabel ArrayR lab) t -> Maybe (A.ArrayVars env t)
 alabValFinds _ TupRunit = Just TupRunit
