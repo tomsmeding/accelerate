@@ -9,13 +9,35 @@ import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import qualified Data.Array.Accelerate.Trafo.Substitution as A
+import Data.Array.Accelerate.Analysis.Match (matchTypeR, (:~:)(Refl))
 import Data.Array.Accelerate.Error
+import Data.Array.Accelerate.Representation.Type
+import qualified Data.Array.Accelerate.Trafo.AD.Acc as D
 import qualified Data.Array.Accelerate.Trafo.AD.Common as D
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
-import Data.Array.Accelerate.Representation.Type
-import Data.Array.Accelerate.Analysis.Match (matchTypeR, (:~:)(Refl))
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as D
 
+
+translateAcc :: A.OpenAcc aenv t -> D.OpenAcc aenv lab args t
+translateAcc (A.OpenAcc expr) = case expr of
+    A.Use ty arr -> D.Aconst ty arr
+    A.Apair e1 e2 ->
+        D.Apair (A.arraysR expr) (translateAcc e1) (translateAcc e2)
+    A.Anil -> D.Anil
+    A.Acond c t e ->
+        D.Acond (A.arraysR expr) (translateExp c) (translateAcc t) (translateAcc e)
+    A.Map _ f e -> D.Map (A.arrayR expr) (translateFun f) (translateAcc e)
+    A.ZipWith _ f e1 e2 ->
+        D.ZipWith (A.arrayR expr) (translateFun f) (translateAcc e1) (translateAcc e2)
+    A.Fold f me0 e ->
+        D.Fold (A.arrayR expr) (translateFun f) (translateExp <$> me0) (translateAcc e)
+    A.Alet lhs def body -> D.Alet lhs (translateAcc def) (translateAcc body)
+    A.Avar var -> D.Avar var
+    _ -> internalError ("AD.translateAcc: Cannot perform AD on Acc node <" ++ A.showPreAccOp expr ++ ">")
+
+translateFun :: A.OpenFun env aenv t -> D.OpenFun env lab t
+translateFun (A.Lam lhs fun) = D.Lam lhs (translateFun fun)
+translateFun (A.Body e) = D.Body (translateExp e)
 
 translateExp :: A.OpenExp env aenv t -> D.OpenExp env lab args t
 translateExp expr = case expr of
@@ -27,22 +49,6 @@ translateExp expr = case expr of
     A.Cond c t e -> D.Cond (A.expType t) (translateExp c) (translateExp t) (translateExp e)
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
-
--- TODO: remove
--- untranslateExp :: D.OpenExp env lab args t -> A.OpenExp env aenv t
--- untranslateExp expr = case expr of
---     D.Const ty con -> A.Const ty con
---     D.PrimApp _ f e -> A.PrimApp f (untranslateExp e)
---     D.Var (A.Var rep idx) -> A.Evar (A.Var rep idx)
---     D.Let lhs def body -> A.Let lhs (untranslateExp def) (untranslateExp body)
---     D.Nil -> A.Nil
---     D.Pair _ e1 e2 -> A.Pair (untranslateExp e1) (untranslateExp e2)
---     D.Cond _ e1 e2 e3 -> A.Cond (untranslateExp e1) (untranslateExp e2) (untranslateExp e3)
---     D.Get _ path e
---       | LetBoundExp lhs body <- untranslateGet (D.etypeOf e) path
---       -> A.Let lhs (untranslateExp e) body
---     D.Arg _ _ -> internalError "AD.untranslateExp: Unexpected Arg in untranslate!"
---     D.Label _ -> internalError "AD.untranslateExp: Unexpected Label in untranslate!"
 
 data PartialVal topenv env where
     PTEmpty :: PartialVal topenv topenv
