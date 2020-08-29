@@ -14,7 +14,6 @@ import Data.GADT.Show
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST as A
-import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.Analysis.Match
@@ -127,26 +126,11 @@ showsExp labf seed env d (Get _ ti e) = showParen (d > 10) $
     tiPrefix' TIHere = []
     tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
     tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
-showsExp labf topseed env d (Let toplhs rhs body) = showParen (d > 0) $
-    let (descr, descrs, seed') = namifyLHS topseed toplhs
+showsExp labf seed env d (Let lhs rhs body) = showParen (d > 0) $
+    let (descr, descrs, seed') = namifyLHS seed lhs
         env' = descrs ++ env
     in showString ("let " ++ descr ++ " = ") . showsExp labf seed' env 0 rhs .
             showString " in " . showsExp labf seed' env' 0 body
-  where
-    namifyVar :: Int -> (String, Int)
-    namifyVar seed =
-      let name = if seed < 26 then [['a'..'z'] !! seed] else 't' : show (seed - 25)
-      in (name, seed + 1)
-
-    namifyLHS :: Int -> A.ELeftHandSide v env env' -> (String, [String], Int)
-    namifyLHS seed (A.LeftHandSideSingle _) =
-      let (n, seed') = namifyVar seed
-      in (n, [n], seed')
-    namifyLHS seed (A.LeftHandSideWildcard _) = ("_", [], seed)
-    namifyLHS seed (A.LeftHandSidePair lhs1 lhs2) =
-      let (descr1, descrs1, seed1) = namifyLHS seed lhs1
-          (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
-      in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", descrs2 ++ descrs1,seed2)
 showsExp _ _ _ d (Arg ty idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx) ++ " :: " ++ show ty)
 showsExp _ _ env _ (Var (A.Var _ idx)) =

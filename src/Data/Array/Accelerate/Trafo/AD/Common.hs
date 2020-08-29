@@ -8,8 +8,9 @@ import Data.GADT.Compare
 import Data.GADT.Show
 import Data.Typeable ((:~:)(Refl))
 
+import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Idx
-import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Representation.Array hiding ((!!))
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 
@@ -145,3 +146,14 @@ pickDLabels TIHere labs = labs
 pickDLabels (TILeft path) (TupRpair lab _) = pickDLabels path lab
 pickDLabels (TIRight path) (TupRpair _ lab) = pickDLabels path lab
 pickDLabels _ _ = error "pickDLabels: impossible GADTs"
+
+-- Used for showing expressions
+namifyLHS :: Int -> LeftHandSide s v env env' -> (String, [String], Int)
+namifyLHS seed (LeftHandSideSingle _) =
+    let n = if seed < 26 then [['a'..'z'] !! seed] else 't' : show (seed - 25)
+    in (n, [n], seed + 1)
+namifyLHS seed (LeftHandSideWildcard _) = ("_", [], seed)
+namifyLHS seed (LeftHandSidePair lhs1 lhs2) =
+    let (descr1, descrs1, seed1) = namifyLHS seed lhs1
+        (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
+    in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", descrs2 ++ descrs1,seed2)

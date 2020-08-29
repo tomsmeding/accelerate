@@ -14,11 +14,9 @@ import Data.GADT.Show
 import Data.Array.Accelerate.Representation.Array hiding ((!!))
 import Data.Array.Accelerate.Representation.Type
 import qualified Data.Array.Accelerate.AST as A
-import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.Analysis.Match
-import Data.Array.Accelerate.Shows
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
@@ -57,16 +55,22 @@ data OpenAcc aenv lab args t where
             -> OpenAcc aenv lab args a
             -> OpenAcc aenv lab args a
 
-    Map     :: ArraysR (Array sh t2)
+    Map     :: ArrayR (Array sh t2)
             -> OpenFun () lab (t1 -> t2)
             -> OpenAcc aenv lab args (Array sh t1)
             -> OpenAcc aenv lab args (Array sh t2)
 
-    ZipWith :: ArraysR (Array sh t3)
+    ZipWith :: ArrayR (Array sh t3)
             -> OpenFun () lab (t1 -> t2 -> t3)
             -> OpenAcc aenv lab args (Array sh t1)
             -> OpenAcc aenv lab args (Array sh t2)
             -> OpenAcc aenv lab args (Array sh t3)
+
+    Fold    :: ArrayR (Array sh e)
+            -> OpenFun () lab (e -> e -> e)
+            -> Maybe (Exp lab () e)
+            -> OpenAcc aenv lab args (Array (sh, Int) e)
+            -> OpenAcc aenv lab args (Array sh e)
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
@@ -116,20 +120,26 @@ showsAcc _ _ _ _ Anil =
 showsAcc labf seed env d (Acond _ c t e) =
     showParen (d > 10) $
         showString "acond " .
-            showsExp labf 0 [] 11 c . showString " " .
+            showsExp labf seed [] 11 c . showString " " .
             showsAcc labf seed env 11 t . showString " " .
             showsAcc labf seed env 11 e
 showsAcc labf seed env d (Map _ f e) =
     showParen (d > 10) $
         showString "map " .
-            showsFun labf 11 f . showString " " .
+            showsFun labf seed [] 11 f . showString " " .
             showsAcc labf seed env 11 e
 showsAcc labf seed env d (ZipWith _ f e1 e2) =
     showParen (d > 10) $
-        showString "map " .
-            showsFun labf 11 f . showString " " .
+        showString "zipWith " .
+            showsFun labf seed [] 11 f . showString " " .
             showsAcc labf seed env 11 e1 . showString " " .
             showsAcc labf seed env 11 e2
+showsAcc labf seed env d (Fold _ f me0 e) =
+    showParen (d > 10) $
+        showString (maybe "fold " (const "fold1 ") me0) .
+            showsFun labf seed [] 11 f . showString " " .
+            maybe id (\e0 -> showsExp labf seed [] 11 e0 . showString " ") me0 .
+            showsAcc labf seed env 11 e
 showsAcc labf seed env d (Aget _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsAcc labf seed env 10 e
   where
@@ -140,26 +150,11 @@ showsAcc labf seed env d (Aget _ ti e) = showParen (d > 10) $
     tiPrefix' TIHere = []
     tiPrefix' (TILeft ti') = "afst" : tiPrefix' ti'
     tiPrefix' (TIRight ti') = "asnd" : tiPrefix' ti'
-showsAcc labf topseed env d (Alet toplhs rhs body) = showParen (d > 0) $
-    let (descr, descrs, seed') = namifyLHS topseed toplhs
+showsAcc labf seed env d (Alet lhs rhs body) = showParen (d > 0) $
+    let (descr, descrs, seed') = namifyLHS seed lhs
         env' = descrs ++ env
     in showString ("let " ++ descr ++ " = ") . showsAcc labf seed' env 0 rhs .
             showString " in " . showsAcc labf seed' env' 0 body
-  where
-    namifyVar :: Int -> (String, Int)
-    namifyVar seed =
-      let name = if seed < 26 then [['a'..'z'] !! seed] else 't' : show (seed - 25)
-      in (name, seed + 1)
-
-    namifyLHS :: Int -> A.LeftHandSide s v env env' -> (String, [String], Int)
-    namifyLHS seed (A.LeftHandSideSingle _) =
-      let (n, seed') = namifyVar seed
-      in (n, [n], seed')
-    namifyLHS seed (A.LeftHandSideWildcard _) = ("_", [], seed)
-    namifyLHS seed (A.LeftHandSidePair lhs1 lhs2) =
-      let (descr1, descrs1, seed1) = namifyLHS seed lhs1
-          (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
-      in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", descrs2 ++ descrs1,seed2)
 showsAcc _ _ _ d (Aarg ty idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx) ++ " :: " ++ show ty)
 showsAcc _ _ env _ (Avar (A.Var _ idx)) =
@@ -170,10 +165,14 @@ showsAcc _ _ env _ (Avar (A.Var _ idx)) =
 showsAcc labf _ _ d (Alabel lab) = showParen (d > 0) $
     showString ('L' : labf (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
-showsFun :: (lab -> String) -> Int -> OpenFun env lab t -> ShowS
-showsFun labf d (Body expr) = showsExp labf 0 [] d expr
-showsFun labf d (Lam lhs fun) = showParen (d > 0) $
-    showString "\\" . showString (showLHS lhs) . showString " -> " . showsFun labf 0 fun
+showsFun :: (lab -> String) -> Int -> [String] -> Int -> OpenFun env lab t -> ShowS
+showsFun labf seed env d (Body expr) = showsExp labf seed env d expr
+showsFun labf seed env d (Lam lhs fun) =
+    let (descr, descrs, seed') = namifyLHS seed lhs
+        env' = descrs ++ env
+    in showParen (d > 0) $
+        showString "\\" . showString descr .
+        showString " -> " . showsFun labf seed' env' 0 fun
 
 instance Show lab => Show (OpenAcc aenv lab args t) where
     showsPrec = showsAcc show 0 []
@@ -189,8 +188,9 @@ atypeOf (Aconst ty _) = TupRsingle ty
 atypeOf (Apair ty _ _) = ty
 atypeOf Anil = TupRunit
 atypeOf (Acond ty _ _ _) = ty
-atypeOf (Map ty _ _) = ty
-atypeOf (ZipWith ty _ _ _) = ty
+atypeOf (Map ty _ _) = TupRsingle ty
+atypeOf (ZipWith ty _ _ _) = TupRsingle ty
+atypeOf (Fold ty _ _ _) = TupRsingle ty
 atypeOf (Aget ty _ _) = ty
 atypeOf (Alet _ _ body) = atypeOf body
 atypeOf (Avar (A.Var ty _)) = TupRsingle ty
