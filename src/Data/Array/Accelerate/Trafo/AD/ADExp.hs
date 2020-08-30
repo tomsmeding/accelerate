@@ -2,7 +2,6 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -10,11 +9,10 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-module Data.Array.Accelerate.Trafo.AD.ADDep (
-  reverseAD, ReverseADRes(..)
+module Data.Array.Accelerate.Trafo.AD.ADExp (
+  reverseAD, ReverseADResE(..)
 ) where
 
-import Control.Monad.State.Strict
 import Data.List (intercalate, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
@@ -44,25 +42,18 @@ import Data.Array.Accelerate.Trafo.AD.Sink
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
-newtype IdGen a = IdGen (State Int a)
-  deriving (Functor, Applicative, Monad, MonadState Int)
-
-evalIdGen :: IdGen a -> a
-evalIdGen (IdGen s) = evalState s 1
-
--- TODO: make genId and genScalarId instances of the obvious generic function
 genId :: TypeR t -> IdGen (EDLabelT Int t)
-genId ty = state (\s -> (DLabel ty s, succ s))
+genId = genId'
 
-genScalarId :: ScalarType t -> IdGen (EDLabel Int t)
-genScalarId ty = state (\s -> (DLabel ty s, succ s))
+genSingleId :: ScalarType t -> IdGen (EDLabel Int t)
+genSingleId = genId'
 
-genScalarIds :: TypeR t -> IdGen (GenLHS ScalarType env t, TupR (EDLabel Int) t)
-genScalarIds TupRunit = return (GenLHS (A.LeftHandSideWildcard TupRunit), TupRunit)
-genScalarIds (TupRsingle ty) = (GenLHS (A.LeftHandSideSingle ty),) . TupRsingle <$> genScalarId ty
-genScalarIds (TupRpair t1 t2) = do
-    (GenLHS lhs1, ids1) <- genScalarIds t1
-    (GenLHS lhs2, ids2) <- genScalarIds t2
+genSingleIds :: TypeR t -> IdGen (GenLHS ScalarType env t, TupR (EDLabel Int) t)
+genSingleIds TupRunit = return (GenLHS (A.LeftHandSideWildcard TupRunit), TupRunit)
+genSingleIds (TupRsingle ty) = (GenLHS (A.LeftHandSideSingle ty),) . TupRsingle <$> genSingleId ty
+genSingleIds (TupRpair t1 t2) = do
+    (GenLHS lhs1, ids1) <- genSingleIds t1
+    (GenLHS lhs2, ids2) <- genSingleIds t2
     return (GenLHS (A.LeftHandSidePair lhs1 lhs2), TupRpair ids1 ids2)
 
 
@@ -128,7 +119,7 @@ generaliseArgs (Var v) = Var v
 generaliseArgs (Arg _ _) = error "generaliseArgs: Arg found"
 generaliseArgs (Label labs) = Label labs
 
-data ReverseADRes t = forall env. ReverseADRes (A.ELeftHandSide t () env) (OpenExp env (PD Int) () t)
+data ReverseADResE t = forall env. ReverseADResE (A.ELeftHandSide t () env) (OpenExp env (PD Int) () t)
 
 -- TODO: see the argument as one (1) tuple-typed variable of which the adjoint is requested. This should simplify this code a lot.
 -- Action plan:
@@ -144,7 +135,7 @@ data ReverseADRes t = forall env. ReverseADRes (A.ELeftHandSide t () env) (OpenE
 --   top, but really just shifts the environment. It should replace the Arg
 --   values with references to this extended part of the environment. The real
 --   LHS needs to be added by surrounding code.
-reverseAD :: A.ELeftHandSide t () env -> OpenExp env unused () Float -> ReverseADRes t
+reverseAD :: A.ELeftHandSide t () env -> OpenExp env unused () Float -> ReverseADResE t
 reverseAD paramlhs expr
   | ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
   , DeclareVars paramlhs'2 _ varsgen <- declareVars (A.lhsToTupR paramlhs)
@@ -167,7 +158,7 @@ reverseAD paramlhs expr
                   return $ produceGradient argLabelMap context argsRHS
       in
           trace ("AD result: " ++ show transformedExp) $
-          ReverseADRes paramlhs' (realiseArgs transformedExp paramlhs')
+          ReverseADResE paramlhs' (realiseArgs transformedExp paramlhs')
   where
     varsToArgs :: A.ExpVars env t -> OpenExp env' lab env t
     varsToArgs TupRunit = Nil
@@ -260,7 +251,7 @@ explode' env = \case
         return (lab, mp, argmp)
     Let lhs rhs body -> do
         (lab1, mp1, argmp1) <- explode' env rhs
-        (_, labs) <- genScalarIds (etypeOf rhs)
+        (_, labs) <- genSingleIds (etypeOf rhs)
         let (env', mpLHS) = lpushLHS_Get lhs labs env (Label lab1)
         (lab2, mp2, argmp2) <- explode' env' body
         let mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mpLHS, mp2]
@@ -362,7 +353,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
   | otherwise =
       case nodemap `dmapFind` lbl of
           Const ty value -> do
-              lblS <- genScalarId ty
+              lblS <- genSingleId ty
               Let (A.LeftHandSideSingle ty) (Const ty value)
                   <$> cont (Context (LPush labelenv lblS)
                                     (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
@@ -389,7 +380,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                   let arglabs = bindmap' `dmapFind` fmapLabel P arglab
                   in case elabValFinds labelenv' arglabs of
                       Just vars -> do
-                          (GenLHS lhs, labs) <- genScalarIds restype
+                          (GenLHS lhs, labs) <- genSingleIds restype
                           Let lhs (PrimApp restype oper (evars vars))
                               <$> cont (Context (lpushLabTup labelenv' lhs labs)
                                                 (DMap.insert (fmapLabel P lbl) labs bindmap'))
@@ -415,7 +406,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                           ,elabValFinds labelenv' thenlabs
                           ,elabValFinds labelenv' elselabs) of
                       (Just condvars, Just thenvars, Just elsevars) -> do
-                          (GenLHS lhs, labs) <- genScalarIds restype
+                          (GenLHS lhs, labs) <- genSingleIds restype
                           Let lhs (Cond restype (evars condvars) (evars thenvars) (evars elsevars))
                               <$> cont (Context (lpushLabTup labelenv' lhs labs)
                                                 (DMap.insert (fmapLabel P lbl) labs bindmap'))
@@ -432,7 +423,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                                    (DMap.insert (fmapLabel P lbl) pickedlabs bindmap'))
 
           Arg ty idx -> do
-              labS <- genScalarId ty
+              labS <- genSingleId ty
               Let (A.LeftHandSideSingle ty) (Arg ty idx)
                   <$> cont (Context (LPush labelenv labS)
                                     (DMap.insert (fmapLabel P lbl) (TupRsingle labS) bindmap))
@@ -517,7 +508,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
       -- need to calculate and store their adjoint.
       Arg restypeS _ -> do
           let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
-          lblS <- genScalarId restypeS
+          lblS <- genSingleId restypeS
           Let (A.LeftHandSideSingle restypeS) adjoint
               <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
                                                     (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
@@ -530,7 +521,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 [Contribution arglab TLNil $ \(TupRsingle adjvar) _ ->
                                     smartPair (Var adjvar) (Var adjvar)]
                                 contribmap
-          lblS <- genScalarId restypeS
+          lblS <- genSingleId restypeS
           Let (A.LeftHandSideSingle restypeS) adjoint
               <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
                                                     (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
@@ -545,7 +536,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                          (PrimApp restype (A.PrimMul restypeN) (smartPair (Var adjvar) (Var argvar2)))
                                          (PrimApp restype (A.PrimMul restypeN) (smartPair (Var adjvar) (Var argvar1)))]
                                 contribmap
-          lblS <- genScalarId restypeS
+          lblS <- genSingleId restypeS
           Let (A.LeftHandSideSingle restypeS) adjoint
               <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
                                                     (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
@@ -560,7 +551,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     PrimApp restype (A.PrimFDiv restypeF)
                                         (smartPair (Var adjvar) (Var argvar))]
                                 contribmap
-          lblS <- genScalarId restypeS
+          lblS <- genSingleId restypeS
           Let (A.LeftHandSideSingle restypeS) adjoint
               <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
                                                     (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
@@ -570,7 +561,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
       PrimApp _ (A.PrimToFloating _ restypeF) _ -> do
           let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
-          lblS <- genScalarId restypeS
+          lblS <- genSingleId restypeS
           Let (A.LeftHandSideSingle restypeS) adjoint
               <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
                                                     (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
@@ -592,7 +583,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 ,Contribution elselab (condlab :@ TLNil) $ \adjvars (TupRsingle condvar :@ TLNil) ->
                                     Cond restype (Var condvar) (zeroForType restype) (evars adjvars)]
                                 contribmap
-          (GenLHS lhs, labs) <- genScalarIds restype
+          (GenLHS lhs, labs) <- genSingleIds restype
           Let lhs adjoint
               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -604,7 +595,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 [Contribution arglab TLNil $ \adjvars _ ->
                                     oneHotTup (labelType arglab) path (evars adjvars)]
                                 contribmap
-          (GenLHS lhs, labs) <- genScalarIds restype
+          (GenLHS lhs, labs) <- genSingleIds restype
           Let lhs adjoint
               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -618,7 +609,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 ,Contribution arglab2 TLNil $ \(TupRpair _ adjvars2) _ ->
                                     evars adjvars2]
                                 contribmap
-          (GenLHS lhs, labs) <- genScalarIds restype
+          (GenLHS lhs, labs) <- genSingleIds restype
           Let lhs adjoint
               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -637,7 +628,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 [Contribution arglab TLNil $ \adjvars _ ->
                                     evars adjvars]
                                 contribmap
-          (GenLHS lhs, labs) <- genScalarIds (labelType arglab)
+          (GenLHS lhs, labs) <- genSingleIds (labelType arglab)
           Let lhs adjoint
               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))

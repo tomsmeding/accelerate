@@ -84,8 +84,8 @@ data OpenAcc aenv lab args t where
             -> OpenAcc env' lab args a
             -> OpenAcc env lab args a
 
-    Avar    :: A.ArrayVar env t
-            -> OpenAcc env lab args t
+    Avar    :: A.ArrayVar env (Array sh e)
+            -> OpenAcc env lab args (Array sh e)
 
     Aarg    :: ArrayR t
             -> Idx args t
@@ -136,7 +136,7 @@ showsAcc labf seed env d (ZipWith _ f e1 e2) =
             showsAcc labf seed env 11 e2
 showsAcc labf seed env d (Fold _ f me0 e) =
     showParen (d > 10) $
-        showString (maybe "fold " (const "fold1 ") me0) .
+        showString (maybe "fold1 " (const "fold ") me0) .
             showsFun labf seed [] 11 f . showString " " .
             maybe id (\e0 -> showsExp labf seed [] 11 e0 . showString " ") me0 .
             showsAcc labf seed env 11 e
@@ -221,7 +221,7 @@ avars = snd . avars'
   where
     avars' :: A.ArrayVars aenv t -> (ArraysR t, OpenAcc aenv lab args t)
     avars' TupRunit = (TupRunit, Anil)
-    avars' (TupRsingle var@(A.Var ty _)) = (TupRsingle ty, Avar var)
+    avars' (TupRsingle var@(A.Var ty@(ArrayR _ _) _)) = (TupRsingle ty, Avar var)
     avars' (TupRpair vars1 vars2) =
         let (t1, e1) = avars' vars1
             (t2, e2) = avars' vars2

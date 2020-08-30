@@ -1,8 +1,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Array.Accelerate.Trafo.AD.Common where
 
+import Control.Monad.State.Strict
 import Data.Char (isDigit)
 import Data.GADT.Compare
 import Data.GADT.Show
@@ -157,3 +159,13 @@ namifyLHS seed (LeftHandSidePair lhs1 lhs2) =
     let (descr1, descrs1, seed1) = namifyLHS seed lhs1
         (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
     in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", descrs2 ++ descrs1,seed2)
+
+
+newtype IdGen a = IdGen (State Int a)
+  deriving (Functor, Applicative, Monad, MonadState Int)
+
+evalIdGen :: IdGen a -> a
+evalIdGen (IdGen s) = evalState s 1
+
+genId' :: s t -> IdGen (DLabel s Int t)
+genId' ty = state (\s -> (DLabel ty s, succ s))

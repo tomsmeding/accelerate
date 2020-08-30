@@ -18,11 +18,10 @@ import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Type
 -- import Data.Array.Accelerate.Array.Representation (showArrayR)
 import Data.Array.Accelerate.Shows
-import qualified Data.Array.Accelerate.Trafo.AD.ADDep as AD
+import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
+import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
-import qualified Data.Array.Accelerate.Trafo.AD.Common as ADAcc
-import qualified Data.Array.Accelerate.Trafo.AD.Acc as ADAcc
 
 import Debug.Trace
 
@@ -50,10 +49,10 @@ convertExp (Index var dim) = Index (convertVar var) (convertExp dim)
 convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   | SingleScalarType (NumSingleType (FloatingNumType TypeFloat)) <- sty
   , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
-      case AD.checkClosedInLHS lhs' (AD.translateExp body) of
+      case AD.eCheckClosedInLHS lhs' (AD.translateExp body) of
           Just transBody
-            | AD.ReverseADRes lhs'' body' <- AD.reverseAD lhs' transBody
-            , AD.UntranslateResult lhs''' body'' <- AD.untranslateLHSboundExp lhs'' body' ->
+            | AD.ReverseADResE lhs'' body' <- AD.reverseAD lhs' transBody
+            , AD.UntranslateResultE lhs''' body'' <- AD.untranslateLHSboundExp lhs'' body' ->
                 Let lhs''' arg body''
           Nothing ->
               error "Body of gradientE not a closed expression"
@@ -90,15 +89,20 @@ convertAcc (OpenAcc (Generate rep sz f)) = OpenAcc (Generate rep (convertExp sz)
 convertAcc (OpenAcc (GradientA _ sty (Alam lhs (Abody body)) arg))
   | ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))) <- sty
   , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
-      let trans = AD.translateAcc body `asTypeOf` ADAcc.Alabel (ADAcc.DLabel (TupRsingle (ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))))) ())
-      in internalError (show (ADAcc.Alet lhs (AD.translateAcc arg) trans))
-      -- case AD.checkClosedInLHS lhs' (AD.translateExp body) of
+      -- case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
       --     Just transBody
-      --       | AD.ReverseADRes lhs'' body' <- AD.reverseAD lhs' transBody
-      --       , AD.UntranslateResult lhs''' body'' <- AD.untranslateLHSboundExp lhs'' body' ->
-      --           Let lhs''' arg body''
-      --     Nothing ->
-      --         error "Body of gradientA not a closed expression"
+      --       | Just shiftArg <- AD.aCheckClosed (AD.translateAcc arg) ->
+      --           let trans = transBody `asTypeOf` ADAcc.Alabel (ADAcc.DLabel (TupRsingle (ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))))) ())
+      --           in trace (show (ADAcc.Alet lhs' shiftArg trans)) $
+      --              AD.test lhs' trans `seq` error "kaas"
+      --     _ -> undefined
+      case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
+          Just transBody
+            | AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' transBody
+            , AD.UntranslateResultA lhs''' body'' <- AD.untranslateLHSboundAcc lhs'' body' ->
+                OpenAcc (Alet lhs''' arg body'')
+          Nothing ->
+              error "Body of gradientA not a closed expression"
   | otherwise =
       error $ "gradientA expression must produce (Array Z Float), other types currently unsupported: " ++ show sty
 convertAcc (OpenAcc acc) =
