@@ -837,10 +837,3 @@ dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
 dmapFind mp elt = case DMap.lookup elt mp of
                     Just res -> res
                     Nothing -> error "dmapFind: not found"
-
-lpushLabTup :: ELabVal lab env -> A.LeftHandSide s t env env' -> TupR (EDLabel lab) t -> ELabVal lab env'
-lpushLabTup labelenv (A.LeftHandSideWildcard _) TupRunit = labelenv
-lpushLabTup labelenv (A.LeftHandSideSingle _) (TupRsingle lab) = LPush labelenv lab
-lpushLabTup labelenv (A.LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) =
-    lpushLabTup (lpushLabTup labelenv lhs1 labs1) lhs2 labs2
-lpushLabTup _ _ _ = error "lpushLabTup: impossible GADTs"

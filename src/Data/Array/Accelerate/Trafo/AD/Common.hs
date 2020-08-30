@@ -169,3 +169,10 @@ evalIdGen (IdGen s) = evalState s 1
 
 genId' :: s t -> IdGen (DLabel s Int t)
 genId' ty = state (\s -> (DLabel ty s, succ s))
+
+lpushLabTup :: LabVal s lab env -> LeftHandSide s t env env' -> TupR (DLabel s lab) t -> LabVal s lab env'
+lpushLabTup labelenv (LeftHandSideWildcard _) TupRunit = labelenv
+lpushLabTup labelenv (LeftHandSideSingle _) (TupRsingle lab) = LPush labelenv lab
+lpushLabTup labelenv (LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) =
+    lpushLabTup (lpushLabTup labelenv lhs1 labs1) lhs2 labs2
+lpushLabTup _ _ _ = error "lpushLabTup: impossible GADTs"
