@@ -7,6 +7,8 @@ import Data.GADT.Compare
 import Data.Type.Equality
 
 import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Type
 
 
@@ -46,7 +48,21 @@ instance GEq ScalarType where
   geq (VectorScalarType t1) (VectorScalarType t2) = geq t1 t2
   geq _ _ = Nothing
 
-instance GEq (TupR ScalarType) where
+instance GEq ShapeR where
+  geq ShapeRz ShapeRz = Just Refl
+  geq (ShapeRsnoc sh1) (ShapeRsnoc sh2)
+    | Just Refl <- geq sh1 sh2
+    = Just Refl
+  geq _ _ = Nothing
+
+instance GEq ArrayR where
+  geq (ArrayR sh1 t1) (ArrayR sh2 t2)
+    | Just Refl <- geq sh1 sh2
+    , Just Refl <- geq t1 t2
+    = Just Refl
+  geq _ _ = Nothing
+
+instance GEq s => GEq (TupR s) where
   geq TupRunit TupRunit = Just Refl
   geq (TupRsingle t1) (TupRsingle t2) = geq t1 t2
   geq (TupRpair t1 u1) (TupRpair t2 u2)
@@ -114,7 +130,27 @@ instance GCompare ScalarType where
   gcompare (VectorScalarType _) (SingleScalarType _) = GGT
   gcompare (VectorScalarType t1) (VectorScalarType t2) = gcompare t1 t2
 
-instance GCompare (TupR ScalarType) where
+instance GCompare ShapeR where
+  gcompare ShapeRz ShapeRz = GEQ
+  gcompare ShapeRz (ShapeRsnoc _) = GLT
+  gcompare (ShapeRsnoc _) ShapeRz = GGT
+  gcompare (ShapeRsnoc x) (ShapeRsnoc y) =
+    case gcompare x y of
+      GLT -> GLT
+      GGT -> GGT
+      GEQ -> GEQ
+
+instance GCompare ArrayR where
+  gcompare (ArrayR sh1 t1) (ArrayR sh2 t2) =
+    case gcompare sh1 sh2 of
+      GLT -> GLT
+      GGT -> GGT
+      GEQ -> case gcompare t1 t2 of
+               GLT -> GLT
+               GGT -> GGT
+               GEQ -> GEQ
+
+instance GCompare s => GCompare (TupR s) where
   gcompare TupRunit TupRunit = GEQ
   gcompare TupRunit _ = GLT
   gcompare _ TupRunit = GGT
