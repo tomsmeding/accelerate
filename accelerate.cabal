@@ -417,6 +417,7 @@ library
         Data.Array.Accelerate.Trafo.Environment
         Data.Array.Accelerate.Trafo.AD
         Data.Array.Accelerate.Trafo.AD.Acc
+        Data.Array.Accelerate.Trafo.AD.Additive
         Data.Array.Accelerate.Trafo.AD.Algorithms
         Data.Array.Accelerate.Trafo.AD.ADAcc
         Data.Array.Accelerate.Trafo.AD.ADExp
