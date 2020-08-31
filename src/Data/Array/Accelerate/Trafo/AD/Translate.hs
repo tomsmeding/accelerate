@@ -141,6 +141,7 @@ untranslateLHSboundAcc toplhs topexpr
         D.Map (ArrayR _ ty) f e -> A.Map ty (untranslateClosedFun f) (go e pv)
         D.ZipWith (ArrayR _ ty) f e1 e2 -> A.ZipWith ty (untranslateClosedFun f) (go e1 pv) (go e2 pv)
         D.Fold _ f me0 e -> A.Fold (untranslateClosedFun f) (untranslateClosedExp <$> me0) (go e pv)
+        D.Generate ty e f -> A.Generate ty (untranslateClosedExp e) (untranslateClosedFun f)
         D.Aget _ path e
           | LetBoundExpA lhs body <- auntranslateGet (D.atypeOf e) path
           -> A.Alet lhs (go e pv) body

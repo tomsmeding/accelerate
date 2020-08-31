@@ -42,6 +42,7 @@ sinkAcc k (Acond ty c t e) = Acond ty c (sinkAcc k t) (sinkAcc k e)
 sinkAcc k (Map ty f e) = Map ty f (sinkAcc k e)
 sinkAcc k (ZipWith ty f e1 e2) = ZipWith ty f (sinkAcc k e1) (sinkAcc k e2)
 sinkAcc k (Fold ty f me0 e) = Fold ty f me0 (sinkAcc k e)
+sinkAcc _ (Generate ty e f) = Generate ty e f
 sinkAcc k (Aget ty ti e) = Aget ty ti (sinkAcc k e)
 sinkAcc k (Alet lhs rhs e)
   | GenLHS lhs' <- generaliseLHS lhs =
@@ -126,6 +127,7 @@ aCheckClosedInTagval tv expr = case expr of
     Map ty f e -> Map ty <$> return f <*> aCheckClosedInTagval tv e
     ZipWith ty f e1 e2 -> ZipWith ty <$> return f <*> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
     Fold ty f me0 e -> Fold ty <$> return f <*> return me0 <*> aCheckClosedInTagval tv e
+    Generate ty e f -> return (Generate ty e f)
     Aget ty ti e -> Aget ty ti <$> aCheckClosedInTagval tv e
     Alet lhs rhs e
       | GenLHS lhs' <- generaliseLHS lhs ->

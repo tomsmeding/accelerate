@@ -72,6 +72,11 @@ data OpenAcc aenv lab args t where
             -> OpenAcc aenv lab args (Array (sh, Int) e)
             -> OpenAcc aenv lab args (Array sh e)
 
+    Generate :: ArrayR (Array sh e)
+             -> Exp lab () sh
+             -> OpenFun () lab (sh -> e)
+             -> OpenAcc aenv lab args (Array sh e)
+
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
     Aget    :: ArraysR s
@@ -140,6 +145,11 @@ showsAcc labf seed env d (Fold _ f me0 e) =
             showsFun labf seed [] 11 f . showString " " .
             maybe id (\e0 -> showsExp labf seed [] 11 e0 . showString " ") me0 .
             showsAcc labf seed env 11 e
+showsAcc labf seed _ d (Generate _ sh f) =
+    showParen (d > 10) $
+        showString "generate " .
+            showsExp labf seed [] 11 sh . showString " " .
+            showsFun labf seed [] 11 f
 showsAcc labf seed env d (Aget _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsAcc labf seed env 10 e
   where
@@ -190,6 +200,7 @@ atypeOf Anil = TupRunit
 atypeOf (Acond ty _ _ _) = ty
 atypeOf (Map ty _ _) = TupRsingle ty
 atypeOf (ZipWith ty _ _ _) = TupRsingle ty
+atypeOf (Generate ty _ _) = TupRsingle ty
 atypeOf (Fold ty _ _ _) = TupRsingle ty
 atypeOf (Aget ty _ _) = ty
 atypeOf (Alet _ _ body) = atypeOf body
