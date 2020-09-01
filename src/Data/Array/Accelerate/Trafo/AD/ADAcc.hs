@@ -54,7 +54,7 @@ genId = genId'
 genSingleId :: ArrayR t -> IdGen (ADLabel Int t)
 genSingleId = genId'
 
-genSingleIds :: ArraysR t -> IdGen (GenLHS ArrayR env t, TupR (ADLabel Int) t)
+genSingleIds :: ArraysR t -> IdGen (GenLHS ArrayR aenv t, TupR (ADLabel Int) t)
 genSingleIds TupRunit = return (GenLHS (A.LeftHandSideWildcard TupRunit), TupRunit)
 genSingleIds (TupRsingle ty) = (GenLHS (A.LeftHandSideSingle ty),) . TupRsingle <$> genSingleId ty
 genSingleIds (TupRpair t1 t2) = do
@@ -84,36 +84,8 @@ showArgmap argmap =
                              | argidx :=> dlab <- DMap.assocs argmap]
     in "[" ++ s ++ "]"
 
-data ExpandLHS s t env env1
-    = forall env2. ExpandLHS (A.LeftHandSide s t env env2) (env1 A.:> env2)
-
--- Eliminates all Wildcard bindings.
-expandLHS :: A.LeftHandSide s t env0 env1 -> ExpandLHS s t env0 env1
-expandLHS lhs@(A.LeftHandSideSingle _) = ExpandLHS lhs A.weakenId
-expandLHS (A.LeftHandSidePair lhs1 lhs2)
-  | ExpandLHS lhs1' weaken1 <- expandLHS lhs1
-  , GenLHS lhs2gen <- generaliseLHS lhs2
-  , ExpandLHS lhs2' weaken2 <- expandLHS lhs2gen
-  = ExpandLHS (A.LeftHandSidePair lhs1' lhs2')
-              (weaken2 A..> A.sinkWithLHS lhs2 lhs2gen weaken1)
-expandLHS lhs@(A.LeftHandSideWildcard TupRunit) = ExpandLHS lhs A.weakenId
-expandLHS (A.LeftHandSideWildcard (TupRsingle sty)) =
-    ExpandLHS (A.LeftHandSideSingle sty) (A.weakenSucc' A.weakenId)
-expandLHS (A.LeftHandSideWildcard (TupRpair t1 t2))
-  | ExpandLHS lhs1' weaken1 <- expandLHS (A.LeftHandSideWildcard t1)
-  , ExpandLHS lhs2' weaken2 <- expandLHS (A.LeftHandSideWildcard t2)
-  = ExpandLHS (A.LeftHandSidePair lhs1' lhs2') (weaken2 A..> weaken1)
-
--- Assumes the LeftHandSide's are equal in structure
-sameLHSsameEnv :: A.LeftHandSide s t env env1 -> A.LeftHandSide s t env env2 -> env1 :~: env2
-sameLHSsameEnv (A.LeftHandSideWildcard _) (A.LeftHandSideWildcard _) = Refl
-sameLHSsameEnv (A.LeftHandSideSingle _) (A.LeftHandSideSingle _) = Refl
-sameLHSsameEnv (A.LeftHandSidePair a b) (A.LeftHandSidePair c d)
-  | Refl <- sameLHSsameEnv a c, Refl <- sameLHSsameEnv b d = Refl
-sameLHSsameEnv _ _ = error "sameLHSsameEnv: Different LeftHandSide's"
-
 -- Assumes the expression does not contain Arg
-generaliseArgs :: OpenAcc env lab args t -> OpenAcc env lab args' t
+generaliseArgs :: OpenAcc aenv lab args t -> OpenAcc aenv lab args' t
 generaliseArgs (Aconst ty x) = Aconst ty x
 generaliseArgs (Apair ty e1 e2) = Apair ty (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs Anil = Anil
@@ -121,6 +93,7 @@ generaliseArgs (Acond ty e1 e2 e3) = Acond ty e1 (generaliseArgs e2) (generalise
 generaliseArgs (Map ty f e) = Map ty f (generaliseArgs e)
 generaliseArgs (ZipWith ty f e1 e2) = ZipWith ty f (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs (Fold ty f me0 a) = Fold ty f me0 (generaliseArgs a)
+generaliseArgs (Generate ty she f) = Generate ty she f
 generaliseArgs (Aget ty path ex) = Aget ty path (generaliseArgs ex)
 generaliseArgs (Alet lhs rhs ex) = Alet lhs (generaliseArgs rhs) (generaliseArgs ex)
 generaliseArgs (Avar v) = Avar v
@@ -128,24 +101,44 @@ generaliseArgs (Aarg _ _) = error "generaliseArgs: Arg found"
 generaliseArgs (Alabel labs) = Alabel labs
 
 -- Assumes the expression does not contain Label
-generaliseLab :: OpenExp env lab args t -> OpenExp env lab' args t
+generaliseLab :: OpenExp env aenv lab args t -> OpenExp env aenv lab' args t
 generaliseLab (Const ty x) = Const ty x
 generaliseLab (PrimApp ty op ex) = PrimApp ty op (generaliseLab ex)
 generaliseLab (Pair ty e1 e2) = Pair ty (generaliseLab e1) (generaliseLab e2)
 generaliseLab Nil = Nil
 generaliseLab (Cond ty e1 e2 e3) = Cond ty (generaliseLab e1) (generaliseLab e2) (generaliseLab e3)
+generaliseLab (Shape avar) = Shape avar
 generaliseLab (Get ty path ex) = Get ty path (generaliseLab ex)
 generaliseLab (Let lhs rhs ex) = Let lhs (generaliseLab rhs) (generaliseLab ex)
 generaliseLab (Var v) = Var v
 generaliseLab (Arg ty idx) = Arg ty idx
 generaliseLab (Label _) = error "generaliseLab: Label found"
 
+-- Assumes the expression does not contain references to the array environment; TODO: this is a false assumption in general, but makes the input language easier for now
+doesNotContainArrayVars :: OpenExp env aenv lab args t -> OpenExp env aenv' lab args t
+doesNotContainArrayVars (Const ty x) = Const ty x
+doesNotContainArrayVars (PrimApp ty op ex) = PrimApp ty op (doesNotContainArrayVars ex)
+doesNotContainArrayVars (Pair ty e1 e2) = Pair ty (doesNotContainArrayVars e1) (doesNotContainArrayVars e2)
+doesNotContainArrayVars Nil = Nil
+doesNotContainArrayVars (Cond ty e1 e2 e3) = Cond ty (doesNotContainArrayVars e1) (doesNotContainArrayVars e2) (doesNotContainArrayVars e3)
+doesNotContainArrayVars (Shape _) = error "doesNotContainArrayVars: Shape found"
+doesNotContainArrayVars (Get ty path ex) = Get ty path (doesNotContainArrayVars ex)
+doesNotContainArrayVars (Let lhs rhs ex) = Let lhs (doesNotContainArrayVars rhs) (doesNotContainArrayVars ex)
+doesNotContainArrayVars (Var v) = Var v
+doesNotContainArrayVars (Arg ty idx) = Arg ty idx
+doesNotContainArrayVars (Label lab) = Label lab
+
+-- Assumes the expression does not contain references to the array environment; TODO: this is a false assumption in general, but makes the input language easier for now
+doesNotContainArrayVarsF :: OpenFun env aenv lab t -> OpenFun env aenv' lab t
+doesNotContainArrayVarsF (Lam lhs fun) = Lam lhs (doesNotContainArrayVarsF fun)
+doesNotContainArrayVarsF (Body e) = Body (doesNotContainArrayVars e)
+
 -- Assumes the expression does not contain Label
-generaliseLabFun :: OpenFun env lab t -> OpenFun env lab' t
+generaliseLabFun :: OpenFun env aenv lab t -> OpenFun env aenv lab' t
 generaliseLabFun (Lam lhs fun) = Lam lhs (generaliseLabFun fun)
 generaliseLabFun (Body ex) = Body (generaliseLab ex)
 
-data ReverseADResA t = forall env. ReverseADResA (A.ALeftHandSide t () env) (OpenAcc env (PD Int) () t)
+data ReverseADResA t = forall aenv. ReverseADResA (A.ALeftHandSide t () aenv) (OpenAcc aenv (PD Int) () t)
 
 -- TODO: see the argument as one (1) tuple-typed variable of which the adjoint is requested. This should simplify this code a lot.
 -- Action plan:
@@ -161,7 +154,7 @@ data ReverseADResA t = forall env. ReverseADResA (A.ALeftHandSide t () env) (Ope
 --   top, but really just shifts the environment. It should replace the Arg
 --   values with references to this extended part of the environment. The real
 --   LHS needs to be added by surrounding code.
-reverseADA :: A.ALeftHandSide t () env -> OpenAcc env unused () (Array () Float) -> ReverseADResA t
+reverseADA :: A.ALeftHandSide t () aenv -> OpenAcc aenv unused () (Array () Float) -> ReverseADResA t
 reverseADA paramlhs expr
   | ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
   , DeclareVars paramlhs'2 _ varsgen <- declareVars (A.lhsToTupR paramlhs)
@@ -170,8 +163,8 @@ reverseADA paramlhs expr
           closedExpr = Alet paramlhs' argsRHS (generaliseArgs (sinkAcc paramWeaken expr))
           transformedExp = evalIdGen $ do
               exploded@(_, _, argLabelMap) <- explode LEmpty closedExpr
-              trace ("exploded: " ++ showExploded exploded) undefined
-              {-primaldual exploded $ \context ->
+              traceM ("exploded: " ++ showExploded exploded)
+              primaldual exploded $ \context ->
                   -- 'argsRHS' is an expression of type 't', and is a simple tuple expression
                   -- containing only Arg (and Pair/Nil) nodes. Since 't' is also exactly the
                   -- type of the gradient that we must produce here, we can transform
@@ -181,12 +174,13 @@ reverseADA paramlhs expr
                   -- lookup produces an Idx, which, put in a Var, should replace the Arg in
                   -- 'argsRHS'.
                   trace ("\ncontext in core: " ++ showContext context) $
-                  return $ produceGradient argLabelMap context argsRHS-}
+                  -- return $ produceGradient argLabelMap context argsRHS  -- TODO
+                  return Asnowman
       in
           trace ("AD result: " ++ show transformedExp) $
           ReverseADResA paramlhs' (realiseArgs transformedExp paramlhs')
   where
-    varsToArgs :: A.ArrayVars env t -> OpenAcc env' lab env t
+    varsToArgs :: A.ArrayVars aenv t -> OpenAcc aenv' lab aenv t
     varsToArgs TupRunit = Anil
     varsToArgs (TupRsingle (A.Var ty idx)) = Aarg ty idx
     varsToArgs (TupRpair vars1 vars2) =
@@ -195,9 +189,9 @@ reverseADA paramlhs expr
       in Apair (TupRpair (atypeOf ex1) (atypeOf ex2)) ex1 ex2
 
     produceGradient :: DMap (Idx args) (ADLabelT Int)
-                    -> Context Int env
+                    -> Context Int aenv
                     -> OpenAcc () unused args t
-                    -> OpenAcc env (PD Int) args' t
+                    -> OpenAcc aenv (PD Int) args' t
     produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case argstup of
         Anil -> Anil
         Apair ty e1 e2 -> Apair ty (produceGradient argLabelMap context e1)
@@ -217,15 +211,16 @@ reverseADA paramlhs expr
 realiseArgs :: OpenAcc () lab args t -> A.ALeftHandSide t () args -> OpenAcc args lab () t
 realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
   where
-    go :: args A.:> env' -> env A.:> env' -> OpenAcc env lab args t -> OpenAcc env' lab () t
+    go :: args A.:> aenv' -> aenv A.:> aenv' -> OpenAcc aenv lab args t -> OpenAcc aenv' lab () t
     go argWeaken varWeaken expr = case expr of
         Aconst ty x -> Aconst ty x
         Apair ty e1 e2 -> Apair ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
         Anil -> Anil
-        Acond ty e1 e2 e3 -> Acond ty e1 (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
-        Map ty f e -> Map ty f (go argWeaken varWeaken e)
-        ZipWith ty f e1 e2 -> ZipWith ty f (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
-        Fold ty f me0 e -> Fold ty f me0 (go argWeaken varWeaken e)
+        Acond ty e1 e2 e3 -> Acond ty (sinkExpAenv varWeaken e1) (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
+        Map ty f e -> Map ty (sinkFunAenv varWeaken f) (go argWeaken varWeaken e)
+        ZipWith ty f e1 e2 -> ZipWith ty (sinkFunAenv varWeaken f) (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
+        Fold ty f me0 e -> Fold ty (sinkFunAenv varWeaken f) (sinkExpAenv varWeaken <$> me0) (go argWeaken varWeaken e)
+        Generate ty she f -> Generate ty (sinkExpAenv varWeaken she) (sinkFunAenv varWeaken f)
         Aget ty tidx ex -> Aget ty tidx (go argWeaken varWeaken ex)
         Alet lhs rhs ex
           | GenLHS lhs' <- generaliseLHS lhs ->
@@ -238,19 +233,19 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- Map will NOT contain:
 -- - Let or Var
 -- - Label: the original expression should not have included Label
-explode :: ALabVal Int env -> OpenAcc env unused args t -> IdGen (Exploded Int args t)
+explode :: ALabVal Int aenv -> OpenAcc aenv unused args t -> IdGen (Exploded Int args t)
 explode labelenv e =
     trace ("explode: exploding " ++ showsAcc (const "L?") 0 [] 9 e "") $
     explode' labelenv e
 
-explode' :: ALabVal Int env -> OpenAcc env unused args t -> IdGen (Exploded Int args t)
-explode' env = \case
+explode' :: ALabVal Int aenv -> OpenAcc aenv unused args t -> IdGen (Exploded Int args t)
+explode' labelenv = \case
     Aconst ty x -> do
         lab <- genId (TupRsingle ty)
         return (lab, DMap.singleton lab (Aconst ty x), mempty)
     Apair ty e1 e2 -> do
-        (lab1, mp1, argmp1) <- explode' env e1
-        (lab2, mp2, argmp2) <- explode' env e2
+        (lab1, mp1, argmp1) <- explode' labelenv e1
+        (lab2, mp2, argmp2) <- explode' labelenv e2
         lab <- genId ty
         let pruned = Apair ty (Alabel lab1) (Alabel lab2)
         let itemmp = DMap.singleton lab pruned
@@ -261,9 +256,9 @@ explode' env = \case
         lab <- genId TupRunit
         return (lab, DMap.singleton lab Anil, mempty)
     Acond ty e e1 e2 -> do
-        let e' = generaliseLab e  -- TODO: proper handling of lambdas
-        (lab1, mp1, argmp1) <- explode' env e1
-        (lab2, mp2, argmp2) <- explode' env e2
+        let e' = doesNotContainArrayVars (generaliseLab e)  -- TODO: proper handling of lambdas
+        (lab1, mp1, argmp1) <- explode' labelenv e1
+        (lab2, mp2, argmp2) <- explode' labelenv e2
         lab <- genId ty
         let pruned = Acond ty e' (Alabel lab1) (Alabel lab2)
         let itemmp = DMap.singleton lab pruned
@@ -271,17 +266,17 @@ explode' env = \case
             argmp = DMap.unionsWithKey (error "explode: Overlapping arg's") [argmp1, argmp2]
         return (lab, mp, argmp)
     Map ty e a -> do
-        let e' = generaliseLabFun e
-        (lab1, mp1, argmp1) <- explode' env a
+        let e' = doesNotContainArrayVarsF (generaliseLabFun e)
+        (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
         let pruned = Map ty e' (Alabel lab1)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
     ZipWith ty e a1 a2 -> do
-        let e' = generaliseLabFun e
-        (lab1, mp1, argmp1) <- explode' env a1
-        (lab2, mp2, argmp2) <- explode' env a2
+        let e' = doesNotContainArrayVarsF (generaliseLabFun e)
+        (lab1, mp1, argmp1) <- explode' labelenv a1
+        (lab2, mp2, argmp2) <- explode' labelenv a2
         lab <- genId (TupRsingle ty)
         let pruned = ZipWith ty e' (Alabel lab1) (Alabel lab2)
         let itemmp = DMap.singleton lab pruned
@@ -289,42 +284,42 @@ explode' env = \case
             argmp = DMap.unionsWithKey (error "explode: Overlapping arg's") [argmp1, argmp2]
         return (lab, mp, argmp)
     Fold ty e me0 a -> do
-        let e' = generaliseLabFun e
-            me0' = generaliseLab <$> me0
-        (lab1, mp1, argmp1) <- explode' env a
+        let e' = doesNotContainArrayVarsF (generaliseLabFun e)
+            me0' = doesNotContainArrayVars . generaliseLab <$> me0
+        (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
         let pruned = Fold ty e' me0' (Alabel lab1)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
     Alet lhs rhs body -> do
-        (lab1, mp1, argmp1) <- explode' env rhs
+        (lab1, mp1, argmp1) <- explode' labelenv rhs
         (_, labs) <- genSingleIds (atypeOf rhs)
-        let (env', mpLHS) = lpushLHS_Get lhs labs env (Alabel lab1)
+        let (env', mpLHS) = lpushLHS_Get lhs labs labelenv (Alabel lab1)
         (lab2, mp2, argmp2) <- explode' env' body
         let mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mpLHS, mp2]
             argmp = DMap.unionWithKey (error "explode: Overlapping arg's") argmp1 argmp2
         return (lab2, mp, argmp)
     Avar (A.Var _ idx) -> do
-        return (tupleLabel (prjL idx env), mempty, mempty)
+        return (tupleLabel (prjL idx labelenv), mempty, mempty)
     Aarg ty idx -> do
         lab <- genId (TupRsingle ty)
         return (lab, DMap.singleton lab (Aarg ty idx), DMap.singleton idx lab)
     Aget _ _ _ -> error "explode: Unexpected Aget"
     Alabel _ -> error "explode: Unexpected Alabel"
   where
-    lpushLHS_Get :: A.ALeftHandSide t env env' -> TupR (ADLabel Int) t -> ALabVal Int env -> Acc Int args t -> (ALabVal Int env', DMap (ADLabelT Int) (Acc Int args))
-    lpushLHS_Get lhs labs labelenv rhs = case (lhs, labs) of
+    lpushLHS_Get :: A.ALeftHandSide t aenv aenv' -> TupR (ADLabel Int) t -> ALabVal Int aenv -> Acc Int args t -> (ALabVal Int aenv', DMap (ADLabelT Int) (Acc Int args))
+    lpushLHS_Get lhs labs labelenv' rhs = case (lhs, labs) of
         (A.LeftHandSidePair lhs1 lhs2, TupRpair labs1 labs2) ->
-            let (labelenv1, mp1) = lpushLHS_Get lhs1 labs1 labelenv (smartFst rhs)
+            let (labelenv1, mp1) = lpushLHS_Get lhs1 labs1 labelenv' (smartFst rhs)
                 (labelenv2, mp2) = lpushLHS_Get lhs2 labs2 labelenv1 (smartSnd rhs)
             in (labelenv2, DMap.unionWithKey (error "lpushLHS_Get: Overlapping id's") mp1 mp2)
-        (A.LeftHandSideSingle _, TupRsingle lab) -> (LPush labelenv lab, DMap.singleton (tupleLabel lab) rhs)
-        (A.LeftHandSideWildcard _, _) -> (labelenv, mempty)
+        (A.LeftHandSideSingle _, TupRsingle lab) -> (LPush labelenv' lab, DMap.singleton (tupleLabel lab) rhs)
+        (A.LeftHandSideWildcard _, _) -> (labelenv', mempty)
         _ -> error "lpushLHS_Get: impossible GADTs"
 
     -- TODO: make smartFst and smartSnd non-quadratic (should be easy)
-    smartFst :: OpenAcc env lab args (t1, t2) -> OpenAcc env lab args t1
+    smartFst :: OpenAcc aenv lab args (t1, t2) -> OpenAcc aenv lab args t1
     smartFst (Aget (TupRpair t1 _) tidx ex) = Aget t1 (insertFst tidx) ex
       where insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
             insertFst TIHere = TILeft TIHere
@@ -335,7 +330,7 @@ explode' env = \case
       = Aget t1 (TILeft TIHere) ex
     smartFst _ = error "smartFst: impossible GADTs"
 
-    smartSnd :: OpenAcc env lab args (t1, t2) -> OpenAcc env lab args t2
+    smartSnd :: OpenAcc aenv lab args (t1, t2) -> OpenAcc aenv lab args t2
     smartSnd (Aget (TupRpair _ t2) tidx ex) = Aget t2 (insertSnd tidx) ex
       where insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
             insertSnd TIHere = TIRight TIHere
@@ -354,16 +349,16 @@ data PD a = P a | D a
 -- Since the Let bindings are on the scalar level (because Accelerate forces
 --   tuple-destructuring), the labels in the environment are scalar labels.
 --   These thus also have no tag.
-data Context lab env = Context (ALabVal lab env) (DMap (ADLabelT (PD lab)) (TupR (ADLabel lab)))
+data Context lab aenv = Context (ALabVal lab aenv) (DMap (ADLabelT (PD lab)) (TupR (ADLabel lab)))
 
-showContext :: (Ord lab, Show lab) => Context lab env -> String
+showContext :: (Ord lab, Show lab) => Context lab aenv -> String
 showContext (Context labelenv bindmap) = "Context " ++ showLabelenv labelenv ++ " " ++ showBindmap bindmap
 
-showLabelenv :: Show lab => ALabVal lab env -> String
+showLabelenv :: Show lab => ALabVal lab aenv -> String
 showLabelenv LEmpty = "[]"
 showLabelenv (LPush env lab) = "[" ++ go env ++ showDLabel lab ++ "]"
   where
-    go :: Show lab => ALabVal lab env -> String
+    go :: Show lab => ALabVal lab aenv -> String
     go LEmpty = ""
     go (LPush env' lab') = go env' ++ showDLabel lab' ++ ", "
 
@@ -375,17 +370,16 @@ showBindmap bindmap =
                              | (_, (dlabshow, labsshow)) <- tups]
     in "[" ++ s ++ "]"
 
-{-
-primaldual :: Exploded Int args Float
-           -> (forall env. Context Int env -> IdGen (OpenExp env (PD Int) args t))
-           -> IdGen (Exp (PD Int) args t)
+primaldual :: Exploded Int args (Array () Float)
+           -> (forall aenv. Context Int aenv -> IdGen (OpenAcc aenv (PD Int) args t))
+           -> IdGen (Acc (PD Int) args t)
 primaldual exploded cont =
-    primal exploded (\ctx -> dual exploded ctx cont)
--}
+    -- primal exploded (\ctx -> dual exploded ctx cont)  -- TODO
+    primal exploded cont
 
 -- Resulting computation will only use P, never D
 primal :: Exploded Int args res
-       -> (forall env. Context Int env -> IdGen (OpenAcc env (PD Int) args t))
+       -> (forall aenv. Context Int aenv -> IdGen (OpenAcc aenv (PD Int) args t))
        -> IdGen (Acc (PD Int) args t)
 primal (endlab, nodemap, _) = primal' nodemap endlab (Context LEmpty mempty)
 
@@ -393,9 +387,9 @@ primal (endlab, nodemap, _) = primal' nodemap endlab (Context LEmpty mempty)
 -- doesn't need to be looked up in the bindmap all the time?
 primal' :: DMap (ADLabelT Int) (Acc Int args)
         -> ADLabelT Int t
-        -> Context Int env
-        -> (forall env'. Context Int env' -> IdGen (OpenAcc env' (PD Int) args res))
-        -> IdGen (OpenAcc env (PD Int) args res)
+        -> Context Int aenv
+        -> (forall aenv'. Context Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args res))
+        -> IdGen (OpenAcc aenv (PD Int) args res)
 primal' nodemap lbl (Context labelenv bindmap) cont
 --   | trace ("primal': computing " ++ show lbl) False = undefined
   | fmapLabel P lbl `DMap.member` bindmap =
@@ -444,7 +438,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                           ,alabValFinds labelenv' elselabs) of
                       (Just thenvars, Just elsevars) -> do
                           (GenLHS lhs, labs) <- genSingleIds restype
-                          Alet lhs (Acond restype (generaliseLab condexpr)
+                          Alet lhs (Acond restype (doesNotContainArrayVars (generaliseLab condexpr))
                                                   (avars thenvars) (avars elsevars))
                                <$> cont (Context (lpushLabTup labelenv' lhs labs)
                                                  (DMap.insert (fmapLabel P lbl) labs bindmap'))
@@ -458,7 +452,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                       Just argidx -> do
                           lab <- genSingleId restype
                           Alet (A.LeftHandSideSingle restype)
-                               (Map restype (generaliseLabFun funcexpr)
+                               (Map restype (doesNotContainArrayVarsF (generaliseLabFun funcexpr))
                                             (Avar (A.Var argtypeS argidx)))
                                <$> cont (Context (LPush labelenv' lab)
                                                  (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap'))
@@ -474,7 +468,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                       (Just argidx1, Just argidx2) -> do
                           lab <- genSingleId restype
                           Alet (A.LeftHandSideSingle restype)
-                               (ZipWith restype (generaliseLabFun funcexpr)
+                               (ZipWith restype (doesNotContainArrayVarsF (generaliseLabFun funcexpr))
                                                 (Avar (A.Var (labelType arglab1S) argidx1))
                                                 (Avar (A.Var (labelType arglab2S) argidx2)))
                                <$> cont (Context (LPush labelenv' lab)
@@ -489,7 +483,8 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                       Just argidx -> do
                           lab <- genSingleId restype
                           Alet (A.LeftHandSideSingle restype)
-                               (Fold restype (generaliseLabFun funcexpr) (generaliseLab <$> e0expr)
+                               (Fold restype (doesNotContainArrayVarsF (generaliseLabFun funcexpr))
+                                             (doesNotContainArrayVars . generaliseLab <$> e0expr)
                                              (Avar (A.Var argtype argidx)))
                                <$> cont (Context (LPush labelenv' lab)
                                                  (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap'))
@@ -526,7 +521,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
 -- environment (and the bindmap) is needed.
-newtype AdjList lab args t = AdjList (forall env. Context lab env -> [OpenAcc env (PD lab) args t])
+newtype AdjList lab args t = AdjList (forall aenv. Context lab aenv -> [OpenAcc aenv (PD lab) args t])
 
 data AnyLabel s lab = forall t. AnyLabel (DLabel s lab t)
 type AnyLabelT = AnyLabel ArraysR
@@ -538,9 +533,9 @@ instance Ord a => Ord (OrdBox a b) where OrdBox x _ `compare` OrdBox y _ = compa
 
 {-
 dual :: Exploded Int args Float
-     -> Context Int env
-     -> (forall env'. Context Int env' -> IdGen (OpenExp env' (PD Int) args t))
-     -> IdGen (OpenExp env (PD Int) args t)
+     -> Context Int aenv
+     -> (forall aenv'. Context Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args t))
+     -> IdGen (OpenAcc aenv (PD Int) args t)
 dual (endlab, nodemap, _) context cont =
     trace ("\nlabelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
     -- TODO: Is the type annotation on scalarType necessary?
@@ -575,10 +570,10 @@ dual (endlab, nodemap, _) context cont =
 
 dual' :: DMap (ADLabelT Int) (Acc Int args)
       -> [AnyLabelT Int]
-      -> Context Int env
+      -> Context Int aenv
       -> DMap (ADLabelT (PD Int)) (AdjList Int args)
-      -> (forall env'. Context Int env' -> IdGen (OpenAcc env' (PD Int) args res))
-      -> IdGen (OpenAcc env (PD Int) args res)
+      -> (forall aenv'. Context Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args res))
+      -> IdGen (OpenAcc aenv (PD Int) args res)
 dual' _ [] context _ cont = cont context
 dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap cont =
     -- trace ("dual': computing " ++ show lbl) $
@@ -720,8 +715,8 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
 
       expr -> trace ("\n!! " ++ show expr) undefined
   where
-    smartPair :: OpenExp env lab args a -> OpenExp env lab args b -> OpenExp env lab args (a, b)
-    smartPair a b = Pair (TupRpair (etypeOf a) (etypeOf b)) a b
+    smartPair :: OpenAcc aenv lab args a -> OpenAcc aenv lab args b -> OpenAcc aenv lab args (a, b)
+    smartPair a b = Apair (TupRpair (atypeOf a) (atypeOf b)) a b
 -}
 
 -- Utility functions
@@ -740,9 +735,9 @@ data Contribution node args =
     forall parents t.
         Contribution (ADLabelT Int t)  -- to which label are we contributing an adjoint
                      (TypedList (ADLabelT Int) parents)  -- labels you need the primary value of
-                     (forall env. A.ArrayVars env node                -- current node's adjoint
-                               -> TypedList (A.ArrayVars env) parents -- requested primal values
-                               -> OpenAcc env (PD Int) args t)        -- contribution
+                     (forall aenv. A.ArrayVars aenv node               -- current node's adjoint
+                               -> TypedList (A.ArrayVars aenv) parents -- requested primal values
+                               -> OpenAcc aenv (PD Int) args t)        -- contribution
 
 -- Note: Before this code was extracted into a separate function, its
 -- functionality was inlined in the branches of dual'. Because of that, the
@@ -765,7 +760,7 @@ updateContribmap lbl =
                 (Just adjvars, parvars) -> gen adjvars parvars
                 _ -> error $ "updateContribmap: node D " ++ show lbl ++ " was not computed"
   where
-    findAll :: Context Int env -> TypedList (ADLabelT Int) parents -> TypedList (A.ArrayVars env) parents
+    findAll :: Context Int aenv -> TypedList (ADLabelT Int) parents -> TypedList (A.ArrayVars aenv) parents
     findAll (Context labelenv bindmap) =
         tlmap $ \lab ->
             let labs = bindmap `dmapFind` fmapLabel P lab
@@ -774,7 +769,7 @@ updateContribmap lbl =
 
 addContribution :: Ord lab
                 => ADLabelT (PD lab) t
-                -> (forall env. Context lab env -> OpenAcc env (PD lab) args t)
+                -> (forall aenv. Context lab aenv -> OpenAcc aenv (PD lab) args t)
                 -> DMap (ADLabelT (PD lab)) (AdjList lab args)
                 -> DMap (ADLabelT (PD lab)) (AdjList lab args)
 addContribution lbl contribution =
@@ -784,17 +779,17 @@ addContribution lbl contribution =
 
 collectAdjoint :: DMap (ADLabelT (PD Int)) (AdjList Int args)
                -> ADLabelT Int item
-               -> Context Int env
-               -> OpenAcc env (PD Int) args item
+               -> Context Int aenv
+               -> OpenAcc aenv (PD Int) args item
 collectAdjoint contribmap lbl (Context labelenv bindmap)
   | Just pvars <- alabValFinds labelenv (bindmap `dmapFind` fmapLabel P lbl)
   = case DMap.lookup (fmapLabel D lbl) contribmap of
         Just (AdjList listgen) -> arraysSum (labelType lbl) undefined (listgen (Context labelenv bindmap))
-        Nothing -> arraysSum (labelType lbl) undefined []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
+        Nothing -> arraysSum (labelType lbl) pvars []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
 
-arrayPlus :: OpenAcc env lab args (Array sh t)
-          -> OpenAcc env lab args (Array sh t)
-          -> OpenAcc env lab args (Array sh t)
+arrayPlus :: OpenAcc aenv lab args (Array sh t)
+          -> OpenAcc aenv lab args (Array sh t)
+          -> OpenAcc aenv lab args (Array sh t)
 arrayPlus a1 a2
   | TupRsingle arrty@(ArrayR _ ty) <- atypeOf a1
   , DeclareVars lhs1 _ vf1 <- declareVars ty
@@ -806,33 +801,40 @@ arrayPlus a1 a2
 arrayPlus _ _ = error "unreachable"
 
 arraySum :: ArrayR (Array sh t)
-         -> Exp lab () sh
-         -> [OpenAcc env lab args (Array sh t)]
-         -> OpenAcc env lab args (Array sh t)
+         -> Exp aenv lab () sh
+         -> [OpenAcc aenv lab args (Array sh t)]
+         -> OpenAcc aenv lab args (Array sh t)
 arraySum (ArrayR sht ty) she [] = generateConstantArray ty (zeroForType ty) sht she
 arraySum _ _ l = foldl1 arrayPlus l
 
+-- TODO: use tupleZip
 arraysSum :: ArraysR t
-          -> A.ArrayVars env t  -- primal result
-          -> [OpenAcc env lab args t]
-          -> OpenAcc env lab args t
-arraysSum ty shexprs l = undefined
+          -> A.ArrayVars aenv t  -- primal result
+          -> [OpenAcc aenv lab args t]
+          -> OpenAcc aenv lab args t
+arraysSum TupRunit TupRunit _ = Anil
+arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) l = arraySum ty (Shape pvar) l
+arraysSum (TupRpair t1 t2) (TupRpair pvars1 pvars2) l =
+    Apair (TupRpair t1 t2)
+          (arraysSum t1 pvars1 (map (Aget t1 (TILeft TIHere)) l))
+          (arraysSum t2 pvars2 (map (Aget t2 (TIRight TIHere)) l))
 
-generateConstantArray :: TypeR t -> Exp lab () t
-                      -> ShapeR sh -> Exp lab () sh
-                      -> OpenAcc env lab args (Array sh t)
+generateConstantArray :: TypeR t -> Exp aenv lab () t
+                      -> ShapeR sh -> Exp aenv lab () sh
+                      -> OpenAcc aenv lab args (Array sh t)
 generateConstantArray ty e sht she =
     Generate (ArrayR sht ty) she
              (Lam (A.LeftHandSideWildcard (shapeType sht)) (Body e))
 
--- oneHotTup :: TypeR t -> TupleIdx t t' -> OpenAcc env lab args t' -> OpenAcc env lab args t
+-- TODO: not yet converted to array language
+-- oneHotTup :: TypeR t -> TupleIdx t t' -> OpenAcc aenv lab args t' -> OpenAcc aenv lab args t
 -- oneHotTup _ TIHere ex = ex
 -- oneHotTup ty@(TupRpair ty1 ty2) (TILeft ti) ex = Pair ty (oneHotTup ty1 ti ex) (zeroForType ty2)
 -- oneHotTup ty@(TupRpair ty1 ty2) (TIRight ti) ex = Pair ty (zeroForType ty1) (oneHotTup ty2 ti ex)
 -- oneHotTup _ _ _ = error "oneHotTup: impossible GADTs"
 
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
-expLabelParents :: OpenAcc env lab args t -> [AnyLabelT lab]
+expLabelParents :: OpenAcc aenv lab args t -> [AnyLabelT lab]
 expLabelParents = \case
     Aconst _ _ -> []
     Apair _ e1 e2 -> fromLabel e1 ++ fromLabel e2

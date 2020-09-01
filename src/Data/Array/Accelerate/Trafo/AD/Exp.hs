@@ -11,6 +11,8 @@ module Data.Array.Accelerate.Trafo.AD.Exp (
 import Data.List (intercalate)
 import Data.GADT.Show
 
+import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Representation.Shape (shapeType)
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST as A
@@ -32,56 +34,59 @@ type EDLabelT = DLabel TypeR
 -- -----------
 
 -- TODO: Check how many reified types can be removed in this AST
-data OpenExp env lab args t where
+data OpenExp env aenv lab args t where
     Const   :: ScalarType t
             -> t
-            -> OpenExp env lab args t
+            -> OpenExp env aenv lab args t
 
     PrimApp :: TypeR r
             -> A.PrimFun (a -> r)
-            -> OpenExp env lab args a
-            -> OpenExp env lab args r
+            -> OpenExp env aenv lab args a
+            -> OpenExp env aenv lab args r
 
     Pair    :: TypeR (a, b)
-            -> OpenExp env lab args a
-            -> OpenExp env lab args b
-            -> OpenExp env lab args (a, b)
+            -> OpenExp env aenv lab args a
+            -> OpenExp env aenv lab args b
+            -> OpenExp env aenv lab args (a, b)
 
-    Nil     :: OpenExp env lab args ()
+    Nil     :: OpenExp env aenv lab args ()
 
     Cond    :: TypeR a
-            -> OpenExp env lab args A.PrimBool
-            -> OpenExp env lab args a
-            -> OpenExp env lab args a
-            -> OpenExp env lab args a
+            -> OpenExp env aenv lab args A.PrimBool
+            -> OpenExp env aenv lab args a
+            -> OpenExp env aenv lab args a
+            -> OpenExp env aenv lab args a
+
+    Shape   :: A.ArrayVar aenv (Array dim e)
+            -> OpenExp env aenv lab args dim
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
     Get     :: TypeR s
             -> TupleIdx t s
-            -> OpenExp env lab args t
-            -> OpenExp env lab args s
+            -> OpenExp env aenv lab args t
+            -> OpenExp env aenv lab args s
 
     Let     :: A.ELeftHandSide bnd_t env env'
-            -> OpenExp env lab args bnd_t
-            -> OpenExp env' lab args a
-            -> OpenExp env lab args a
+            -> OpenExp env aenv lab args bnd_t
+            -> OpenExp env' aenv lab args a
+            -> OpenExp env aenv lab args a
 
     Var     :: A.ExpVar env t
-            -> OpenExp env lab args t
+            -> OpenExp env aenv lab args t
 
     Arg     :: ScalarType t
             -> Idx args t
-            -> OpenExp env lab args t
+            -> OpenExp env aenv lab args t
 
     Label   :: EDLabelT lab t
-            -> OpenExp env lab args t
+            -> OpenExp env aenv lab args t
 
 type Exp = OpenExp ()
 
 -- Closed expression with an unknown type
-data AnyExp lab args = forall t. AnyExp (Exp lab args t)
-deriving instance Show lab => Show (AnyExp lab args)
+data AnyExp aenv lab args = forall t. AnyExp (Exp aenv lab args t)
+deriving instance Show lab => Show (AnyExp aenv lab args)
 
 data AnyTypeR = forall t. AnyTypeR (TypeR t)
 deriving instance Show AnyTypeR
@@ -92,32 +97,39 @@ deriving instance Show AnyScalarType
 -- Instances
 -- ---------
 
-showsExp :: (lab -> String) -> Int -> [String] -> Int -> OpenExp env lab args t -> ShowS
-showsExp _ _ _ _ (Const ty x) = showString (showScalar ty x)
-showsExp labf seed env d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
+showsExp :: (lab -> String) -> Int -> [String] -> [String] -> Int -> OpenExp env aenv lab args t -> ShowS
+showsExp _ _ _ _ _ (Const ty x) = showString (showScalar ty x)
+showsExp labf seed env aenv d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
     let prec = precedence f
         ops = prettyPrimFun Infix f
     in showParen (d > prec) $
-            showsExp labf seed env (prec+1) e1 . showString (' ' : ops ++ " ") .
-                showsExp labf seed env (prec+1) e2
-showsExp labf seed env d (PrimApp _ f e) =
+            showsExp labf seed env aenv (prec+1) e1 . showString (' ' : ops ++ " ") .
+                showsExp labf seed env aenv (prec+1) e2
+showsExp labf seed env aenv d (PrimApp _ f e) =
     let prec = precedence f
         ops = prettyPrimFun Prefix f
     in showParen (d > prec) $
-            showString (ops ++ " ") . showsExp labf seed env (prec+1) e
-showsExp labf seed env _ (Pair _ e1 e2) =
-    showString "(" . showsExp labf seed env 0 e1 . showString ", " .
-        showsExp labf seed env 0 e2 . showString ")"
-showsExp _ _ _ _ Nil =
+            showString (ops ++ " ") . showsExp labf seed env aenv (prec+1) e
+showsExp labf seed env aenv _ (Pair _ e1 e2) =
+    showString "(" . showsExp labf seed env aenv 0 e1 . showString ", " .
+        showsExp labf seed env aenv 0 e2 . showString ")"
+showsExp _ _ _ _ _ Nil =
     showString "()"
-showsExp labf seed env d (Cond _ c t e) =
+showsExp labf seed env aenv d (Cond _ c t e) =
     showParen (d > 10) $
         showString "cond " .
-            showsExp labf seed env 11 c . showString " " .
-            showsExp labf seed env 11 t . showString " " .
-            showsExp labf seed env 11 e
-showsExp labf seed env d (Get _ ti e) = showParen (d > 10) $
-    showString (tiPrefix ti) . showsExp labf seed env 10 e
+            showsExp labf seed env aenv 11 c . showString " " .
+            showsExp labf seed env aenv 11 t . showString " " .
+            showsExp labf seed env aenv 11 e
+showsExp _ _ _ aenv d (Shape (A.Var _ idx)) =
+    showParen (d > 10) $
+        showString "shape " .
+            (case drop (idxToInt idx) aenv of
+                descr : _ -> showString descr
+                [] -> error $ "Avar out of aenv range in showsExp: " ++
+                              show (idxToInt idx) ++ " in " ++ show aenv)
+showsExp labf seed env aenv d (Get _ ti e) = showParen (d > 10) $
+    showString (tiPrefix ti) . showsExp labf seed env aenv 10 e
   where
     tiPrefix :: TupleIdx t t' -> String
     tiPrefix = (++ " ") . intercalate "." . reverse . tiPrefix'
@@ -126,39 +138,40 @@ showsExp labf seed env d (Get _ ti e) = showParen (d > 10) $
     tiPrefix' TIHere = []
     tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
     tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
-showsExp labf seed env d (Let lhs rhs body) = showParen (d > 0) $
+showsExp labf seed env aenv d (Let lhs rhs body) = showParen (d > 0) $
     let (descr, descrs, seed') = namifyLHS seed lhs
         env' = descrs ++ env
-    in showString ("let " ++ descr ++ " = ") . showsExp labf seed' env 0 rhs .
-            showString " in " . showsExp labf seed' env' 0 body
-showsExp _ _ _ d (Arg ty idx) = showParen (d > 0) $
+    in showString ("let " ++ descr ++ " = ") . showsExp labf seed' env aenv 0 rhs .
+            showString " in " . showsExp labf seed' env' aenv 0 body
+showsExp _ _ _ _ d (Arg ty idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx) ++ " :: " ++ show ty)
-showsExp _ _ env _ (Var (A.Var _ idx)) =
+showsExp _ _ env _ _ (Var (A.Var _ idx)) =
     case drop (idxToInt idx) env of
         descr : _ -> showString descr
         [] -> error $ "Var out of env range in showsExp: " ++
                       show (idxToInt idx) ++ " in " ++ show env
-showsExp labf _ _ d (Label lab) = showParen (d > 0) $
+showsExp labf _ _ _ d (Label lab) = showParen (d > 0) $
     showString ('L' : labf (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
 -- instance Show (OpenExp env Int t) where
 --     showsPrec = showsExp subscript 0 []
 
-instance Show lab => Show (OpenExp env lab args t) where
-    showsPrec = showsExp show 0 []
+instance Show lab => Show (OpenExp env aenv lab args t) where
+    showsPrec = showsExp show 0 [] []
 
-instance Show lab => GShow (OpenExp env lab args) where
+instance Show lab => GShow (OpenExp env aenv lab args) where
     gshowsPrec = showsPrec
 
 -- Auxiliary functions
 -- -------------------
 
-etypeOf :: OpenExp env lab args t -> TypeR t
+etypeOf :: OpenExp env aenv lab args t -> TypeR t
 etypeOf (Const ty _) = TupRsingle ty
 etypeOf (PrimApp ty _ _) = ty
 etypeOf (Pair ty _ _) = ty
 etypeOf Nil = TupRunit
 etypeOf (Cond ty _ _ _) = ty
+etypeOf (Shape (A.Var (ArrayR sht _) _)) = shapeType sht
 etypeOf (Get ty _ _) = ty
 etypeOf (Let _ _ body) = etypeOf body
 etypeOf (Var (A.Var ty _)) = TupRsingle ty
@@ -227,10 +240,10 @@ elabValToList LEmpty = []
 elabValToList (LPush env (DLabel ty lab)) =
     (AnyScalarType ty, lab) : elabValToList env
 
-evars :: A.ExpVars env t -> OpenExp env lab args t
+evars :: A.ExpVars env t -> OpenExp env aenv lab args t
 evars = snd . evars'
   where
-    evars' :: A.ExpVars env t -> (TypeR t, OpenExp env lab args t)
+    evars' :: A.ExpVars env t -> (TypeR t, OpenExp env aenv lab args t)
     evars' TupRunit = (TupRunit, Nil)
     evars' (TupRsingle var@(A.Var ty _)) = (TupRsingle ty, Var var)
     evars' (TupRpair vars1 vars2) =
