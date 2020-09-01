@@ -32,9 +32,11 @@ type ADLabelT = DLabel ArraysR
 -- --------------
 
 -- Expression-level function
-data OpenFun env lab t where
-    Body :: OpenExp env lab () t -> OpenFun env lab t
-    Lam :: A.ELeftHandSide a env env' -> OpenFun env' lab t -> OpenFun env lab (a -> t)
+data OpenFun env aenv lab t where
+    Body :: OpenExp env aenv lab () t -> OpenFun env aenv lab t
+    Lam :: A.ELeftHandSide a env env' -> OpenFun env' aenv lab t -> OpenFun env aenv lab (a -> t)
+
+type Fun = OpenFun ()
 
 -- TODO: Check how many reified types can be removed in this AST
 data OpenAcc aenv lab args t where
@@ -50,31 +52,31 @@ data OpenAcc aenv lab args t where
     Anil    :: OpenAcc aenv lab args ()
 
     Acond   :: ArraysR a
-            -> Exp lab () A.PrimBool
+            -> Exp aenv lab () A.PrimBool
             -> OpenAcc aenv lab args a
             -> OpenAcc aenv lab args a
             -> OpenAcc aenv lab args a
 
     Map     :: ArrayR (Array sh t2)
-            -> OpenFun () lab (t1 -> t2)
+            -> Fun aenv lab (t1 -> t2)
             -> OpenAcc aenv lab args (Array sh t1)
             -> OpenAcc aenv lab args (Array sh t2)
 
     ZipWith :: ArrayR (Array sh t3)
-            -> OpenFun () lab (t1 -> t2 -> t3)
+            -> Fun aenv lab (t1 -> t2 -> t3)
             -> OpenAcc aenv lab args (Array sh t1)
             -> OpenAcc aenv lab args (Array sh t2)
             -> OpenAcc aenv lab args (Array sh t3)
 
     Fold    :: ArrayR (Array sh e)
-            -> OpenFun () lab (e -> e -> e)
-            -> Maybe (Exp lab () e)
+            -> Fun aenv lab (e -> e -> e)
+            -> Maybe (Exp aenv lab () e)
             -> OpenAcc aenv lab args (Array (sh, Int) e)
             -> OpenAcc aenv lab args (Array sh e)
 
     Generate :: ArrayR (Array sh e)
-             -> Exp lab () sh
-             -> OpenFun () lab (sh -> e)
+             -> Exp aenv lab () sh
+             -> Fun aenv lab (sh -> e)
              -> OpenAcc aenv lab args (Array sh e)
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
@@ -98,6 +100,8 @@ data OpenAcc aenv lab args t where
 
     Alabel  :: ADLabelT lab t
             -> OpenAcc env lab args t
+
+    Asnowman :: OpenAcc env lab args t
 
 type Acc = OpenAcc ()
 
@@ -125,31 +129,31 @@ showsAcc _ _ _ _ Anil =
 showsAcc labf seed env d (Acond _ c t e) =
     showParen (d > 10) $
         showString "acond " .
-            showsExp labf seed [] 11 c . showString " " .
+            showsExp labf seed [] env 11 c . showString " " .
             showsAcc labf seed env 11 t . showString " " .
             showsAcc labf seed env 11 e
 showsAcc labf seed env d (Map _ f e) =
     showParen (d > 10) $
         showString "map " .
-            showsFun labf seed [] 11 f . showString " " .
+            showsFun labf seed [] env 11 f . showString " " .
             showsAcc labf seed env 11 e
 showsAcc labf seed env d (ZipWith _ f e1 e2) =
     showParen (d > 10) $
         showString "zipWith " .
-            showsFun labf seed [] 11 f . showString " " .
+            showsFun labf seed [] env 11 f . showString " " .
             showsAcc labf seed env 11 e1 . showString " " .
             showsAcc labf seed env 11 e2
 showsAcc labf seed env d (Fold _ f me0 e) =
     showParen (d > 10) $
         showString (maybe "fold1 " (const "fold ") me0) .
-            showsFun labf seed [] 11 f . showString " " .
-            maybe id (\e0 -> showsExp labf seed [] 11 e0 . showString " ") me0 .
+            showsFun labf seed [] env 11 f . showString " " .
+            maybe id (\e0 -> showsExp labf seed [] env 11 e0 . showString " ") me0 .
             showsAcc labf seed env 11 e
-showsAcc labf seed _ d (Generate _ sh f) =
+showsAcc labf seed env d (Generate _ sh f) =
     showParen (d > 10) $
         showString "generate " .
-            showsExp labf seed [] 11 sh . showString " " .
-            showsFun labf seed [] 11 f
+            showsExp labf seed [] env 11 sh . showString " " .
+            showsFun labf seed [] env 11 f
 showsAcc labf seed env d (Aget _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsAcc labf seed env 10 e
   where
@@ -174,15 +178,16 @@ showsAcc _ _ env _ (Avar (A.Var _ idx)) =
                       show (idxToInt idx) ++ " in " ++ show env
 showsAcc labf _ _ d (Alabel lab) = showParen (d > 0) $
     showString ('L' : labf (labelLabel lab) ++ " :: " ++ show (labelType lab))
+showsAcc _ _ _ _ Asnowman = showString "⛄"
 
-showsFun :: (lab -> String) -> Int -> [String] -> Int -> OpenFun env lab t -> ShowS
-showsFun labf seed env d (Body expr) = showsExp labf seed env d expr
-showsFun labf seed env d (Lam lhs fun) =
+showsFun :: (lab -> String) -> Int -> [String] -> [String] -> Int -> OpenFun env aenv lab t -> ShowS
+showsFun labf seed env aenv d (Body expr) = showsExp labf seed env aenv d expr
+showsFun labf seed env aenv d (Lam lhs fun) =
     let (descr, descrs, seed') = namifyLHS seed lhs
         env' = descrs ++ env
     in showParen (d > 0) $
         showString "\\" . showString descr .
-        showString " -> " . showsFun labf seed' env' 0 fun
+        showString " -> " . showsFun labf seed' env' aenv 0 fun
 
 instance Show lab => Show (OpenAcc aenv lab args t) where
     showsPrec = showsAcc show 0 []
