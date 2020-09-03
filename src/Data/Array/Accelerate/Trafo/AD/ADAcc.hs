@@ -48,6 +48,9 @@ import Data.Array.Accelerate.Trafo.AD.Sink
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
+type AContext = Context ArrayR
+
+
 genId :: ArraysR t -> IdGen (ADLabelT Int t)
 genId = genId'
 
@@ -99,20 +102,6 @@ generaliseArgs (Alet lhs rhs ex) = Alet lhs (generaliseArgs rhs) (generaliseArgs
 generaliseArgs (Avar v) = Avar v
 generaliseArgs (Aarg _ _) = error "generaliseArgs: Arg found"
 generaliseArgs (Alabel labs) = Alabel labs
-
--- Assumes the expression does not contain Label
-generaliseLab :: OpenExp env aenv lab args t -> OpenExp env aenv lab' args t
-generaliseLab (Const ty x) = Const ty x
-generaliseLab (PrimApp ty op ex) = PrimApp ty op (generaliseLab ex)
-generaliseLab (Pair ty e1 e2) = Pair ty (generaliseLab e1) (generaliseLab e2)
-generaliseLab Nil = Nil
-generaliseLab (Cond ty e1 e2 e3) = Cond ty (generaliseLab e1) (generaliseLab e2) (generaliseLab e3)
-generaliseLab (Shape avar) = Shape avar
-generaliseLab (Get ty path ex) = Get ty path (generaliseLab ex)
-generaliseLab (Let lhs rhs ex) = Let lhs (generaliseLab rhs) (generaliseLab ex)
-generaliseLab (Var v) = Var v
-generaliseLab (Arg ty idx) = Arg ty idx
-generaliseLab (Label _) = error "generaliseLab: Label found"
 
 -- Assumes the expression does not contain references to the array environment; TODO: this is a false assumption in general, but makes the input language easier for now
 doesNotContainArrayVars :: OpenExp env aenv lab args t -> OpenExp env aenv' lab args t
@@ -189,7 +178,7 @@ reverseADA paramlhs expr
       in Apair (TupRpair (atypeOf ex1) (atypeOf ex2)) ex1 ex2
 
     produceGradient :: DMap (Idx args) (ADLabelT Int)
-                    -> Context Int aenv
+                    -> AContext Int aenv
                     -> OpenAcc () unused args t
                     -> OpenAcc aenv (PD Int) args' t
     produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case argstup of
@@ -341,17 +330,7 @@ explode' labelenv = \case
       = Aget t2 (TIRight TIHere) ex
     smartSnd _ = error "smartSnd: impossible GADTs"
 
-data PD a = P a | D a
-  deriving (Show, Eq, Ord)
-
--- Expression node labels are of tuple type and have a PD tag.
--- Scalar value labels have no tag.
--- Since the Let bindings are on the scalar level (because Accelerate forces
---   tuple-destructuring), the labels in the environment are scalar labels.
---   These thus also have no tag.
-data Context lab aenv = Context (ALabVal lab aenv) (DMap (ADLabelT (PD lab)) (TupR (ADLabel lab)))
-
-showContext :: (Ord lab, Show lab) => Context lab aenv -> String
+showContext :: (Ord lab, Show lab) => AContext lab aenv -> String
 showContext (Context labelenv bindmap) = "Context " ++ showLabelenv labelenv ++ " " ++ showBindmap bindmap
 
 showLabelenv :: Show lab => ALabVal lab aenv -> String
@@ -371,7 +350,7 @@ showBindmap bindmap =
     in "[" ++ s ++ "]"
 
 primaldual :: Exploded Int args (Array () Float)
-           -> (forall aenv. Context Int aenv -> IdGen (OpenAcc aenv (PD Int) args t))
+           -> (forall aenv. AContext Int aenv -> IdGen (OpenAcc aenv (PD Int) args t))
            -> IdGen (Acc (PD Int) args t)
 primaldual exploded cont =
     -- primal exploded (\ctx -> dual exploded ctx cont)  -- TODO
@@ -379,7 +358,7 @@ primaldual exploded cont =
 
 -- Resulting computation will only use P, never D
 primal :: Exploded Int args res
-       -> (forall aenv. Context Int aenv -> IdGen (OpenAcc aenv (PD Int) args t))
+       -> (forall aenv. AContext Int aenv -> IdGen (OpenAcc aenv (PD Int) args t))
        -> IdGen (Acc (PD Int) args t)
 primal (endlab, nodemap, _) = primal' nodemap endlab (Context LEmpty mempty)
 
@@ -387,8 +366,8 @@ primal (endlab, nodemap, _) = primal' nodemap endlab (Context LEmpty mempty)
 -- doesn't need to be looked up in the bindmap all the time?
 primal' :: DMap (ADLabelT Int) (Acc Int args)
         -> ADLabelT Int t
-        -> Context Int aenv
-        -> (forall aenv'. Context Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args res))
+        -> AContext Int aenv
+        -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args res))
         -> IdGen (OpenAcc aenv (PD Int) args res)
 primal' nodemap lbl (Context labelenv bindmap) cont
 --   | trace ("primal': computing " ++ show lbl) False = undefined
@@ -521,9 +500,8 @@ primal' nodemap lbl (Context labelenv bindmap) cont
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
 -- environment (and the bindmap) is needed.
-newtype AdjList lab args t = AdjList (forall aenv. Context lab aenv -> [OpenAcc aenv (PD lab) args t])
+newtype AdjList lab args t = AdjList (forall aenv. AContext lab aenv -> [OpenAcc aenv (PD lab) args t])
 
-data AnyLabel s lab = forall t. AnyLabel (DLabel s lab t)
 type AnyLabelT = AnyLabel ArraysR
 
 -- The Ord and Eq instances refer only to 'a'.
@@ -533,8 +511,8 @@ instance Ord a => Ord (OrdBox a b) where OrdBox x _ `compare` OrdBox y _ = compa
 
 {-
 dual :: Exploded Int args Float
-     -> Context Int aenv
-     -> (forall aenv'. Context Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args t))
+     -> AContext Int aenv
+     -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args t))
      -> IdGen (OpenAcc aenv (PD Int) args t)
 dual (endlab, nodemap, _) context cont =
     trace ("\nlabelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
@@ -570,9 +548,9 @@ dual (endlab, nodemap, _) context cont =
 
 dual' :: DMap (ADLabelT Int) (Acc Int args)
       -> [AnyLabelT Int]
-      -> Context Int aenv
+      -> AContext Int aenv
       -> DMap (ADLabelT (PD Int)) (AdjList Int args)
-      -> (forall aenv'. Context Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args res))
+      -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PD Int) args res))
       -> IdGen (OpenAcc aenv (PD Int) args res)
 dual' _ [] context _ cont = cont context
 dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap cont =
@@ -760,7 +738,7 @@ updateContribmap lbl =
                 (Just adjvars, parvars) -> gen adjvars parvars
                 _ -> error $ "updateContribmap: node D " ++ show lbl ++ " was not computed"
   where
-    findAll :: Context Int aenv -> TypedList (ADLabelT Int) parents -> TypedList (A.ArrayVars aenv) parents
+    findAll :: AContext Int aenv -> TypedList (ADLabelT Int) parents -> TypedList (A.ArrayVars aenv) parents
     findAll (Context labelenv bindmap) =
         tlmap $ \lab ->
             let labs = bindmap `dmapFind` fmapLabel P lab
@@ -769,7 +747,7 @@ updateContribmap lbl =
 
 addContribution :: Ord lab
                 => ADLabelT (PD lab) t
-                -> (forall aenv. Context lab aenv -> OpenAcc aenv (PD lab) args t)
+                -> (forall aenv. AContext lab aenv -> OpenAcc aenv (PD lab) args t)
                 -> DMap (ADLabelT (PD lab)) (AdjList lab args)
                 -> DMap (ADLabelT (PD lab)) (AdjList lab args)
 addContribution lbl contribution =
@@ -779,7 +757,7 @@ addContribution lbl contribution =
 
 collectAdjoint :: DMap (ADLabelT (PD Int)) (AdjList Int args)
                -> ADLabelT Int item
-               -> Context Int aenv
+               -> AContext Int aenv
                -> OpenAcc aenv (PD Int) args item
 collectAdjoint contribmap lbl (Context labelenv bindmap)
   | Just pvars <- alabValFinds labelenv (bindmap `dmapFind` fmapLabel P lbl)
@@ -813,7 +791,7 @@ arraysSum :: ArraysR t
           -> [OpenAcc aenv lab args t]
           -> OpenAcc aenv lab args t
 arraysSum TupRunit TupRunit _ = Anil
-arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) l = arraySum ty (Shape pvar) l
+arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) l = arraySum ty (Shape (Left pvar)) l
 arraysSum (TupRpair t1 t2) (TupRpair pvars1 pvars2) l =
     Apair (TupRpair t1 t2)
           (arraysSum t1 pvars1 (map (Aget t1 (TILeft TIHere)) l))

@@ -31,13 +31,6 @@ type ADLabelT = DLabel ArraysR
 -- Array programs
 -- --------------
 
--- Expression-level function
-data OpenFun env aenv lab t where
-    Body :: OpenExp env aenv lab () t -> OpenFun env aenv lab t
-    Lam :: A.ELeftHandSide a env env' -> OpenFun env' aenv lab t -> OpenFun env aenv lab (a -> t)
-
-type Fun = OpenFun ()
-
 -- TODO: Check how many reified types can be removed in this AST
 data OpenAcc aenv lab args t where
     Aconst  :: ArrayR (Array sh t)

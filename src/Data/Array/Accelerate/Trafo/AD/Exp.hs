@@ -57,7 +57,8 @@ data OpenExp env aenv lab args t where
             -> OpenExp env aenv lab args a
             -> OpenExp env aenv lab args a
 
-    Shape   :: A.ArrayVar aenv (Array dim e)
+    Shape   :: Either (A.ArrayVar aenv (Array dim e))
+                      (DLabel ArrayR lab (Array dim e))
             -> OpenExp env aenv lab args dim
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
@@ -83,6 +84,13 @@ data OpenExp env aenv lab args t where
             -> OpenExp env aenv lab args t
 
 type Exp = OpenExp ()
+
+-- Expression-level function
+data OpenFun env aenv lab t where
+    Body :: OpenExp env aenv lab () t -> OpenFun env aenv lab t
+    Lam :: A.ELeftHandSide a env env' -> OpenFun env' aenv lab t -> OpenFun env aenv lab (a -> t)
+
+type Fun = OpenFun ()
 
 -- Closed expression with an unknown type
 data AnyExp aenv lab args = forall t. AnyExp (Exp aenv lab args t)
@@ -121,13 +129,17 @@ showsExp labf seed env aenv d (Cond _ c t e) =
             showsExp labf seed env aenv 11 c . showString " " .
             showsExp labf seed env aenv 11 t . showString " " .
             showsExp labf seed env aenv 11 e
-showsExp _ _ _ aenv d (Shape (A.Var _ idx)) =
+showsExp _ _ _ aenv d (Shape (Left (A.Var _ idx))) =
     showParen (d > 10) $
         showString "shape " .
-            (case drop (idxToInt idx) aenv of
-                descr : _ -> showString descr
-                [] -> error $ "Avar out of aenv range in showsExp: " ++
-                              show (idxToInt idx) ++ " in " ++ show aenv)
+        (case drop (idxToInt idx) aenv of
+            descr : _ -> showString descr
+            [] -> error $ "Avar out of aenv range in showsExp: " ++
+                          show (idxToInt idx) ++ " in " ++ show aenv)
+showsExp labf _ _ _ d (Shape (Right lab)) =
+    showParen (d > 10) $
+        showString "shape " .
+        showString ('L' : labf (labelLabel lab) ++ " :: " ++ show (labelType lab))
 showsExp labf seed env aenv d (Get _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsExp labf seed env aenv 10 e
   where
@@ -171,7 +183,8 @@ etypeOf (PrimApp ty _ _) = ty
 etypeOf (Pair ty _ _) = ty
 etypeOf Nil = TupRunit
 etypeOf (Cond ty _ _ _) = ty
-etypeOf (Shape (A.Var (ArrayR sht _) _)) = shapeType sht
+etypeOf (Shape (Left (A.Var (ArrayR sht _) _))) = shapeType sht
+etypeOf (Shape (Right (DLabel (ArrayR sht _) _))) = shapeType sht
 etypeOf (Get ty _ _) = ty
 etypeOf (Let _ _ body) = etypeOf body
 etypeOf (Var (A.Var ty _)) = TupRsingle ty
@@ -250,3 +263,18 @@ evars = snd . evars'
         let (t1, e1) = evars' vars1
             (t2, e2) = evars' vars2
         in (TupRpair t1 t2, Pair (TupRpair t1 t2) e1 e2)
+
+-- Assumes the expression does not contain Label
+generaliseLab :: OpenExp env aenv lab args t -> OpenExp env aenv lab' args t
+generaliseLab (Const ty x) = Const ty x
+generaliseLab (PrimApp ty op ex) = PrimApp ty op (generaliseLab ex)
+generaliseLab (Pair ty e1 e2) = Pair ty (generaliseLab e1) (generaliseLab e2)
+generaliseLab Nil = Nil
+generaliseLab (Cond ty e1 e2 e3) = Cond ty (generaliseLab e1) (generaliseLab e2) (generaliseLab e3)
+generaliseLab (Shape (Left avar)) = Shape (Left avar)
+generaliseLab (Shape (Right _)) = error "generaliseLab: Shape with label found"
+generaliseLab (Get ty path ex) = Get ty path (generaliseLab ex)
+generaliseLab (Let lhs rhs ex) = Let lhs (generaliseLab rhs) (generaliseLab ex)
+generaliseLab (Var v) = Var v
+generaliseLab (Arg ty idx) = Arg ty idx
+generaliseLab (Label _) = error "generaliseLab: Label found"
