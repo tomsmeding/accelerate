@@ -85,7 +85,8 @@ untranslateLHSboundExp toplhs topexpr
         D.Nil -> A.Nil
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
-        D.Shape avar -> A.Shape avar
+        D.Shape (Left avar) -> A.Shape avar
+        D.Shape (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate labeAn in array var position"
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e pv) body
@@ -112,7 +113,8 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Nil -> A.Nil
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
-        D.Shape avar -> A.Shape (fromJust (checkLocal matchArraysR avar arrpv))
+        D.Shape (Left avar) -> A.Shape (fromJust (checkLocal matchArraysR avar arrpv))
+        D.Shape (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate laben in array var position"
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e pv) body

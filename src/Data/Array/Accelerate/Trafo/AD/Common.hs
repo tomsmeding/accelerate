@@ -6,6 +6,7 @@ module Data.Array.Accelerate.Trafo.AD.Common where
 
 import Control.Monad.State.Strict
 import Data.Char (isDigit)
+import Data.Dependent.Map (DMap)
 import Data.GADT.Compare
 import Data.GADT.Show
 import Data.Typeable ((:~:)(Refl))
@@ -176,3 +177,21 @@ lpushLabTup labelenv (LeftHandSideSingle _) (TupRsingle lab) = LPush labelenv la
 lpushLabTup labelenv (LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) =
     lpushLabTup (lpushLabTup labelenv lhs1 labs1) lhs2 labs2
 lpushLabTup _ _ _ = error "lpushLabTup: impossible GADTs"
+
+
+data PD a = P a | D a
+  deriving (Show, Eq, Ord)
+
+-- Expression node labels are of tuple type and have a PD tag.
+-- Scalar value labels have no tag.
+-- Since the Let bindings are on the scalar level (because Accelerate forces
+--   tuple-destructuring), the labels in the environment are scalar labels.
+--   These thus also have no tag.
+data Context s lab env =
+    Context (LabVal s lab env)
+            (DMap (DLabel (TupR s) (PD lab))
+                  (TupR (DLabel s lab)))
+
+
+-- TODO: make this 'type AnyLabel s lab = Some (DLabel s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
+data AnyLabel s lab = forall t. AnyLabel (DLabel s lab t)

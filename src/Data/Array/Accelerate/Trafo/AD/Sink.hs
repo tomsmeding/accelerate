@@ -42,7 +42,8 @@ sinkExpAenv k (PrimApp ty op e) = PrimApp ty op (sinkExpAenv k e)
 sinkExpAenv k (Pair ty e1 e2) = Pair ty (sinkExpAenv k e1) (sinkExpAenv k e2)
 sinkExpAenv _ Nil = Nil
 sinkExpAenv k (Cond ty c t e) = Cond ty (sinkExpAenv k c) (sinkExpAenv k t) (sinkExpAenv k e)
-sinkExpAenv k (Shape (A.Var sht idx)) = Shape (A.Var sht (k A.>:> idx))
+sinkExpAenv k (Shape (Left (A.Var sht idx))) = Shape (Left (A.Var sht (k A.>:> idx)))
+sinkExpAenv _ (Shape (Right lab)) = Shape (Right lab)
 sinkExpAenv k (Get ty ti e) = Get ty ti (sinkExpAenv k e)
 sinkExpAenv k (Let lhs rhs e) = Let lhs (sinkExpAenv k rhs) (sinkExpAenv k e)
 sinkExpAenv _ (Var (A.Var sty idx)) = Var (A.Var sty idx)
@@ -134,7 +135,8 @@ eCheckAClosedInTagval tv expr = case expr of
     PrimApp ty op e -> PrimApp ty op <$> eCheckAClosedInTagval tv e
     Pair ty e1 e2 -> Pair ty <$> eCheckAClosedInTagval tv e1 <*> eCheckAClosedInTagval tv e2
     Nil -> Just Nil
-    Shape var -> Shape <$> aCheckLocal var tv
+    Shape (Left var) -> Shape . Left <$> aCheckLocal var tv
+    Shape (Right _) -> error "Exp with label in arrayvar position is not closed, todo?"
     Cond ty c t e -> Cond ty <$> eCheckAClosedInTagval tv c <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckAClosedInTagval tv e
     Let lhs rhs e -> Let lhs <$> eCheckAClosedInTagval tv rhs <*> eCheckAClosedInTagval tv e
