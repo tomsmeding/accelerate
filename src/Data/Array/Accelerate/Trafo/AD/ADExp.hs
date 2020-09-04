@@ -189,7 +189,7 @@ splitLambdaAD (Context alabelenv abindmap) (Lam paramlhs (Body expr))
   = let transformedExp = evalIdGen $ do
             exploded@(_, _, argLabelMap) <- explode LEmpty labelisedExpr
             traceM ("exploded: " ++ showExploded exploded)
-            primal exploded $ \context ->
+            primalCPS exploded $ \context ->
                 trace ("\ncontext in core: " ++ showContext context) $
                 case constructPrimalBundle context of
                     PrimalBundle vars instantiator -> return (evars vars)  -- TODO: do something with instantiator; I can't seem to extract it from the core
@@ -446,61 +446,75 @@ showBindmap bindmap =
 primaldual :: Exploded aenv Int args Float
            -> (forall env. EContext Int env -> IdGen (OpenExp env aenv (PD Int) args t))
            -> IdGen (Exp aenv (PD Int) args t)
-primaldual exploded cont = primal exploded (\ctx -> dual exploded ctx cont)
+primaldual exploded cont = primalCPS exploded (\ctx -> dual exploded ctx cont)
+
+-- Resulting computation will only use P, never D
+primalCPS :: Exploded aenv Int args res
+          -> (forall env. EContext Int env -> IdGen (OpenExp env aenv (PD Int) args t))
+          -> IdGen (Exp aenv (PD Int) args t)
+primalCPS exploded cont = do
+    PrimalResult ctx' builder <- primal exploded
+    builder <$> cont ctx'
+
+-- Before, the primal computation generator function was in CPS form, taking a
+-- continuation instead of returning a datatype containing an existential.
+-- (Note the duality between those two approaches.) Because I needed to
+-- integrate 'primal' into code that was not written in CPS style, but still
+-- needed to put nontrivial information in the core, I re-wrote primal to
+-- return existentials instead of take a continuation.
+data PrimalResult env aenv args =
+    forall env'.
+        PrimalResult (EContext Int env')
+                     (forall res. OpenExp env' aenv (PD Int) args res -> OpenExp env aenv (PD Int) args res)
 
 -- Resulting computation will only use P, never D
 primal :: Exploded aenv Int args res
-       -> (forall env. EContext Int env -> IdGen (OpenExp env aenv (PD Int) args t))
-       -> IdGen (Exp aenv (PD Int) args t)
+       -> IdGen (PrimalResult () aenv args)
 primal (endlab, nodemap, _) = primal' nodemap endlab (Context LEmpty mempty)
 
 primal' :: DMap (EDLabelT Int) (Exp aenv Int args)
         -> EDLabelT Int t
         -> EContext Int env
-        -> (forall env'. EContext Int env' -> IdGen (OpenExp env' aenv (PD Int) args res))
-        -> IdGen (OpenExp env aenv (PD Int) args res)
-primal' nodemap lbl (Context labelenv bindmap) cont
+        -> IdGen (PrimalResult env aenv args)
+primal' nodemap lbl (Context labelenv bindmap)
 --   | trace ("primal': computing " ++ show lbl) False = undefined
   | fmapLabel P lbl `DMap.member` bindmap =
-      cont (Context labelenv bindmap)
+      return $ PrimalResult (Context labelenv bindmap) id
   | not (uniqueLabVal labelenv) =  -- TODO: remove this check
       error "Non-unique label valuation in primal'!"
   | otherwise =
       case nodemap `dmapFind` lbl of
           Const ty value -> do
               lblS <- genSingleId ty
-              Let (A.LeftHandSideSingle ty) (Const ty value)
-                  <$> cont (Context (LPush labelenv lblS)
-                                    (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
+              return $ PrimalResult (Context (LPush labelenv lblS) (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
+                                    (Let (A.LeftHandSideSingle ty) (Const ty value))
 
-          Pair _ (Label arglab1) (Label arglab2) ->
-              primal' nodemap arglab1 (Context labelenv bindmap) $ \ctx1 ->
-              primal' nodemap arglab2 ctx1 $ \(Context labelenv' bindmap') ->
-                  let labs = TupRpair (bindmap' `dmapFind` fmapLabel P arglab1)
-                                      (bindmap' `dmapFind` fmapLabel P arglab2)
-                  in -- Note: We don't re-bind the constructed tuple into a new let
-                     -- binding with fresh labels here; we just point the tuple label
-                     -- for this Pair expression node to the pre-existing scalar labels.
-                     cont (Context labelenv'
-                                   (DMap.insert (fmapLabel P lbl) labs bindmap'))
+          Pair _ (Label arglab1) (Label arglab2) -> do
+              PrimalResult ctx1 f1 <- primal' nodemap arglab1 (Context labelenv bindmap)
+              PrimalResult (Context labelenv' bindmap') f2 <- primal' nodemap arglab2 ctx1
+              -- Note: We don't re-bind the constructed tuple into a new let
+              -- binding with fresh labels here; we just point the tuple label
+              -- for this Pair expression node to the pre-existing scalar labels.
+              let labs = TupRpair (bindmap' `dmapFind` fmapLabel P arglab1)
+                                  (bindmap' `dmapFind` fmapLabel P arglab2)
+              return $ PrimalResult (Context labelenv' (DMap.insert (fmapLabel P lbl) labs bindmap'))
+                                    (f1 . f2)
 
           Nil ->
               -- No scalar labels are allocated for a Nil node, but we should still
               -- record that empty set of labels.
-              cont (Context labelenv
-                            (DMap.insert (fmapLabel P lbl) TupRunit bindmap))
+              return $ PrimalResult (Context labelenv (DMap.insert (fmapLabel P lbl) TupRunit bindmap)) id
 
-          PrimApp restype oper (Label arglab) ->
-              primal' nodemap arglab (Context labelenv bindmap) $ \(Context labelenv' bindmap') ->
-                  let arglabs = bindmap' `dmapFind` fmapLabel P arglab
-                  in case elabValFinds labelenv' arglabs of
-                      Just vars -> do
-                          (GenLHS lhs, labs) <- genSingleIds restype
-                          Let lhs (PrimApp restype oper (evars vars))
-                              <$> cont (Context (lpushLabTup labelenv' lhs labs)
-                                                (DMap.insert (fmapLabel P lbl) labs bindmap'))
-                      Nothing ->
-                          error "primal: App argument did not compute argument"
+          PrimApp restype oper (Label arglab) -> do
+              PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
+              let arglabs = bindmap' `dmapFind` fmapLabel P arglab
+              case elabValFinds labelenv' arglabs of
+                  Just vars -> do
+                      (GenLHS lhs, labs) <- genSingleIds restype
+                      return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
+                                            (f1 . Let lhs (PrimApp restype oper (evars vars)))
+                  Nothing ->
+                      error "primal: App argument did not compute argument"
 
           -- TODO: inlining of the produced halves into the branches of the
           -- generated Cond operation, so that the halves are really only
@@ -510,47 +524,43 @@ primal' nodemap lbl (Context labelenv bindmap) cont
           -- Because both t and e are shared, they cannot be inlined, and will
           -- thus always be computed, even if in the end only one is needed in
           -- all situations. But then, don't write code like that.
-          Cond restype (Label condlab) (Label thenlab) (Label elselab) ->
-              primal' nodemap condlab (Context labelenv bindmap) $ \ctx1 ->
-              primal' nodemap thenlab ctx1 $ \ctx2 ->
-              primal' nodemap elselab ctx2 $ \(Context labelenv' bindmap') ->
-                  let condlabs = bindmap' `dmapFind` fmapLabel P condlab
-                      thenlabs = bindmap' `dmapFind` fmapLabel P thenlab
-                      elselabs = bindmap' `dmapFind` fmapLabel P elselab
-                  in case (elabValFinds labelenv' condlabs
-                          ,elabValFinds labelenv' thenlabs
-                          ,elabValFinds labelenv' elselabs) of
-                      (Just condvars, Just thenvars, Just elsevars) -> do
-                          (GenLHS lhs, labs) <- genSingleIds restype
-                          Let lhs (Cond restype (evars condvars) (evars thenvars) (evars elsevars))
-                              <$> cont (Context (lpushLabTup labelenv' lhs labs)
-                                                (DMap.insert (fmapLabel P lbl) labs bindmap'))
-                      _ ->
-                          error "primal: Cond arguments did not compute arguments"
+          Cond restype (Label condlab) (Label thenlab) (Label elselab) -> do
+              PrimalResult ctx1 f1 <- primal' nodemap condlab (Context labelenv bindmap)
+              PrimalResult ctx2 f2 <- primal' nodemap thenlab ctx1
+              PrimalResult (Context labelenv' bindmap') f3 <- primal' nodemap elselab ctx2
+              let condlabs = bindmap' `dmapFind` fmapLabel P condlab
+                  thenlabs = bindmap' `dmapFind` fmapLabel P thenlab
+                  elselabs = bindmap' `dmapFind` fmapLabel P elselab
+              case (elabValFinds labelenv' condlabs
+                   ,elabValFinds labelenv' thenlabs
+                   ,elabValFinds labelenv' elselabs) of
+                  (Just condvars, Just thenvars, Just elsevars) -> do
+                      (GenLHS lhs, labs) <- genSingleIds restype
+                      return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
+                                            (f1 . f2 . f3 . Let lhs (Cond restype (evars condvars) (evars thenvars) (evars elsevars)))
+                  _ ->
+                      error "primal: Cond arguments did not compute arguments"
 
-          Get _ path (Label arglab) ->
-              primal' nodemap arglab (Context labelenv bindmap) $ \(Context labelenv' bindmap') ->
-                  let pickedlabs = pickDLabels path (bindmap' `dmapFind` fmapLabel P arglab)
-                  in -- Note: We don't re-bind the picked tuple into a new let binding
-                     -- with fresh labels here; we just point the tuple label for this
-                     -- Get expression node to the pre-existing scalar labels.
-                     cont (Context labelenv'
-                                   (DMap.insert (fmapLabel P lbl) pickedlabs bindmap'))
+          Get _ path (Label arglab) -> do
+              PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
+              let pickedlabs = pickDLabels path (bindmap' `dmapFind` fmapLabel P arglab)
+              -- Note: We don't re-bind the picked tuple into a new let binding
+              -- with fresh labels here; we just point the tuple label for this
+              -- Get expression node to the pre-existing scalar labels.
+              return $ PrimalResult (Context labelenv' (DMap.insert (fmapLabel P lbl) pickedlabs bindmap')) f1
 
           Arg ty idx -> do
               labS <- genSingleId ty
-              Let (A.LeftHandSideSingle ty) (Arg ty idx)
-                  <$> cont (Context (LPush labelenv labS)
-                                    (DMap.insert (fmapLabel P lbl) (TupRsingle labS) bindmap))
+              return $ PrimalResult (Context (LPush labelenv labS) (DMap.insert (fmapLabel P lbl) (TupRsingle labS) bindmap))
+                                    (Let (A.LeftHandSideSingle ty) (Arg ty idx))
 
-          Label arglab ->
-              primal' nodemap arglab (Context labelenv bindmap) $ \(Context labelenv' bindmap') ->
-                  let arglabs = bindmap' `dmapFind` fmapLabel P arglab
-                  in -- Note: We don't re-bind the labeled tuple into a new let binding
-                     -- with fresh labels here; we just point the tuple label for this
-                     -- Label expression node to the pre-existing scalar labels.
-                     cont (Context labelenv'
-                                   (DMap.insert (fmapLabel P lbl) arglabs bindmap'))
+          Label arglab -> do
+              PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
+              let arglabs = bindmap' `dmapFind` fmapLabel P arglab
+              -- Note: We don't re-bind the labeled tuple into a new let binding
+              -- with fresh labels here; we just point the tuple label for this
+              -- Label expression node to the pre-existing scalar labels.
+              return $ PrimalResult (Context labelenv' (DMap.insert (fmapLabel P lbl) arglabs bindmap')) f1
 
           _ ->
               error "primal: Unexpected node shape in Exploded"
