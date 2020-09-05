@@ -197,10 +197,10 @@ reverseADA paramlhs expr
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
-realiseArgs :: OpenAcc () lab args t -> A.ALeftHandSide t () args -> OpenAcc args lab () t
+realiseArgs :: OpenAcc () lab args res -> A.ALeftHandSide t () args -> OpenAcc args lab () res
 realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
   where
-    go :: args A.:> aenv' -> aenv A.:> aenv' -> OpenAcc aenv lab args t -> OpenAcc aenv' lab () t
+    go :: args A.:> aenv' -> aenv A.:> aenv' -> OpenAcc aenv lab args res -> OpenAcc aenv' lab () res
     go argWeaken varWeaken expr = case expr of
         Aconst ty x -> Aconst ty x
         Apair ty e1 e2 -> Apair ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)

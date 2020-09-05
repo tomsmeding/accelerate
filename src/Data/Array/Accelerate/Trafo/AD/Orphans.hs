@@ -6,6 +6,7 @@ module Data.Array.Accelerate.Trafo.AD.Orphans where
 import Data.GADT.Compare
 import Data.Type.Equality
 
+import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Shape
@@ -68,6 +69,13 @@ instance GEq s => GEq (TupR s) where
   geq (TupRpair t1 u1) (TupRpair t2 u2)
     | Just Refl <- geq t1 t2
     , Just Refl <- geq u1 u2
+    = Just Refl
+  geq _ _ = Nothing
+
+instance GEq s => GEq (Var s env) where
+  geq (Var t1 i1) (Var t2 i2)
+    | Just Refl <- geq t1 t2
+    , Just Refl <- geq i1 i2
     = Just Refl
   geq _ _ = Nothing
 
@@ -162,6 +170,16 @@ instance GCompare s => GCompare (TupR s) where
       GLT -> GLT
       GGT -> GGT
       GEQ -> case gcompare u1 u2 of
+               GLT -> GLT
+               GGT -> GGT
+               GEQ -> GEQ
+
+instance GCompare s => GCompare (Var s env) where
+  gcompare (Var t1 i1) (Var t2 i2) =
+    case gcompare t1 t2 of
+      GLT -> GLT
+      GGT -> GGT
+      GEQ -> case gcompare i1 i2 of
                GLT -> GLT
                GGT -> GGT
                GEQ -> GEQ
