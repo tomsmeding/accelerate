@@ -116,7 +116,7 @@ data ReverseADResE aenv t = forall env. ReverseADResE (A.ELeftHandSide t () env)
 --   top, but really just shifts the environment. It should replace the Arg
 --   values with references to this extended part of the environment. The real
 --   LHS needs to be added by surrounding code.
-reverseAD :: A.ELeftHandSide t () env -> OpenExp env aenv unused () Float -> ReverseADResE aenv t
+reverseAD :: A.ELeftHandSide t () env -> OpenExp env aenv Int () Float -> ReverseADResE aenv t
 reverseAD paramlhs expr
   | ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
   , DeclareVars paramlhs'2 _ varsgen <- declareVars (A.lhsToTupR paramlhs)
@@ -173,10 +173,9 @@ data SplitLambdaAD t t' lab =
                       (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab (t' -> tmp -> t))
                       (TupR (DLabel ArrayR lab) fv)
 
-splitLambdaAD :: Ord lab
-              => Context ArrayR lab aenv
+splitLambdaAD :: Context ArrayR Int aenv
               -> Fun aenv unused (t -> t')
-              -> SplitLambdaAD t t' lab
+              -> SplitLambdaAD t t' (PD Int)
 splitLambdaAD (Context alabelenv abindmap) (Lam paramlhs (Body expr))
   | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- etypeOf expr
   , ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
@@ -185,17 +184,28 @@ splitLambdaAD (Context alabelenv abindmap) (Lam paramlhs (Body expr))
   , let argsRHS = varsToArgs (varsgen A.weakenId)
         closedExpr = Let paramlhs' argsRHS (generaliseArgs (sinkExp paramWeaken (generaliseLab expr)))
   , (labelisedExpr, fvlablist) <- W.runWriter (collectFreeAvars (Context alabelenv abindmap) closedExpr)
-  , TuplifyAvars fvavars fvlabs fvlhs <- tuplifyAvars fvlablist
-  = let transformedExp = evalIdGen $ do
-            exploded@(_, _, argLabelMap) <- explode LEmpty labelisedExpr
+  , TuplifyAvars _ fvlabs fvlhs <- tuplifyAvars fvlablist
+  = let fvlabsP = fmapTupR (fmapLabel P) fvlabs  -- the free variable labels, referring to P array labels instead of plain Int's
+        transformedExp = evalIdGen $ do
+            exploded@(reslab, _, argLabelMap) <- explode LEmpty labelisedExpr
             traceM ("exploded: " ++ showExploded exploded)
-            primalCPS exploded $ \context ->
-                trace ("\ncontext in core: " ++ showContext context) $
-                case constructPrimalBundle context of
-                    PrimalBundle vars instantiator -> return (evars vars)  -- TODO: do something with instantiator; I can't seem to extract it from the core
-    in trace ("AD result: " ++ show transformedExp) $
+            PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
+            traceM ("\ncontext in core: " ++ showContext context)
+            let reslabs = bindmap DMap.! fmapLabel P reslab
+            case elabValFinds labelenv reslabs of
+                Just resultvars -> case constructPrimalBundle context of
+                    PrimalBundle tmpvars instantiator ->
+                        let e' = builder (evars (TupRpair resultvars tmpvars))
+                           -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
+                        in return $ SplitLambdaAD (\fvavars ->
+                                                      Lam paramlhs' (Body (realiseArgs (inlineAvarLabels fvlabsP fvavars e') paramlhs')))
+                                                  undefined
+                                                  fvlabsP
+                Nothing ->
+                    error "Final primal value not computed"
+    in -- trace ("AD result: " ++ show transformedExp) $
        -- ReverseADResE paramlhs' (realiseArgs transformedExp paramlhs')
-       undefined
+       transformedExp
   | otherwise =
       internalError "Non-Float-producing lambdas under gradientA currently unsupported"
 splitLambdaAD _ _ =
@@ -217,6 +227,7 @@ collectFreeAvars ctx@(Context labelenv _) ex = case ex of
     Shape (Right _) -> error "Unexpected Shape(Label) in collectFreeAvars"
     Get ty ti e -> Get ty ti <$> collectFreeAvars ctx e
     Let lhs rhs e -> Let lhs <$> collectFreeAvars ctx rhs <*> collectFreeAvars ctx e
+    Arg _ _ -> return ex
     Var _ -> return ex
     Label _ -> return ex
 
@@ -233,8 +244,8 @@ data TuplifyAvars lab aenv =
 
 tuplifyAvars :: Ord lab => [AnyLabel ArrayR lab] -> TuplifyAvars lab aenv
 tuplifyAvars [] = TuplifyAvars (const TupRunit) TupRunit A.LeftHandSideUnit -- (const mempty)
-tuplifyAvars (AnyLabel lab@(DLabel ty@(ArrayR _ _) _) : labs)
-  | TuplifyAvars tupexprf labs lhs {-mpf-} <- tuplifyAvars labs
+tuplifyAvars (AnyLabel lab@(DLabel ty@(ArrayR _ _) _) : rest)
+  | TuplifyAvars tupexprf labs lhs {-mpf-} <- tuplifyAvars rest
   = TuplifyAvars (\w -> TupRpair (tupexprf (A.weakenSucc w))
                                  (TupRsingle (A.Var ty (w A.>:> ZeroIdx))))
                  (TupRpair labs (TupRsingle lab))
@@ -303,6 +314,33 @@ enumerateLabelenv = go A.weakenId
     go _ LEmpty = []
     go w (LPush labelenv lab) = (lab :=> w A.>:> ZeroIdx) : go (A.weakenSucc w) labelenv
 
+inlineAvarLabels :: Ord lab => TupR (DLabel ArrayR lab) fv -> A.ArrayVars aenv' fv -> OpenExp env aenv lab args t -> OpenExp env aenv' lab args t
+inlineAvarLabels labs vars = go (buildVarLabMap labs vars)
+  where
+    buildVarLabMap :: Ord lab => TupR (DLabel ArrayR lab) fv -> A.ArrayVars aenv' fv -> DMap (DLabel ArrayR lab) (A.ArrayVar aenv')
+    buildVarLabMap TupRunit TupRunit = mempty
+    buildVarLabMap (TupRsingle lab) (TupRsingle var) = DMap.singleton lab var
+    buildVarLabMap (TupRpair l1 l2) (TupRpair v1 v2) =
+        DMap.unionWithKey (error "Overlapping labels in buildVarLabMap") (buildVarLabMap l1 v1) (buildVarLabMap l2 v2)
+    buildVarLabMap _ _ = error "Impossible GADTs"
+
+    go :: Ord lab => DMap (DLabel ArrayR lab) (A.ArrayVar aenv') -> OpenExp env aenv lab args t -> OpenExp env aenv' lab args t
+    go mp = \case
+        Const ty x -> Const ty x
+        PrimApp ty op ex -> PrimApp ty op (go mp ex)
+        Pair ty e1 e2 -> Pair ty (go mp e1) (go mp e2)
+        Nil -> Nil
+        Cond ty e1 e2 e3 -> Cond ty (go mp e1) (go mp e2) (go mp e3)
+        Shape (Right lab)
+          | Just var <- DMap.lookup lab mp -> Shape (Left var)
+          | otherwise -> error "inlineAvarLabels: Not all labels instantiated"
+        Shape (Left _) -> error "inlineAvarLabels: Array variable found in labelised expression"
+        Get ty tidx ex -> Get ty tidx (go mp ex)
+        Let lhs rhs ex -> Let lhs (go mp rhs) (go mp ex)
+        Var v -> Var v
+        Arg ty idx -> Arg ty idx
+        Label l -> Label l
+
 fmapTupR :: (forall t'. s t' -> s' t') -> TupR s t -> TupR s' t
 fmapTupR _ TupRunit = TupRunit
 fmapTupR f (TupRsingle x) = TupRsingle (f x)
@@ -310,10 +348,10 @@ fmapTupR f (TupRpair t1 t2) = TupRpair (fmapTupR f t1) (fmapTupR f t2)
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
-realiseArgs :: Exp aenv lab args t -> A.ELeftHandSide t () args -> OpenExp args aenv lab () t
+realiseArgs :: Exp aenv lab args res -> A.ELeftHandSide t () args -> OpenExp args aenv lab () res
 realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
   where
-    go :: args A.:> env' -> env A.:> env' -> OpenExp env aenv lab args t -> OpenExp env' aenv lab () t
+    go :: args A.:> env' -> env A.:> env' -> OpenExp env aenv lab args res -> OpenExp env' aenv lab () res
     go argWeaken varWeaken expr = case expr of
         Const ty x -> Const ty x
         PrimApp ty op ex -> PrimApp ty op (go argWeaken varWeaken ex)
@@ -333,12 +371,12 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- Map will NOT contain:
 -- - Let or Var
 -- - Label: the original expression should not have included Label
-explode :: ELabVal Int env -> OpenExp env aenv unused args t -> IdGen (Exploded aenv Int args t)
+explode :: ELabVal Int env -> OpenExp env aenv Int args t -> IdGen (Exploded aenv Int args t)
 explode labelenv e =
     trace ("explode: exploding " ++ showsExp (const "L?") 0 [] [] 9 e "") $
     explode' labelenv e
 
-explode' :: ELabVal Int env -> OpenExp env aenv unused args t -> IdGen (Exploded aenv Int args t)
+explode' :: ELabVal Int env -> OpenExp env aenv Int args t -> IdGen (Exploded aenv Int args t)
 explode' env = \case
     Const ty x -> do
         lab <- genId (TupRsingle ty)
@@ -375,6 +413,9 @@ explode' env = \case
     Shape (Left avar@(A.Var (ArrayR sht _) _)) -> do
         lab <- genId (shapeType sht)
         return (lab, DMap.singleton lab (Shape (Left avar)), mempty)
+    Shape (Right alab@(DLabel (ArrayR sht _) _)) -> do
+        lab <- genId (shapeType sht)
+        return (lab, DMap.singleton lab (Shape (Right alab)), mempty)
     Let lhs rhs body -> do
         (lab1, mp1, argmp1) <- explode' env rhs
         (_, labs) <- genSingleIds (etypeOf rhs)
