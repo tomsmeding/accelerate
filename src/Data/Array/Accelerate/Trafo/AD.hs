@@ -20,6 +20,7 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Shows
 import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
+import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
 
@@ -51,13 +52,16 @@ convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
       case AD.eCheckClosedInLHS lhs' (AD.translateExp body) of
           Just transBody
-            | AD.ReverseADResE lhs'' body' <- AD.reverseAD lhs' transBody
+            | AD.ReverseADResE lhs'' body' <- AD.reverseAD lhs' (transBody `withAlabType` ())
             , AD.UntranslateResultE lhs''' body'' <- AD.untranslateLHSboundExp lhs'' body' ->
                 Let lhs''' arg body''
           Nothing ->
               error "Body of gradientE not a closed expression"
   | otherwise =
       error "gradientE expression must produce Float, other types currently unsupported"
+  where
+    withAlabType :: AD.OpenExp env aenv lab alab args t -> alab -> AD.OpenExp env aenv lab alab args t
+    withAlabType = const
 convertExp e =
   internalError ("convertExp: Cannot convert Exp node <" ++ showExpOp e ++ ">")
 

@@ -21,7 +21,7 @@ import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 
 
-sinkExp :: env A.:> env' -> OpenExp env aenv lab args t -> OpenExp env' aenv lab args t
+sinkExp :: env A.:> env' -> OpenExp env aenv lab alab args t -> OpenExp env' aenv lab alab args t
 sinkExp _ (Const ty x) = Const ty x
 sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
 sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
@@ -36,7 +36,7 @@ sinkExp k (Var (A.Var sty idx)) = Var (A.Var sty (k A.>:> idx))
 sinkExp _ (Arg ty idx) = Arg ty idx
 sinkExp _ (Label lab) = Label lab
 
-sinkExpAenv :: aenv A.:> aenv' -> OpenExp env aenv lab args t -> OpenExp env aenv' lab args t
+sinkExpAenv :: aenv A.:> aenv' -> OpenExp env aenv lab alab args t -> OpenExp env aenv' lab alab args t
 sinkExpAenv _ (Const ty x) = Const ty x
 sinkExpAenv k (PrimApp ty op e) = PrimApp ty op (sinkExpAenv k e)
 sinkExpAenv k (Pair ty e1 e2) = Pair ty (sinkExpAenv k e1) (sinkExpAenv k e2)
@@ -50,11 +50,11 @@ sinkExpAenv _ (Var (A.Var sty idx)) = Var (A.Var sty idx)
 sinkExpAenv _ (Arg ty idx) = Arg ty idx
 sinkExpAenv _ (Label lab) = Label lab
 
-sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab t -> OpenFun env aenv' lab t
+sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab alab t -> OpenFun env aenv' lab alab t
 sinkFunAenv k (Lam lhs fun) = Lam lhs (sinkFunAenv k fun)
 sinkFunAenv k (Body e) = Body (sinkExpAenv k e)
 
-sinkAcc :: env A.:> env' -> OpenAcc env lab args t -> OpenAcc env' lab args t
+sinkAcc :: env A.:> env' -> OpenAcc env lab alab args t -> OpenAcc env' lab alab args t
 sinkAcc _ (Aconst ty x) = Aconst ty x
 sinkAcc k (Apair ty e1 e2) = Apair ty (sinkAcc k e1) (sinkAcc k e2)
 sinkAcc _ Anil = Anil
@@ -105,15 +105,15 @@ aCheckLocal (A.Var sty (A.SuccIdx idx)) (TPush tagval _)
 
 -- | If the expression is closed in env2, returns the re-typed expression;
 -- otherwise, returns Nothing.
-eCheckClosed :: OpenExp env aenv lab args t -> Maybe (OpenExp () aenv lab args t)
+eCheckClosed :: OpenExp env aenv lab alab args t -> Maybe (OpenExp () aenv lab alab args t)
 eCheckClosed = eCheckClosedInTagval TEmpty
 
 eCheckClosedInLHS :: A.ELeftHandSide t' () env
-                  -> OpenExp env2 aenv lab args t
-                  -> Maybe (OpenExp env aenv lab args t)
+                  -> OpenExp env2 aenv lab alab args t
+                  -> Maybe (OpenExp env aenv lab alab args t)
 eCheckClosedInLHS lhs expr = eCheckClosedInTagval (valPushLHS lhs TEmpty) expr
 
-eCheckClosedInTagval :: TagVal A.TypeR env2 -> OpenExp env aenv lab args t -> Maybe (OpenExp env2 aenv lab args t)
+eCheckClosedInTagval :: TagVal A.TypeR env2 -> OpenExp env aenv lab alab args t -> Maybe (OpenExp env2 aenv lab alab args t)
 eCheckClosedInTagval tv expr = case expr of
     Const ty x -> Just (Const ty x)
     PrimApp ty op e -> PrimApp ty op <$> eCheckClosedInTagval tv e
@@ -129,7 +129,7 @@ eCheckClosedInTagval tv expr = case expr of
     Arg ty idx -> Just (Arg ty idx)
     Label lab -> Just (Label lab)
 
-eCheckAClosedInTagval :: TagVal A.ArraysR aenv2 -> OpenExp env aenv lab args t -> Maybe (OpenExp env aenv2 lab args t)
+eCheckAClosedInTagval :: TagVal A.ArraysR aenv2 -> OpenExp env aenv lab alab args t -> Maybe (OpenExp env aenv2 lab alab args t)
 eCheckAClosedInTagval tv expr = case expr of
     Const ty x -> Just (Const ty x)
     PrimApp ty op e -> PrimApp ty op <$> eCheckAClosedInTagval tv e
@@ -144,21 +144,21 @@ eCheckAClosedInTagval tv expr = case expr of
     Arg ty idx -> Just (Arg ty idx)
     Label lab -> Just (Label lab)
 
-efCheckAClosedInTagval :: TagVal A.ArraysR aenv2 -> OpenFun env aenv lab t -> Maybe (OpenFun env aenv2 lab t)
+efCheckAClosedInTagval :: TagVal A.ArraysR aenv2 -> OpenFun env aenv lab alab t -> Maybe (OpenFun env aenv2 lab alab t)
 efCheckAClosedInTagval tv (Lam lhs fun) = Lam lhs <$> efCheckAClosedInTagval tv fun
 efCheckAClosedInTagval tv (Body e) = Body <$> eCheckAClosedInTagval tv e
 
 -- | If the expression is closed in env2, returns the re-typed expression;
 -- otherwise, returns Nothing.
-aCheckClosed :: OpenAcc env lab args t -> Maybe (OpenAcc () lab args t)
+aCheckClosed :: OpenAcc env lab alab args t -> Maybe (OpenAcc () lab alab args t)
 aCheckClosed = aCheckClosedInTagval TEmpty
 
 aCheckClosedInLHS :: A.ALeftHandSide t' () env
-                  -> OpenAcc env2 lab args t
-                  -> Maybe (OpenAcc env lab args t)
+                  -> OpenAcc env2 lab alab args t
+                  -> Maybe (OpenAcc env lab alab args t)
 aCheckClosedInLHS lhs expr = aCheckClosedInTagval (valPushLHS lhs TEmpty) expr
 
-aCheckClosedInTagval :: TagVal A.ArraysR env2 -> OpenAcc env lab args t -> Maybe (OpenAcc env2 lab args t)
+aCheckClosedInTagval :: TagVal A.ArraysR env2 -> OpenAcc env lab alab args t -> Maybe (OpenAcc env2 lab alab args t)
 aCheckClosedInTagval tv expr = case expr of
     Aconst ty x -> Just (Aconst ty x)
     Apair ty e1 e2 -> Apair ty <$> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2

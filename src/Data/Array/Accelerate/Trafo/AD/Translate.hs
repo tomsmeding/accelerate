@@ -23,7 +23,7 @@ import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as D
 
 
-translateAcc :: A.OpenAcc aenv t -> D.OpenAcc aenv lab args t
+translateAcc :: A.OpenAcc aenv t -> D.OpenAcc aenv lab alab args t
 translateAcc (A.OpenAcc expr) = case expr of
     A.Use ty arr -> D.Aconst ty arr
     A.Apair e1 e2 ->
@@ -40,11 +40,11 @@ translateAcc (A.OpenAcc expr) = case expr of
     A.Avar var -> D.Avar var
     _ -> internalError ("AD.translateAcc: Cannot perform AD on Acc node <" ++ A.showPreAccOp expr ++ ">")
 
-translateFun :: A.OpenFun env aenv t -> D.OpenFun env aenv lab t
+translateFun :: A.OpenFun env aenv t -> D.OpenFun env aenv lab alab t
 translateFun (A.Lam lhs fun) = D.Lam lhs (translateFun fun)
 translateFun (A.Body e) = D.Body (translateExp e)
 
-translateExp :: A.OpenExp env aenv t -> D.OpenExp env aenv lab args t
+translateExp :: A.OpenExp env aenv t -> D.OpenExp env aenv lab alab args t
 translateExp expr = case expr of
     A.Const ty con -> D.Const ty con
     A.PrimApp f e -> D.PrimApp (A.expType expr) f (translateExp e)
@@ -68,13 +68,13 @@ data UntranslateResultE a env aenv t =
     forall env'. UntranslateResultE (A.ELeftHandSide a env env') (A.OpenExp env' aenv t)
 
 untranslateLHSboundExp :: A.ELeftHandSide a () env
-                       -> D.OpenExp env aenv lab args t
+                       -> D.OpenExp env aenv lab alab args t
                        -> UntranslateResultE a env1 aenv t
 untranslateLHSboundExp toplhs topexpr
   | D.GenLHS toplhs' <- D.generaliseLHS toplhs =
       UntranslateResultE toplhs' (go topexpr (pvalPushLHS toplhs' PTEmpty))
   where
-    go :: D.OpenExp env aenv lab args t -> PartialVal ScalarType topenv env2 -> A.OpenExp env2 aenv t
+    go :: D.OpenExp env aenv lab alab args t -> PartialVal ScalarType topenv env2 -> A.OpenExp env2 aenv t
     go expr pv = case expr of
         D.Const ty con -> A.Const ty con
         D.PrimApp _ f e -> A.PrimApp f (go e pv)
@@ -93,16 +93,16 @@ untranslateLHSboundExp toplhs topexpr
         D.Arg _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
         D.Label _ -> internalError "AD.untranslateLHSboundExp: Unexpected Label in untranslate!"
 
-untranslateLHSboundExpA :: forall a env env1 lab args t aenv topaenv aenv2.
+untranslateLHSboundExpA :: forall a env env1 lab alab args t aenv topaenv aenv2.
                            A.ELeftHandSide a () env
-                        -> D.OpenExp env aenv lab args t
+                        -> D.OpenExp env aenv lab alab args t
                         -> PartialVal ArrayR topaenv aenv2
                         -> UntranslateResultE a env1 aenv2 t
 untranslateLHSboundExpA toplhs topexpr arrpv
   | D.GenLHS toplhs' <- D.generaliseLHS toplhs =
       UntranslateResultE toplhs' (go topexpr (pvalPushLHS toplhs' PTEmpty))
   where
-    go :: D.OpenExp env' aenv lab args t' -> PartialVal ScalarType topenv env2 -> A.OpenExp env2 aenv2 t'
+    go :: D.OpenExp env' aenv lab alab args t' -> PartialVal ScalarType topenv env2 -> A.OpenExp env2 aenv2 t'
     go expr pv = case expr of
         D.Const ty con -> A.Const ty con
         D.PrimApp _ f e -> A.PrimApp f (go e pv)
@@ -121,7 +121,7 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Arg _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
         D.Label _ -> internalError "AD.untranslateLHSboundExp: Unexpected Label in untranslate!"
 
-untranslateClosedExp :: forall lab args t aenv. D.OpenExp () aenv lab args t -> A.OpenExp () aenv t
+untranslateClosedExp :: forall lab alab args t aenv. D.OpenExp () aenv lab alab args t -> A.OpenExp () aenv t
 untranslateClosedExp expr
   | UntranslateResultE A.LeftHandSideUnit res <-
         untranslateLHSboundExp A.LeftHandSideUnit expr
@@ -129,8 +129,8 @@ untranslateClosedExp expr
   = res
 untranslateClosedExp _ = error "unreachable"
 
-untranslateClosedExpA :: forall lab args t topaenv aenv aenv2.
-                         D.OpenExp () aenv lab args t
+untranslateClosedExpA :: forall aenv lab alab args t topaenv aenv2.
+                         D.OpenExp () aenv lab alab args t
                       -> PartialVal ArrayR topaenv aenv2
                       -> A.OpenExp () aenv2 t
 untranslateClosedExpA expr arrpv
@@ -143,12 +143,12 @@ untranslateClosedExpA _ _ = error "unreachable"
 data UntranslateFunResultE a env aenv t =
     forall env'. UntranslateFunResultE (A.ELeftHandSide a env env') (A.OpenFun env' aenv t)
 
-untranslateClosedFun :: forall lab t aenv. D.OpenFun () aenv lab t -> A.OpenFun () aenv t
+untranslateClosedFun :: forall lab alab t aenv. D.OpenFun () aenv lab alab t -> A.OpenFun () aenv t
 untranslateClosedFun topfun
   | UntranslateFunResultE A.LeftHandSideUnit fun' <- go A.LeftHandSideUnit topfun
   = fun'
   where
-    go :: A.ELeftHandSide a () env -> D.OpenFun env aenv lab t' -> UntranslateFunResultE a () aenv t'
+    go :: A.ELeftHandSide a () env -> D.OpenFun env aenv lab alab t' -> UntranslateFunResultE a () aenv t'
     go lhs (D.Lam bindings fun)
       | UntranslateFunResultE (A.LeftHandSidePair lhs' bindings') res
           <- go (A.LeftHandSidePair lhs bindings) fun
@@ -159,15 +159,15 @@ untranslateClosedFun topfun
     go _ _ = error "unreachable"
 untranslateClosedFun _ = error "unreachable"
 
-untranslateClosedFunA :: forall lab t topaenv aenv aenv2.
-                         D.OpenFun () aenv lab t
+untranslateClosedFunA :: forall lab alab t topaenv aenv aenv2.
+                         D.OpenFun () aenv lab alab t
                       -> PartialVal ArrayR topaenv aenv2
                       -> A.OpenFun () aenv2 t
 untranslateClosedFunA topfun arrpv
   | UntranslateFunResultE A.LeftHandSideUnit fun' <- go A.LeftHandSideUnit topfun
   = fun'
   where
-    go :: A.ELeftHandSide a () env -> D.OpenFun env aenv lab t' -> UntranslateFunResultE a () aenv2 t'
+    go :: A.ELeftHandSide a () env -> D.OpenFun env aenv lab alab t' -> UntranslateFunResultE a () aenv2 t'
     go lhs (D.Lam bindings fun)
       | UntranslateFunResultE (A.LeftHandSidePair lhs' bindings') res
           <- go (A.LeftHandSidePair lhs bindings) fun
@@ -182,13 +182,13 @@ data UntranslateResultA a aenv t =
     forall aenv'. UntranslateResultA (A.ALeftHandSide a aenv aenv') (A.OpenAcc aenv' t)
 
 untranslateLHSboundAcc :: A.ALeftHandSide a () aenv
-                       -> D.OpenAcc aenv lab args t
+                       -> D.OpenAcc aenv lab alab args t
                        -> UntranslateResultA a aenv1 t
 untranslateLHSboundAcc toplhs topexpr
   | D.GenLHS toplhs' <- D.generaliseLHS toplhs =
       UntranslateResultA toplhs' (go topexpr (pvalPushLHS toplhs' PTEmpty))
   where
-    go :: D.OpenAcc aenv lab args t -> PartialVal ArrayR topenv aenv2 -> A.OpenAcc aenv2 t
+    go :: D.OpenAcc aenv lab args alab t -> PartialVal ArrayR topenv aenv2 -> A.OpenAcc aenv2 t
     go expr pv = A.OpenAcc $ case expr of
         D.Aconst ty con -> A.Use ty con
         D.Avar var -> A.Avar (fromJust (checkLocal matchArraysR var pv))
