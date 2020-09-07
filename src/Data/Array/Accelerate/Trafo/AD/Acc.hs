@@ -71,6 +71,10 @@ data OpenAcc aenv lab alab args t where
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array sh e)
 
+    Sum     :: ArrayR (Array sh e)
+            -> OpenAcc aenv lab alab args (Array (sh, Int) e)
+            -> OpenAcc aenv lab alab args (Array sh e)
+
     Generate :: ArrayR (Array sh e)
              -> Exp aenv lab alab () sh
              -> ExpLambda1 aenv lab alab sh sh e
@@ -146,6 +150,10 @@ showsAcc labf alabf seed env d (Fold _ f me0 e) =
             showsLambda labf alabf seed [] env 11 f . showString " " .
             maybe id (\e0 -> showsExp labf alabf seed [] env 11 e0 . showString " ") me0 .
             showsAcc labf alabf seed env 11 e
+showsAcc labf alabf seed env d (Sum _ e) =
+    showParen (d > 10) $
+        showString "sum " .
+            showsAcc labf alabf seed env 11 e
 showsAcc labf alabf seed env d (Generate _ sh f) =
     showParen (d > 10) $
         showString "generate " .
@@ -208,6 +216,7 @@ atypeOf (Map ty _ _) = TupRsingle ty
 atypeOf (ZipWith ty _ _ _) = TupRsingle ty
 atypeOf (Generate ty _ _) = TupRsingle ty
 atypeOf (Fold ty _ _ _) = TupRsingle ty
+atypeOf (Sum ty _) = TupRsingle ty
 atypeOf (Aget ty _ _) = ty
 atypeOf (Alet _ _ body) = atypeOf body
 atypeOf (Avar (A.Var ty _)) = TupRsingle ty

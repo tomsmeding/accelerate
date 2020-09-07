@@ -48,6 +48,7 @@ sinkAcc k (Acond ty c t e) = Acond ty (sinkExpAenv k c) (sinkAcc k t) (sinkAcc k
 sinkAcc k (Map ty f e) = Map ty (sinkFunAenv k <$> f) (sinkAcc k e)
 sinkAcc k (ZipWith ty f e1 e2) = ZipWith ty (sinkFunAenv k <$> f) (sinkAcc k e1) (sinkAcc k e2)
 sinkAcc k (Fold ty f me0 e) = Fold ty (sinkFunAenv k <$> f) (sinkExpAenv k <$> me0) (sinkAcc k e)
+sinkAcc k (Sum ty e) = Sum ty (sinkAcc k e)
 sinkAcc k (Generate ty e f) = Generate ty (sinkExpAenv k e) (sinkFunAenv k <$> f)
 sinkAcc k (Aget ty ti e) = Aget ty ti (sinkAcc k e)
 sinkAcc k (Alet lhs rhs e)
@@ -143,6 +144,7 @@ aCheckClosedInTagval tv expr = case expr of
     Map ty f e -> Map ty <$> traverse (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e
     ZipWith ty f e1 e2 -> ZipWith ty <$> traverse (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
     Fold ty f me0 e -> Fold ty <$> traverse (efCheckAClosedInTagval tv) f <*> (eCheckAClosedInTagval tv <$> me0) <*> aCheckClosedInTagval tv e
+    Sum ty e -> Sum ty <$> aCheckClosedInTagval tv e
     Generate ty e f -> Generate ty <$> eCheckAClosedInTagval tv e <*> traverse (efCheckAClosedInTagval tv) f
     Aget ty ti e -> Aget ty ti <$> aCheckClosedInTagval tv e
     Alet lhs rhs e

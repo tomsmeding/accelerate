@@ -18,6 +18,7 @@ import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Trafo.AD.Acc as D
+import qualified Data.Array.Accelerate.Trafo.AD.Additive as D (zeroForType)
 import qualified Data.Array.Accelerate.Trafo.AD.Common as D
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
 
@@ -33,6 +34,13 @@ translateAcc (A.OpenAcc expr) = case expr of
     A.Map _ f e -> D.Map (A.arrayR expr) (Right $ translateFun f) (translateAcc e)
     A.ZipWith _ f e1 e2 ->
         D.ZipWith (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateAcc e1) (translateAcc e2)
+    A.Fold (A.Lam (A.LeftHandSideSingle t) (A.Lam (A.LeftHandSideSingle _)
+              (A.Body (A.PrimApp (A.PrimAdd _)
+                                 (A.Pair (A.Evar (A.Var _ (A.SuccIdx A.ZeroIdx)))
+                                         (A.Evar (A.Var _ A.ZeroIdx)))))))
+           (Just (A.Const _ x)) e
+      | isZeroConstant t x ->
+          D.Sum (A.arrayR expr) (translateAcc e)
     A.Fold f me0 e ->
         D.Fold (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
     A.Alet lhs def body -> D.Alet lhs (translateAcc def) (translateAcc body)
@@ -42,6 +50,10 @@ translateAcc (A.OpenAcc expr) = case expr of
     toPairedBinop :: D.OpenFun env aenv lab alab (t1 -> t2 -> t3) -> D.OpenFun env aenv lab alab ((t1, t2) -> t3)
     toPairedBinop (D.Lam lhs1 (D.Lam lhs2 (D.Body ex))) = D.Lam (A.LeftHandSidePair lhs1 lhs2) (D.Body ex)
     toPairedBinop _ = error "Impossible GADTs"
+
+    isZeroConstant :: ScalarType t -> t -> Bool
+    isZeroConstant (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) 0 = True
+    isZeroConstant _ _ = False
 
 translateFun :: A.OpenFun env aenv t -> D.OpenFun env aenv lab alab t
 translateFun (A.Lam lhs fun) = D.Lam lhs (translateFun fun)
@@ -204,6 +216,13 @@ untranslateLHSboundAcc toplhs topexpr
         D.Map (ArrayR _ ty) (Right f) e -> A.Map ty (untranslateClosedFunA f pv) (go e pv)
         D.ZipWith (ArrayR _ ty) (Right f) e1 e2 -> A.ZipWith ty (untranslateClosedFunA (fromPairedBinop f) pv) (go e1 pv) (go e2 pv)
         D.Fold _ (Right f) me0 e -> A.Fold (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go e pv)
+        D.Sum (ArrayR _ (TupRsingle ty@(SingleScalarType (NumSingleType nt)))) e ->
+            A.Fold (A.Lam (A.LeftHandSideSingle ty) (A.Lam (A.LeftHandSideSingle ty)
+                      (A.Body (A.PrimApp (A.PrimAdd nt)
+                                         (A.Pair (A.Evar (A.Var ty (A.SuccIdx A.ZeroIdx)))
+                                                 (A.Evar (A.Var ty A.ZeroIdx)))))))
+                   (Just (untranslateClosedExp (D.zeroForType ty)))
+                   (go e pv)
         D.Generate ty e (Right f) -> A.Generate ty (untranslateClosedExpA e pv) (untranslateClosedFunA f pv)
         D.Aget _ path e
           | LetBoundExpA lhs body <- auntranslateGet (D.atypeOf e) path
