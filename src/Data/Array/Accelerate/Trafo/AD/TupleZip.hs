@@ -12,7 +12,6 @@ import Data.Array.Accelerate.AST.Environment (weakenWithLHS, weakenId)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Exp
-import Data.Array.Accelerate.Trafo.AD.Sink
 import Data.Array.Accelerate.Trafo.Var
 
 

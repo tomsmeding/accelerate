@@ -20,7 +20,6 @@ import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Trafo.AD.Acc as D
 import qualified Data.Array.Accelerate.Trafo.AD.Common as D
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
-import qualified Data.Array.Accelerate.Trafo.AD.Sink as D
 
 
 translateAcc :: A.OpenAcc aenv t -> D.OpenAcc aenv lab alab args t
@@ -31,14 +30,18 @@ translateAcc (A.OpenAcc expr) = case expr of
     A.Anil -> D.Anil
     A.Acond c t e ->
         D.Acond (A.arraysR expr) (translateExp c) (translateAcc t) (translateAcc e)
-    A.Map _ f e -> D.Map (A.arrayR expr) (translateFun f) (translateAcc e)
+    A.Map _ f e -> D.Map (A.arrayR expr) (Right $ translateFun f) (translateAcc e)
     A.ZipWith _ f e1 e2 ->
-        D.ZipWith (A.arrayR expr) (translateFun f) (translateAcc e1) (translateAcc e2)
+        D.ZipWith (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateAcc e1) (translateAcc e2)
     A.Fold f me0 e ->
-        D.Fold (A.arrayR expr) (translateFun f) (translateExp <$> me0) (translateAcc e)
+        D.Fold (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
     A.Alet lhs def body -> D.Alet lhs (translateAcc def) (translateAcc body)
     A.Avar var -> D.Avar var
     _ -> internalError ("AD.translateAcc: Cannot perform AD on Acc node <" ++ A.showPreAccOp expr ++ ">")
+  where
+    toPairedBinop :: D.OpenFun env aenv lab alab (t1 -> t2 -> t3) -> D.OpenFun env aenv lab alab ((t1, t2) -> t3)
+    toPairedBinop (D.Lam lhs1 (D.Lam lhs2 (D.Body ex))) = D.Lam (A.LeftHandSidePair lhs1 lhs2) (D.Body ex)
+    toPairedBinop _ = error "Impossible GADTs"
 
 translateFun :: A.OpenFun env aenv t -> D.OpenFun env aenv lab alab t
 translateFun (A.Lam lhs fun) = D.Lam lhs (translateFun fun)
@@ -198,15 +201,19 @@ untranslateLHSboundAcc toplhs topexpr
         D.Anil -> A.Anil
         D.Apair _ e1 e2 -> A.Apair (go e1 pv) (go e2 pv)
         D.Acond _ e1 e2 e3 -> A.Acond (untranslateClosedExpA e1 pv) (go e2 pv) (go e3 pv)
-        D.Map (ArrayR _ ty) f e -> A.Map ty (untranslateClosedFunA f pv) (go e pv)
-        D.ZipWith (ArrayR _ ty) f e1 e2 -> A.ZipWith ty (untranslateClosedFunA f pv) (go e1 pv) (go e2 pv)
-        D.Fold _ f me0 e -> A.Fold (untranslateClosedFunA f pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go e pv)
-        D.Generate ty e f -> A.Generate ty (untranslateClosedExpA e pv) (untranslateClosedFunA f pv)
+        D.Map (ArrayR _ ty) (Right f) e -> A.Map ty (untranslateClosedFunA f pv) (go e pv)
+        D.ZipWith (ArrayR _ ty) (Right f) e1 e2 -> A.ZipWith ty (untranslateClosedFunA (fromPairedBinop f) pv) (go e1 pv) (go e2 pv)
+        D.Fold _ (Right f) me0 e -> A.Fold (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go e pv)
+        D.Generate ty e (Right f) -> A.Generate ty (untranslateClosedExpA e pv) (untranslateClosedFunA f pv)
         D.Aget _ path e
           | LetBoundExpA lhs body <- auntranslateGet (D.atypeOf e) path
           -> A.Alet lhs (go e pv) body
         D.Aarg _ _ -> internalError "AD.untranslateLHSboundAcc: Unexpected Arg in untranslate!"
         D.Alabel _ -> internalError "AD.untranslateLHSboundAcc: Unexpected Label in untranslate!"
+
+    fromPairedBinop :: D.OpenFun env aenv lab alab ((t1, t2) -> t3) -> D.OpenFun env aenv lab alab (t1 -> t2 -> t3)
+    fromPairedBinop (D.Lam (A.LeftHandSidePair lhs1 lhs2) (D.Body ex)) = D.Lam lhs1 (D.Lam lhs2 (D.Body ex))
+    fromPairedBinop _ = error "Impossible GADTs"
 
 checkLocal :: (forall t1 t2. TupR s t1 -> TupR s t2 -> Maybe (t1 :~: t2)) -> A.Var s env t -> PartialVal s topenv env2 -> Maybe (A.Var s env2 t)
 checkLocal _ _ PTEmpty = Nothing
@@ -219,6 +226,7 @@ checkLocal match (A.Var sty (A.SuccIdx idx)) (PTPush tagval _)
       Just (A.Var sty' (A.SuccIdx idx'))
   | otherwise = Nothing
 
+-- TODO: AD.Exp exports a similar type with the same name; however, this one is for the Accelerate AST, not the AD AST. Make that clear in the name.
 data LetBoundExpE env aenv t s =
     forall env'. LetBoundExpE (A.ELeftHandSide t env env') (A.OpenExp env' aenv s)
 
