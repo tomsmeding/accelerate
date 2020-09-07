@@ -10,6 +10,7 @@ import Data.Dependent.Map (DMap)
 import Data.GADT.Compare
 import Data.GADT.Show
 import Data.Typeable ((:~:)(Refl))
+import Data.Void
 
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Idx
@@ -104,6 +105,11 @@ showDLabel (DLabel ty lab) =
            then "L" ++ labshow ++ " :: " ++ show ty
            else labshow ++ " :: " ++ show ty
 
+fmapTupR :: (forall t'. s t' -> s' t') -> TupR s t -> TupR s' t
+fmapTupR _ TupRunit = TupRunit
+fmapTupR f (TupRsingle x) = TupRsingle (f x)
+fmapTupR f (TupRpair t1 t2) = TupRpair (fmapTupR f t1) (fmapTupR f t2)
+
 prjL :: Idx env t -> LabVal s lab env -> DLabel s lab t
 prjL ZeroIdx (LPush _ x) = x
 prjL (SuccIdx idx) (LPush env _) = prjL idx env
@@ -179,19 +185,38 @@ lpushLabTup labelenv (LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) =
 lpushLabTup _ _ _ = error "lpushLabTup: impossible GADTs"
 
 
-data PD a = P a | D a
+-- TODO: Is PDAux actually used anywhere? If not, remove the constructor and the other Aux stuff
+data PD tag a = P !a | D !a | PDAux !tag !a
   deriving (Show, Eq, Ord)
+
+type PDAuxTagExp = Void
+data PDAuxTagAcc = TmpTup
+  deriving (Show, Eq, Ord)
+
+type PDExp = PD PDAuxTagExp
+type PDAcc = PD PDAuxTagAcc
 
 -- Expression node labels are of tuple type and have a PD tag.
 -- Scalar value labels have no tag.
 -- Since the Let bindings are on the scalar level (because Accelerate forces
 --   tuple-destructuring), the labels in the environment are scalar labels.
 --   These thus also have no tag.
-data Context s lab env =
+data Context s tag lab env =
     Context (LabVal s lab env)
-            (DMap (DLabel (TupR s) (PD lab))
+            (DMap (DLabel (TupR s) (PD tag lab))
                   (TupR (DLabel s lab)))
 
 
 -- TODO: make this 'type AnyLabel s lab = Some (DLabel s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
 data AnyLabel s lab = forall t. AnyLabel (DLabel s lab t)
+
+
+data GenLHS s env t = forall env'. GenLHS (LeftHandSide s t env env')
+
+generaliseLHS :: LeftHandSide s t env1 env1' -> GenLHS s env2 t
+generaliseLHS (LeftHandSideWildcard ty) = GenLHS (LeftHandSideWildcard ty)
+generaliseLHS (LeftHandSideSingle ty) = GenLHS (LeftHandSideSingle ty)
+generaliseLHS (LeftHandSidePair lhs1 lhs2)
+  | GenLHS lhs1' <- generaliseLHS lhs1
+  , GenLHS lhs2' <- generaliseLHS lhs2 =
+      GenLHS (LeftHandSidePair lhs1' lhs2')

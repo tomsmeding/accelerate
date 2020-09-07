@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.Sink (
   sinkExp, sinkExpAenv, sinkFunAenv, sinkAcc,
@@ -20,21 +21,6 @@ import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 
-
-sinkExp :: env A.:> env' -> OpenExp env aenv lab alab args t -> OpenExp env' aenv lab alab args t
-sinkExp _ (Const ty x) = Const ty x
-sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
-sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
-sinkExp _ Nil = Nil
-sinkExp k (Cond ty c t e) = Cond ty (sinkExp k c) (sinkExp k t) (sinkExp k e)
-sinkExp _ (Shape var) = Shape var
-sinkExp k (Get ty ti e) = Get ty ti (sinkExp k e)
-sinkExp k (Let lhs rhs e)
-  | GenLHS lhs' <- generaliseLHS lhs =
-      Let lhs' (sinkExp k rhs) (sinkExp (A.sinkWithLHS lhs lhs' k) e)
-sinkExp k (Var (A.Var sty idx)) = Var (A.Var sty (k A.>:> idx))
-sinkExp _ (Arg ty idx) = Arg ty idx
-sinkExp _ (Label lab) = Label lab
 
 sinkExpAenv :: aenv A.:> aenv' -> OpenExp env aenv lab alab args t -> OpenExp env aenv' lab alab args t
 sinkExpAenv _ (Const ty x) = Const ty x
@@ -59,10 +45,10 @@ sinkAcc _ (Aconst ty x) = Aconst ty x
 sinkAcc k (Apair ty e1 e2) = Apair ty (sinkAcc k e1) (sinkAcc k e2)
 sinkAcc _ Anil = Anil
 sinkAcc k (Acond ty c t e) = Acond ty (sinkExpAenv k c) (sinkAcc k t) (sinkAcc k e)
-sinkAcc k (Map ty f e) = Map ty (sinkFunAenv k f) (sinkAcc k e)
-sinkAcc k (ZipWith ty f e1 e2) = ZipWith ty (sinkFunAenv k f) (sinkAcc k e1) (sinkAcc k e2)
-sinkAcc k (Fold ty f me0 e) = Fold ty (sinkFunAenv k f) (sinkExpAenv k <$> me0) (sinkAcc k e)
-sinkAcc k (Generate ty e f) = Generate ty (sinkExpAenv k e) (sinkFunAenv k f)
+sinkAcc k (Map ty f e) = Map ty (sinkFunAenv k <$> f) (sinkAcc k e)
+sinkAcc k (ZipWith ty f e1 e2) = ZipWith ty (sinkFunAenv k <$> f) (sinkAcc k e1) (sinkAcc k e2)
+sinkAcc k (Fold ty f me0 e) = Fold ty (sinkFunAenv k <$> f) (sinkExpAenv k <$> me0) (sinkAcc k e)
+sinkAcc k (Generate ty e f) = Generate ty (sinkExpAenv k e) (sinkFunAenv k <$> f)
 sinkAcc k (Aget ty ti e) = Aget ty ti (sinkAcc k e)
 sinkAcc k (Alet lhs rhs e)
   | GenLHS lhs' <- generaliseLHS lhs =
@@ -70,16 +56,6 @@ sinkAcc k (Alet lhs rhs e)
 sinkAcc k (Avar (A.Var sty idx)) = Avar (A.Var sty (k A.>:> idx))
 sinkAcc _ (Aarg ty idx) = Aarg ty idx
 sinkAcc _ (Alabel lab) = Alabel lab
-
-data GenLHS s env t = forall env'. GenLHS (A.LeftHandSide s t env env')
-
-generaliseLHS :: A.LeftHandSide s t env1 env1' -> GenLHS s env2 t
-generaliseLHS (A.LeftHandSideWildcard ty) = GenLHS (A.LeftHandSideWildcard ty)
-generaliseLHS (A.LeftHandSideSingle ty) = GenLHS (A.LeftHandSideSingle ty)
-generaliseLHS (A.LeftHandSidePair lhs1 lhs2)
-  | GenLHS lhs1' <- generaliseLHS lhs1
-  , GenLHS lhs2' <- generaliseLHS lhs2 =
-      GenLHS (A.LeftHandSidePair lhs1' lhs2')
 
 eCheckLocal :: A.ExpVar env t -> TagVal A.TypeR env2 -> Maybe (A.ExpVar env2 t)
 eCheckLocal _ TEmpty = Nothing
@@ -164,10 +140,10 @@ aCheckClosedInTagval tv expr = case expr of
     Apair ty e1 e2 -> Apair ty <$> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
     Anil -> Just Anil
     Acond ty c t e -> Acond ty <$> eCheckAClosedInTagval tv c <*> aCheckClosedInTagval tv t <*> aCheckClosedInTagval tv e
-    Map ty f e -> Map ty <$> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e
-    ZipWith ty f e1 e2 -> ZipWith ty <$> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
-    Fold ty f me0 e -> Fold ty <$> efCheckAClosedInTagval tv f <*> (eCheckAClosedInTagval tv <$> me0) <*> aCheckClosedInTagval tv e
-    Generate ty e f -> Generate ty <$> eCheckAClosedInTagval tv e <*> efCheckAClosedInTagval tv f
+    Map ty f e -> Map ty <$> traverse (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e
+    ZipWith ty f e1 e2 -> ZipWith ty <$> traverse (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
+    Fold ty f me0 e -> Fold ty <$> traverse (efCheckAClosedInTagval tv) f <*> (eCheckAClosedInTagval tv <$> me0) <*> aCheckClosedInTagval tv e
+    Generate ty e f -> Generate ty <$> eCheckAClosedInTagval tv e <*> traverse (efCheckAClosedInTagval tv) f
     Aget ty ti e -> Aget ty ti <$> aCheckClosedInTagval tv e
     Alet lhs rhs e
       | GenLHS lhs' <- generaliseLHS lhs ->

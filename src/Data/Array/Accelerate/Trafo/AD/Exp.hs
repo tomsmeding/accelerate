@@ -3,6 +3,7 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.Exp (
     module Data.Array.Accelerate.Trafo.AD.Exp,
     Idx(..), idxToInt
@@ -16,6 +17,9 @@ import Data.Array.Accelerate.Representation.Shape (shapeType)
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST as A
+import qualified Data.Array.Accelerate.AST.Environment as A
+import qualified Data.Array.Accelerate.AST.Idx as A
+import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.Analysis.Match
@@ -293,3 +297,67 @@ generaliseLabA (Let lhs rhs ex) = Let lhs (generaliseLabA rhs) (generaliseLabA e
 generaliseLabA (Var v) = Var v
 generaliseLabA (Arg ty idx) = Arg ty idx
 generaliseLabA (Label lab) = Label lab
+
+fmapAlabExp :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
+            -> OpenExp env aenv lab alab args t
+            -> OpenExp env aenv lab alab' args t
+fmapAlabExp f ex = case ex of
+    Const ty x -> Const ty x
+    PrimApp ty op e -> PrimApp ty op (fmapAlabExp f e)
+    Pair ty e1 e2 -> Pair ty (fmapAlabExp f e1) (fmapAlabExp f e2)
+    Nil -> Nil
+    Cond ty e1 e2 e3 -> Cond ty (fmapAlabExp f e1) (fmapAlabExp f e2) (fmapAlabExp f e3)
+    Shape ref -> Shape (f <$> ref)
+    Get ty ti e -> Get ty ti (fmapAlabExp f e)
+    Let lhs rhs e -> Let lhs (fmapAlabExp f rhs) (fmapAlabExp f e)
+    Arg ty idx -> Arg ty idx
+    Var var -> Var var
+    Label lab -> Label lab
+
+fmapAlabFun :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
+            -> OpenFun env aenv lab alab t
+            -> OpenFun env aenv lab alab' t
+fmapAlabFun f (Lam lhs fun) = Lam lhs (fmapAlabFun f fun)
+fmapAlabFun f (Body ex) = Body (fmapAlabExp f ex)
+
+data SplitLambdaAD t t' lab alab sh =
+    forall fv tmp.
+        SplitLambdaAD (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab (t -> (t', tmp)))
+                      (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab (t' -> tmp -> t))
+                      (TupR (DLabel ArrayR alab) fv)
+                      (TypeR tmp, DLabel ArrayR alab (Array sh tmp))
+
+fmapAlabSplitLambdaAD :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
+                      -> SplitLambdaAD t t' lab alab sh
+                      -> SplitLambdaAD t t' lab alab' sh
+fmapAlabSplitLambdaAD f (SplitLambdaAD f1 f2 tup (ty, lab)) =
+    SplitLambdaAD (fmapAlabFun f . f1) (fmapAlabFun f . f2)
+                  (fmapTupR f tup)
+                  (ty, f lab)
+
+data LetBoundExpE env aenv lab alab args t s =
+    forall env'. LetBoundExpE (A.ELeftHandSide t env env') (OpenExp env' aenv lab alab args s)
+
+elhsCopy :: TypeR t -> LetBoundExpE env aenv lab alab args t t
+elhsCopy TupRunit = LetBoundExpE (A.LeftHandSideWildcard TupRunit) Nil
+elhsCopy (TupRsingle sty) = LetBoundExpE (A.LeftHandSideSingle sty) (Var (A.Var sty A.ZeroIdx))
+elhsCopy (TupRpair t1 t2)
+  | LetBoundExpE lhs1 ex1 <- elhsCopy t1
+  , LetBoundExpE lhs2 ex2 <- elhsCopy t2
+  = let ex1' = sinkExp (A.weakenWithLHS lhs2) ex1
+    in LetBoundExpE (A.LeftHandSidePair lhs1 lhs2) (Pair (TupRpair t1 t2) ex1' ex2)
+
+sinkExp :: env A.:> env' -> OpenExp env aenv lab alab args t -> OpenExp env' aenv lab alab args t
+sinkExp _ (Const ty x) = Const ty x
+sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
+sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
+sinkExp _ Nil = Nil
+sinkExp k (Cond ty c t e) = Cond ty (sinkExp k c) (sinkExp k t) (sinkExp k e)
+sinkExp _ (Shape var) = Shape var
+sinkExp k (Get ty ti e) = Get ty ti (sinkExp k e)
+sinkExp k (Let lhs rhs e)
+  | GenLHS lhs' <- generaliseLHS lhs =
+      Let lhs' (sinkExp k rhs) (sinkExp (A.sinkWithLHS lhs lhs' k) e)
+sinkExp k (Var (A.Var sty idx)) = Var (A.Var sty (k A.>:> idx))
+sinkExp _ (Arg ty idx) = Arg ty idx
+sinkExp _ (Label lab) = Label lab

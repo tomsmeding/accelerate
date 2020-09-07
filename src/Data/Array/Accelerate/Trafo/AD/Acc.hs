@@ -31,6 +31,10 @@ type ADLabelT = DLabel ArraysR
 -- Array programs
 -- --------------
 
+type ExpLambda1 aenv lab alab sh t1 t2 =
+    Either (SplitLambdaAD t1 t2 lab alab sh)
+           (Fun aenv lab alab (t1 -> t2))
+
 -- TODO: Check how many reified types can be removed in this AST
 data OpenAcc aenv lab alab args t where
     Aconst  :: ArrayR (Array sh t)
@@ -51,25 +55,25 @@ data OpenAcc aenv lab alab args t where
             -> OpenAcc aenv lab alab args a
 
     Map     :: ArrayR (Array sh t2)
-            -> Fun aenv lab alab (t1 -> t2)
+            -> ExpLambda1 aenv lab alab sh t1 t2
             -> OpenAcc aenv lab alab args (Array sh t1)
             -> OpenAcc aenv lab alab args (Array sh t2)
 
     ZipWith :: ArrayR (Array sh t3)
-            -> Fun aenv lab alab (t1 -> t2 -> t3)
+            -> ExpLambda1 aenv lab alab sh (t1, t2) t3
             -> OpenAcc aenv lab alab args (Array sh t1)
             -> OpenAcc aenv lab alab args (Array sh t2)
             -> OpenAcc aenv lab alab args (Array sh t3)
 
     Fold    :: ArrayR (Array sh e)
-            -> Fun aenv lab alab (e -> e -> e)
+            -> ExpLambda1 aenv lab alab sh (e, e) e
             -> Maybe (Exp aenv lab alab () e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array sh e)
 
     Generate :: ArrayR (Array sh e)
              -> Exp aenv lab alab () sh
-             -> Fun aenv lab alab (sh -> e)
+             -> ExpLambda1 aenv lab alab sh sh e
              -> OpenAcc aenv lab alab args (Array sh e)
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
@@ -128,25 +132,25 @@ showsAcc labf alabf seed env d (Acond _ c t e) =
 showsAcc labf alabf seed env d (Map _ f e) =
     showParen (d > 10) $
         showString "map " .
-            showsFun labf alabf seed [] env 11 f . showString " " .
+            showsLambda labf alabf seed [] env 11 f . showString " " .
             showsAcc labf alabf seed env 11 e
 showsAcc labf alabf seed env d (ZipWith _ f e1 e2) =
     showParen (d > 10) $
         showString "zipWith " .
-            showsFun labf alabf seed [] env 11 f . showString " " .
+            showsLambda labf alabf seed [] env 11 f . showString " " .
             showsAcc labf alabf seed env 11 e1 . showString " " .
             showsAcc labf alabf seed env 11 e2
 showsAcc labf alabf seed env d (Fold _ f me0 e) =
     showParen (d > 10) $
         showString (maybe "fold1 " (const "fold ") me0) .
-            showsFun labf alabf seed [] env 11 f . showString " " .
+            showsLambda labf alabf seed [] env 11 f . showString " " .
             maybe id (\e0 -> showsExp labf alabf seed [] env 11 e0 . showString " ") me0 .
             showsAcc labf alabf seed env 11 e
 showsAcc labf alabf seed env d (Generate _ sh f) =
     showParen (d > 10) $
         showString "generate " .
             showsExp labf alabf seed [] env 11 sh . showString " " .
-            showsFun labf alabf seed [] env 11 f
+            showsLambda labf alabf seed [] env 11 f
 showsAcc labf alabf seed env d (Aget _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsAcc labf alabf seed env 10 e
   where
@@ -181,6 +185,10 @@ showsFun labf alabf seed env aenv d (Lam lhs fun) =
     in showParen (d > 0) $
         showString "\\" . showString descr .
         showString " -> " . showsFun labf alabf seed' env' aenv 0 fun
+
+showsLambda :: (lab -> String) -> (alab -> String) -> Int -> [String] -> [String] -> Int -> ExpLambda1 aenv lab alab sh t1 t2 -> ShowS
+showsLambda labf alabf seed env aenv d (Right fun) = showsFun labf alabf seed env aenv d fun
+showsLambda _ _ _ _ _ _ (Left _) = showString "{splitlambda}"
 
 instance (Show lab, Show alab) => Show (OpenAcc aenv lab alab args t) where
     showsPrec = showsAcc show show 0 []
