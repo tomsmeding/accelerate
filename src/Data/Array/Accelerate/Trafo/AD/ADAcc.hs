@@ -97,6 +97,7 @@ generaliseArgs (Acond ty e1 e2 e3) = Acond ty e1 (generaliseArgs e2) (generalise
 generaliseArgs (Map ty f e) = Map ty f (generaliseArgs e)
 generaliseArgs (ZipWith ty f e1 e2) = ZipWith ty f (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs (Fold ty f me0 a) = Fold ty f me0 (generaliseArgs a)
+generaliseArgs (Sum ty a) = Sum ty (generaliseArgs a)
 generaliseArgs (Generate ty she f) = Generate ty she f
 generaliseArgs (Aget ty path ex) = Aget ty path (generaliseArgs ex)
 generaliseArgs (Alet lhs rhs ex) = Alet lhs (generaliseArgs rhs) (generaliseArgs ex)
@@ -215,6 +216,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Map ty f e -> Map ty (sinkFunAenv varWeaken <$> f) (go argWeaken varWeaken e)
         ZipWith ty f e1 e2 -> ZipWith ty (sinkFunAenv varWeaken <$> f) (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
         Fold ty f me0 e -> Fold ty (sinkFunAenv varWeaken <$> f) (sinkExpAenv varWeaken <$> me0) (go argWeaken varWeaken e)
+        Sum ty e -> Sum ty (go argWeaken varWeaken e)
         Generate ty she f -> Generate ty (sinkExpAenv varWeaken she) (sinkFunAenv varWeaken <$> f)
         Aget ty tidx ex -> Aget ty tidx (go argWeaken varWeaken ex)
         Alet lhs rhs ex
@@ -290,6 +292,13 @@ explode' labelenv = \case
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
     Fold _ (Left _) _ _ -> error "explode: Unexpected Fold SplitLambdaAD"
+    Sum ty a -> do
+        (lab1, mp1, argmp1) <- explode' labelenv a
+        lab <- genId (TupRsingle ty)
+        let pruned = Sum ty (Alabel lab1)
+        let itemmp = DMap.singleton lab pruned
+            mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
+        return (lab, mp, argmp1)
     Generate _ _ _ -> error "explode: TODO Generate"
     Alet lhs rhs body -> do
         (lab1, mp1, argmp1) <- explode' labelenv rhs
@@ -486,6 +495,19 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                                                  (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap'))
                       _ ->
                           error "primal: Fold arguments did not compute arguments"
+
+          Sum restype (Alabel arglab) ->
+              primal' nodemap arglab (Context labelenv bindmap) $ \(Context labelenv' bindmap') ->
+                  let TupRsingle arglabS@(DLabel argtype _) = bindmap' `dmapFind` fmapLabel P arglab
+                  in case alabValFind labelenv' arglabS of
+                      Just argidx -> do
+                          lab <- genSingleId restype
+                          Alet (A.LeftHandSideSingle restype)
+                               (Sum restype (Avar (A.Var argtype argidx)))
+                               <$> cont (Context (LPush labelenv' lab)
+                                                 (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap'))
+                      _ ->
+                          error "primal: Sum arguments did not compute arguments"
 
           Aget _ path (Alabel arglab) ->
               primal' nodemap arglab (Context labelenv bindmap) $ \(Context labelenv' bindmap') ->
