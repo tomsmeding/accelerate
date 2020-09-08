@@ -323,7 +323,7 @@ fmapAlabFun f (Body ex) = Body (fmapAlabExp f ex)
 data SplitLambdaAD t t' lab alab sh =
     forall fv tmp.
         SplitLambdaAD (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab (t -> (t', tmp)))
-                      (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab (t' -> tmp -> t))
+                      (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab ((t', tmp) -> t))
                       (TupR (DLabel ArrayR alab) fv)
                       (TypeR tmp, DLabel ArrayR alab (Array sh tmp))
 
@@ -361,3 +361,21 @@ sinkExp k (Let lhs rhs e)
 sinkExp k (Var (A.Var sty idx)) = Var (A.Var sty (k A.>:> idx))
 sinkExp _ (Arg ty idx) = Arg ty idx
 sinkExp _ (Label lab) = Label lab
+
+expALabels :: OpenExp env aenv lab alab args t -> [AnyLabel ArrayR alab]
+expALabels (Const _ _) = []
+expALabels (PrimApp _ _ e) = expALabels e
+expALabels (Pair _ e1 e2) = expALabels e1 ++ expALabels e2
+expALabels Nil = []
+expALabels (Cond _ c t e) = expALabels c ++ expALabels t ++ expALabels e
+expALabels (Shape (Left _)) = []
+expALabels (Shape (Right lab)) = [AnyLabel lab]
+expALabels (Get _ _ e) = expALabels e
+expALabels (Let _ rhs e) = expALabels rhs ++ expALabels e
+expALabels (Var _) = []
+expALabels (Arg _ _) = []
+expALabels (Label _) = []
+
+expFunALabels :: OpenFun env aenv lab alab t -> [AnyLabel ArrayR alab]
+expFunALabels (Lam _ fun) = expFunALabels fun
+expFunALabels (Body ex) = expALabels ex

@@ -210,6 +210,14 @@ data Context s tag lab env =
 -- TODO: make this 'type AnyLabel s lab = Some (DLabel s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
 data AnyLabel s lab = forall t. AnyLabel (DLabel s lab t)
 
+-- TODO: This only uses the actual label, not the type, for equality check
+instance Eq lab => Eq (AnyLabel s lab) where
+    AnyLabel (DLabel _ lab1) == AnyLabel (DLabel _ lab2) = lab1 == lab2
+
+-- TODO: This only uses the actual label, not the type, for the ordering
+instance Ord lab => Ord (AnyLabel s lab) where
+    compare (AnyLabel (DLabel _ lab1)) (AnyLabel (DLabel _ lab2)) = compare lab1 lab2
+
 
 data GenLHS s env t = forall env'. GenLHS (LeftHandSide s t env env')
 
