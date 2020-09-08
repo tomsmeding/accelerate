@@ -188,20 +188,19 @@ splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
             PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
             traceM ("\nexp context in core: " ++ showContext context)
             let reslabs = bindmap DMap.! fmapLabel P reslab
-            case elabValFinds labelenv reslabs of
-                Just resultvars -> case constructPrimalBundle context of
-                    PrimalBundle tmpvars instantiator ->
-                        let e' = builder (evars (TupRpair resultvars tmpvars))
-                           -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
-                        in return $ SplitLambdaAD (\fvavars ->
-                                                      Lam paramlhs'
-                                                        (Body (realiseArgs
-                                                                  (inlineAvarLabels fvlabs fvavars e')
-                                                                  paramlhs')))
-                                                  undefined
-                                                  fvlabs
-                                                  <$> fmap (A.varsType tmpvars,) (tmplabGen (A.varsType tmpvars))
-                Nothing ->
+            case (elabValFinds labelenv reslabs, constructPrimalBundle context) of
+                (Just resultvars, PrimalBundle tmpvars instantiator) ->
+                    let e' = builder (evars (TupRpair resultvars tmpvars))
+                       -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
+                    in return $ SplitLambdaAD (\fvavars ->
+                                                  Lam paramlhs'
+                                                    (Body (realiseArgs
+                                                              (inlineAvarLabels fvlabs fvavars e')
+                                                              paramlhs')))
+                                              undefined
+                                              fvlabs
+                                              <$> fmap (A.varsType tmpvars,) (tmplabGen (A.varsType tmpvars))
+                _ ->
                     error "Final primal value not computed"
     in -- trace ("AD result: " ++ show transformedExp) $
        -- ReverseADResE paramlhs' (realiseArgs transformedExp paramlhs')
