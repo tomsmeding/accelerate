@@ -649,10 +649,30 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                         ZipWith argtypeS (Right (fmapAlabFun (fmapLabel P) (lambdaDual fvvars)))
                                                 (Avar adjvar) (Avar lambdaTmpVar)]
                                 contribmap
-          lab <- genSingleId restype
-          Alet (A.LeftHandSideSingle restype) adjoint
-               <$> dual' nodemap restlabels (Context (LPush labelenv lab)
-                                                     (DMap.insert (fmapLabel D lbl) (TupRsingle lab) bindmap))
+          -- technically don't need the tuple machinery here, but for consistency
+          (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
+          Alet lhs adjoint
+               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
+                         contribmap' cont
+
+      Sum restype@(ArrayR sht _) (Alabel arglab) -> do
+          let TupRsingle argtypeS = labelType arglab
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab (arglab :@ TLNil) TLNil $
+                                    \(TupRsingle adjvar) (TupRsingle pvar :@ TLNil) _ ->
+                                        case elhsCopy (shapeType sht) of
+                                            LetBoundExpE lhs shvars ->
+                                                let lhs' = A.LeftHandSidePair lhs
+                                                              (A.LeftHandSideWildcard (TupRsingle scalarType))
+                                                in Generate argtypeS (Shape (Left pvar))
+                                                            (Right (Lam lhs' (Body (Index (Left adjvar) shvars))))]
+                                contribmap
+          (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
+          Alet lhs adjoint
+               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
                          contribmap' cont
 
       -- Get restype path (Label arglab) -> do
@@ -688,17 +708,17 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
       --                                       (DMap.insert (fmapLabel D lbl) TupRunit bindmap))
       --           contribmap cont
 
-      -- Label arglab -> do
-      --     let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
-      --         contribmap' = updateContribmap lbl
-      --                           [Contribution arglab TLNil $ \adjvars _ ->
-      --                               evars adjvars]
-      --                           contribmap
-      --     (GenLHS lhs, labs) <- genScalarIds (labelType arglab)
-      --     Let lhs adjoint
-      --         <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
-      --                                               (DMap.insert (fmapLabel D lbl) labs bindmap))
-      --                   contribmap' cont
+      Alabel arglab -> do
+          let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab TLNil TLNil $ \adjvars _ _ ->
+                                    avars adjvars]
+                                contribmap
+          (GenLHS lhs, labs) <- genSingleIds (labelType arglab)
+          Alet lhs adjoint
+               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
+                         contribmap' cont
 
       expr -> trace ("\n!! " ++ show expr) undefined
   where
@@ -780,7 +800,7 @@ collectAdjoint :: DMap (ADLabelT (PDAcc Int)) (AdjList lab Int args)
 collectAdjoint contribmap lbl (Context labelenv bindmap)
   | Just pvars <- alabValFinds labelenv (bindmap `dmapFind` fmapLabel P lbl)
   = case DMap.lookup (fmapLabel D lbl) contribmap of
-        Just (AdjList listgen) -> arraysSum (labelType lbl) undefined (listgen (Context labelenv bindmap))
+        Just (AdjList listgen) -> arraysSum (labelType lbl) pvars (listgen (Context labelenv bindmap))
         Nothing -> arraysSum (labelType lbl) pvars []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
 
 arrayPlus :: OpenAcc aenv lab alab args (Array sh t)

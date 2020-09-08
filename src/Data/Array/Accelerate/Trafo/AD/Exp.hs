@@ -61,9 +61,14 @@ data OpenExp env aenv lab alab args t where
             -> OpenExp env aenv lab alab args a
             -> OpenExp env aenv lab alab args a
 
-    Shape   :: Either (A.ArrayVar aenv (Array dim e))
-                      (DLabel ArrayR alab (Array dim e))
-            -> OpenExp env aenv lab alab args dim
+    Shape   :: Either (A.ArrayVar aenv (Array sh e))
+                      (DLabel ArrayR alab (Array sh e))
+            -> OpenExp env aenv lab alab args sh
+
+    Index   :: Either (A.ArrayVar aenv (Array sh e))
+                      (DLabel ArrayR alab (Array sh e))
+            -> OpenExp env aenv lab alab args sh
+            -> OpenExp env aenv lab alab args e
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
@@ -144,6 +149,17 @@ showsExp _ alabf _ _ _ d (Shape (Right lab)) =
     showParen (d > 10) $
         showString "shape " .
         showString ('L' : alabf (labelLabel lab) ++ " :: " ++ show (labelType lab))
+showsExp labf alabf seed env aenv d (Index (Left (A.Var _ idx)) e) =
+    showParen (d > 10) $
+        (case drop (idxToInt idx) aenv of
+            descr : _ -> showString descr
+            [] -> error $ "Avar out of aenv range in showsExp: " ++
+                          show (idxToInt idx) ++ " in " ++ show aenv)
+        . showString " ! " . showsExp labf alabf seed env aenv 11 e
+showsExp labf alabf seed env aenv d (Index (Right lab) e) =
+    showParen (d > 10) $
+        showString ('L' : alabf (labelLabel lab) ++ " :: " ++ show (labelType lab))
+        . showString " ! " . showsExp labf alabf seed env aenv 11 e
 showsExp labf alabf seed env aenv d (Get _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsExp labf alabf seed env aenv 10 e
   where
@@ -189,6 +205,8 @@ etypeOf Nil = TupRunit
 etypeOf (Cond ty _ _ _) = ty
 etypeOf (Shape (Left (A.Var (ArrayR sht _) _))) = shapeType sht
 etypeOf (Shape (Right (DLabel (ArrayR sht _) _))) = shapeType sht
+etypeOf (Index (Left (A.Var (ArrayR _ ty) _)) _) = ty
+etypeOf (Index (Right (DLabel (ArrayR _ ty) _)) _) = ty
 etypeOf (Get ty _ _) = ty
 etypeOf (Let _ _ body) = etypeOf body
 etypeOf (Var (A.Var ty _)) = TupRsingle ty
@@ -277,6 +295,8 @@ generaliseLab Nil = Nil
 generaliseLab (Cond ty e1 e2 e3) = Cond ty (generaliseLab e1) (generaliseLab e2) (generaliseLab e3)
 generaliseLab (Shape (Left avar)) = Shape (Left avar)
 generaliseLab (Shape (Right alab)) = Shape (Right alab)
+generaliseLab (Index (Left avar) e) = Index (Left avar) (generaliseLab e)
+generaliseLab (Index (Right alab) e) = Index (Right alab) (generaliseLab e)
 generaliseLab (Get ty path ex) = Get ty path (generaliseLab ex)
 generaliseLab (Let lhs rhs ex) = Let lhs (generaliseLab rhs) (generaliseLab ex)
 generaliseLab (Var v) = Var v
@@ -292,6 +312,8 @@ generaliseLabA Nil = Nil
 generaliseLabA (Cond ty e1 e2 e3) = Cond ty (generaliseLabA e1) (generaliseLabA e2) (generaliseLabA e3)
 generaliseLabA (Shape (Left avar)) = Shape (Left avar)
 generaliseLabA (Shape (Right _)) = error "generaliseLabA: Shape with label found"
+generaliseLabA (Index (Left avar) e) = Index (Left avar) (generaliseLabA e)
+generaliseLabA (Index (Right _) _) = error "generaliseLabA: Index with label found"
 generaliseLabA (Get ty path ex) = Get ty path (generaliseLabA ex)
 generaliseLabA (Let lhs rhs ex) = Let lhs (generaliseLabA rhs) (generaliseLabA ex)
 generaliseLabA (Var v) = Var v
@@ -308,6 +330,7 @@ fmapAlabExp f ex = case ex of
     Nil -> Nil
     Cond ty e1 e2 e3 -> Cond ty (fmapAlabExp f e1) (fmapAlabExp f e2) (fmapAlabExp f e3)
     Shape ref -> Shape (f <$> ref)
+    Index ref e -> Index (f <$> ref) (fmapAlabExp f e)
     Get ty ti e -> Get ty ti (fmapAlabExp f e)
     Let lhs rhs e -> Let lhs (fmapAlabExp f rhs) (fmapAlabExp f e)
     Arg ty idx -> Arg ty idx
@@ -354,6 +377,7 @@ sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
 sinkExp _ Nil = Nil
 sinkExp k (Cond ty c t e) = Cond ty (sinkExp k c) (sinkExp k t) (sinkExp k e)
 sinkExp _ (Shape var) = Shape var
+sinkExp k (Index var e) = Index var (sinkExp k e)
 sinkExp k (Get ty ti e) = Get ty ti (sinkExp k e)
 sinkExp k (Let lhs rhs e)
   | GenLHS lhs' <- generaliseLHS lhs =
@@ -368,8 +392,8 @@ expALabels (PrimApp _ _ e) = expALabels e
 expALabels (Pair _ e1 e2) = expALabels e1 ++ expALabels e2
 expALabels Nil = []
 expALabels (Cond _ c t e) = expALabels c ++ expALabels t ++ expALabels e
-expALabels (Shape (Left _)) = []
-expALabels (Shape (Right lab)) = [AnyLabel lab]
+expALabels (Shape var) = either (const []) (pure . AnyLabel) var
+expALabels (Index var e) = either (const []) (pure . AnyLabel) var ++ expALabels e
 expALabels (Get _ _ e) = expALabels e
 expALabels (Let _ rhs e) = expALabels rhs ++ expALabels e
 expALabels (Var _) = []
