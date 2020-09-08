@@ -660,10 +660,9 @@ dual :: Show alab
      -> IdGen (OpenExp env aenv (PDExp Int) alab args t)
 dual (endlab, nodemap, _) context cont =
     trace ("\nlabelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
-    -- TODO: Is the type annotation on scalarType necessary?
-    -- TODO: Can I use those shortcut methods to easily produce more type witnesses elsewhere?
+    -- TODO: Can I use those scalarType shortcut methods to easily produce more type witnesses elsewhere?
     let contribmap = DMap.singleton (fmapLabel D endlab)
-                                    (AdjList (const [Const (scalarType :: ScalarType Float) 1.0]))
+                                    (AdjList (const [Const scalarType 1.0]))
     in dual' nodemap labelorder context contribmap cont
   where
     -- Every numeric label is unique; we don't need the type information for that.
