@@ -89,7 +89,7 @@ showArgmap argmap =
     in "[" ++ s ++ "]"
 
 -- Assumes the expression does not contain Arg
-generaliseArgs :: OpenAcc aenv lab alab args t -> OpenAcc aenv lab alab args' t
+generaliseArgs :: HasCallStack => OpenAcc aenv lab alab args t -> OpenAcc aenv lab alab args' t
 generaliseArgs (Aconst ty x) = Aconst ty x
 generaliseArgs (Apair ty e1 e2) = Apair ty (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs Anil = Anil
@@ -106,7 +106,7 @@ generaliseArgs (Aarg _ _) = error "generaliseArgs: Arg found"
 generaliseArgs (Alabel labs) = Alabel labs
 
 -- Assumes the expression does not contain references to the array environment; TODO: this is a false assumption in general, but makes the input language easier for now
-doesNotContainArrayVars :: OpenExp env aenv lab alab args t -> OpenExp env aenv' lab alab args t
+doesNotContainArrayVars :: HasCallStack => OpenExp env aenv lab alab args t -> OpenExp env aenv' lab alab args t
 doesNotContainArrayVars (Const ty x) = Const ty x
 doesNotContainArrayVars (PrimApp ty op ex) = PrimApp ty op (doesNotContainArrayVars ex)
 doesNotContainArrayVars (Pair ty e1 e2) = Pair ty (doesNotContainArrayVars e1) (doesNotContainArrayVars e2)
@@ -120,17 +120,17 @@ doesNotContainArrayVars (Arg ty idx) = Arg ty idx
 doesNotContainArrayVars (Label lab) = Label lab
 
 -- Assumes the expression does not contain references to the array environment; TODO: this is a false assumption in general, but makes the input language easier for now
-doesNotContainArrayVarsF :: OpenFun env aenv lab alab t -> OpenFun env aenv' lab alab t
+doesNotContainArrayVarsF :: HasCallStack => OpenFun env aenv lab alab t -> OpenFun env aenv' lab alab t
 doesNotContainArrayVarsF (Lam lhs fun) = Lam lhs (doesNotContainArrayVarsF fun)
 doesNotContainArrayVarsF (Body e) = Body (doesNotContainArrayVars e)
 
 -- Assumes the expression does not contain Label
-generaliseLabFun :: OpenFun env aenv lab alab t -> OpenFun env aenv lab' alab t
+generaliseLabFun :: HasCallStack => OpenFun env aenv lab alab t -> OpenFun env aenv lab' alab t
 generaliseLabFun (Lam lhs fun) = Lam lhs (generaliseLabFun fun)
 generaliseLabFun (Body ex) = Body (generaliseLab ex)
 
 -- Assumes the expression does not contain labelised array variable references
-generaliseLabFunA :: OpenFun env aenv lab alab t -> OpenFun env aenv lab alab' t
+generaliseLabFunA :: HasCallStack => OpenFun env aenv lab alab t -> OpenFun env aenv lab alab' t
 generaliseLabFunA (Lam lhs fun) = Lam lhs (generaliseLabFunA fun)
 generaliseLabFunA (Body ex) = Body (generaliseLabA ex)
 
