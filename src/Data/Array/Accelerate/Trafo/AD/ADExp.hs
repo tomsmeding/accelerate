@@ -521,26 +521,22 @@ primaldual :: Show alab
            => Exploded aenv Int alab args Float
            -> (forall env. EContext Int env -> IdGen (OpenExp env aenv (PDExp Int) alab args t))
            -> IdGen (Exp aenv (PDExp Int) alab args t)
-primaldual exploded cont = primalCPS exploded (\ctx -> dual exploded ctx cont)
-
--- Resulting computation will only use P, never D
-primalCPS :: Exploded aenv Int alab args res
-          -> (forall env. EContext Int env -> IdGen (OpenExp env aenv (PDExp Int) alab args t))
-          -> IdGen (Exp aenv (PDExp Int) alab args t)
-primalCPS exploded cont = do
-    PrimalResult ctx' builder <- primal exploded
-    builder <$> cont ctx'
+primaldual exploded cont = do
+    PrimalResult context1 builder1 <- primal exploded
+    DualResult context2 _ builder2 <- dual exploded context1
+    builder1 . builder2 <$> cont context2
 
 -- Before, the primal computation generator function was in CPS form, taking a
 -- continuation instead of returning a datatype containing an existential.
 -- (Note the duality between those two approaches.) Because I needed to
 -- integrate 'primal' into code that was not written in CPS style, but still
--- needed to put nontrivial information in the core, I re-wrote primal to
--- return existentials instead of take a continuation.
+-- needed to put nontrivial information in the core, I re-wrote primal (and
+-- dual) to return existentials instead of take a continuation.
 data PrimalResult env aenv alab args =
     forall env'.
         PrimalResult (EContext Int env')
-                     (forall res. OpenExp env' aenv (PDExp Int) alab args res -> OpenExp env aenv (PDExp Int) alab args res)
+                     (forall res. OpenExp env' aenv (PDExp Int) alab args res
+                               -> OpenExp env aenv (PDExp Int) alab args res)
 
 -- Resulting computation will only use P, never D
 primal :: Exploded aenv Int alab args res
@@ -652,18 +648,24 @@ data OrdBox a b = OrdBox { _ordboxTag :: a, ordboxAuxiliary :: b }
 instance Eq  a => Eq  (OrdBox a b) where OrdBox x _    ==     OrdBox y _ = x == y
 instance Ord a => Ord (OrdBox a b) where OrdBox x _ `compare` OrdBox y _ = compare x y
 
+data DualResult env aenv alab args =
+    forall env'.
+        DualResult (EContext Int env')
+                   (DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args))  -- contribmap
+                   (forall res. OpenExp env' aenv (PDExp Int) alab args res
+                             -> OpenExp env aenv (PDExp Int) alab args res)
+
 -- TODO: remove Show constraint from alab
 dual :: Show alab
      => Exploded aenv Int alab args Float
      -> EContext Int env
-     -> (forall env'. EContext Int env' -> IdGen (OpenExp env' aenv (PDExp Int) alab args t))
-     -> IdGen (OpenExp env aenv (PDExp Int) alab args t)
-dual (endlab, nodemap, _) context cont =
+     -> IdGen (DualResult env aenv alab args)
+dual (endlab, nodemap, _) context =
     trace ("\nlabelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
     -- TODO: Can I use those scalarType shortcut methods to easily produce more type witnesses elsewhere?
     let contribmap = DMap.singleton (fmapLabel D endlab)
                                     (AdjList (const [Const scalarType 1.0]))
-    in dual' nodemap labelorder context contribmap cont
+    in dual's nodemap labelorder context contribmap
   where
     -- Every numeric label is unique; we don't need the type information for that.
     -- We play fast and loose with that here: we use an 'OrdBox' for 'floodfill'
@@ -689,32 +691,41 @@ dual (endlab, nodemap, _) context cont =
                           alllabels
                           (\(AnyLabel l) -> parentmap Map.! labelLabel l)
 
--- TODO: remove Show constraint from alab
+dual's :: Show alab
+       => DMap (EDLabelT Int) (Exp aenv Int alab args)
+       -> [AnyLabelT Int]
+       -> EContext Int env
+       -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args)
+       -> IdGen (DualResult env aenv alab args)
+dual's _ [] context contribmap = return $ DualResult context contribmap id
+dual's nodemap (AnyLabel lab : labs) context contribmap = do
+    DualResult context1 contribmap1 f1 <- dual' nodemap lab context contribmap
+    DualResult context2 contribmap2 f2 <- dual's nodemap labs context1 contribmap1
+    return $ DualResult context2 contribmap2 (f1 . f2)
+
 dual' :: Show alab
       => DMap (EDLabelT Int) (Exp aenv Int alab args)
-      -> [AnyLabelT Int]
+      -> EDLabelT Int t
       -> EContext Int env
       -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args)
-      -> (forall env'. EContext Int env' -> IdGen (OpenExp env' aenv (PDExp Int) alab args res))
-      -> IdGen (OpenExp env aenv (PDExp Int) alab args res)
-dual' _ [] context _ cont = cont context
-dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap cont =
+      -> IdGen (DualResult env aenv alab args)
+dual' nodemap lbl (Context labelenv bindmap) contribmap =
     -- trace ("dual': computing " ++ show lbl) $
     case nodemap `dmapFind` lbl of
       -- We aren't interested in the adjoint of constant nodes -- seeing as
       -- they don't have any parents to contribute to.
       Const _ _ ->
-          dual' nodemap restlabels (Context labelenv bindmap) contribmap cont
+          return $ DualResult (Context labelenv bindmap) contribmap id
 
       -- Argument nodes don't have any nodes to contribute to either, but we do
       -- need to calculate and store their adjoint.
       Arg restypeS _ -> do
           let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
           lblS <- genSingleId restypeS
-          Let (A.LeftHandSideSingle restypeS) adjoint
-              <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
-                                                    (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
-                        contribmap cont
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
 
       PrimApp _ (A.PrimAdd restypeN) (Label arglab) -> do
           let restypeS = SingleScalarType (NumSingleType restypeN)
@@ -724,10 +735,10 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     smartPair (Var adjvar) (Var adjvar)]
                                 contribmap
           lblS <- genSingleId restypeS
-          Let (A.LeftHandSideSingle restypeS) adjoint
-              <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
-                                                    (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
-                        contribmap' cont
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
 
       PrimApp restype (A.PrimMul restypeN) (Label arglab) -> do
           let restypeS = SingleScalarType (NumSingleType restypeN)
@@ -739,10 +750,10 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                          (PrimApp restype (A.PrimMul restypeN) (smartPair (Var adjvar) (Var argvar1)))]
                                 contribmap
           lblS <- genSingleId restypeS
-          Let (A.LeftHandSideSingle restypeS) adjoint
-              <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
-                                                    (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
-                        contribmap' cont
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
 
       PrimApp restype (A.PrimLog restypeF) (Label arglab) -> do
           let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
@@ -754,20 +765,20 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                         (smartPair (Var adjvar) (Var argvar))]
                                 contribmap
           lblS <- genSingleId restypeS
-          Let (A.LeftHandSideSingle restypeS) adjoint
-              <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
-                                                    (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
-                        contribmap' cont
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
 
       -- Argument is an integral type, which takes no contributions
       PrimApp _ (A.PrimToFloating _ restypeF) _ -> do
           let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
           lblS <- genSingleId restypeS
-          Let (A.LeftHandSideSingle restypeS) adjoint
-              <$> dual' nodemap restlabels (Context (LPush labelenv lblS)
-                                                    (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
-                        contribmap cont
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
 
       -- Result is an integral type, which produces no contributions (because
       -- its adjoint is always zero). Therefore, we also have no contributions
@@ -775,7 +786,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
       -- Also, since contributions of integer-valued nodes are not used
       -- anywhere, we don't even have to generate this zero adjoint. TODO: is this true?
       PrimApp (TupRsingle (SingleScalarType (NumSingleType (IntegralNumType _)))) _ _ ->
-          dual' nodemap restlabels (Context labelenv bindmap) contribmap cont
+          return $ DualResult (Context labelenv bindmap) contribmap id
 
       Cond restype (Label condlab) (Label thenlab) (Label elselab) -> do
           let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
@@ -786,10 +797,10 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     Cond restype (Var condvar) (zeroForType restype) (evars adjvars)]
                                 contribmap
           (GenLHS lhs, labs) <- genSingleIds restype
-          Let lhs adjoint
-              <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
-                                                    (DMap.insert (fmapLabel D lbl) labs bindmap))
-                        contribmap' cont
+          return $ DualResult (Context (lpushLabTup labelenv lhs labs)
+                                       (DMap.insert (fmapLabel D lbl) labs bindmap))
+                              contribmap'
+                              (Let lhs adjoint)
 
       Get restype path (Label arglab) -> do
           let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
@@ -798,10 +809,10 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     oneHotTup (labelType arglab) path (evars adjvars)]
                                 contribmap
           (GenLHS lhs, labs) <- genSingleIds restype
-          Let lhs adjoint
-              <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
-                                                    (DMap.insert (fmapLabel D lbl) labs bindmap))
-                        contribmap' cont
+          return $ DualResult (Context (lpushLabTup labelenv lhs labs)
+                                       (DMap.insert (fmapLabel D lbl) labs bindmap))
+                              contribmap'
+                              (Let lhs adjoint)
 
       Pair restype (Label arglab1) (Label arglab2) -> do
           let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
@@ -812,17 +823,16 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     evars adjvars2]
                                 contribmap
           (GenLHS lhs, labs) <- genSingleIds restype
-          Let lhs adjoint
-              <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
-                                                    (DMap.insert (fmapLabel D lbl) labs bindmap))
-                        contribmap' cont
+          return $ DualResult (Context (lpushLabTup labelenv lhs labs)
+                                       (DMap.insert (fmapLabel D lbl) labs bindmap))
+                              contribmap'
+                              (Let lhs adjoint)
 
       Nil ->
           -- Nothing to compute here, but we still need to register this expression label
           -- in the bindmap.
-          dual' nodemap restlabels (Context labelenv
-                                            (DMap.insert (fmapLabel D lbl) TupRunit bindmap))
-                contribmap cont
+          return $ DualResult (Context labelenv (DMap.insert (fmapLabel D lbl) TupRunit bindmap))
+                              contribmap id
 
       Label arglab -> do
           let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
@@ -831,10 +841,10 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     evars adjvars]
                                 contribmap
           (GenLHS lhs, labs) <- genSingleIds (labelType arglab)
-          Let lhs adjoint
-              <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
-                                                    (DMap.insert (fmapLabel D lbl) labs bindmap))
-                        contribmap' cont
+          return $ DualResult (Context (lpushLabTup labelenv lhs labs)
+                                       (DMap.insert (fmapLabel D lbl) labs bindmap))
+                              contribmap'
+                              (Let lhs adjoint)
 
       expr -> trace ("\n!! " ++ show expr) undefined
   where
