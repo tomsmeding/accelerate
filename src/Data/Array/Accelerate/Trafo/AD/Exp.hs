@@ -149,7 +149,7 @@ showsExp _ _ _ _ aenv d (Shape (Left (A.Var _ idx))) =
 showsExp _ alabf _ _ _ d (Shape (Right lab)) =
     showParen (d > 10) $
         showString "shape " .
-        showString ('L' : alabf (labelLabel lab) ++ " :: " ++ show (labelType lab))
+        showString ("(L" ++ alabf (labelLabel lab) ++ " :: " ++ show (labelType lab) ++ ")")
 showsExp labf alabf seed env aenv d (Index (Left (A.Var _ idx)) e) =
     showParen (d > 10) $
         (case drop (idxToInt idx) aenv of
