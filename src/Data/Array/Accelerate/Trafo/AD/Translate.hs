@@ -129,7 +129,9 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
         D.Shape (Left avar) -> A.Shape (fromJust (checkLocal matchArraysR avar arrpv))
-        D.Shape (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate laben in array var position"
+        D.Shape (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
+        D.Index (Left avar) e -> A.Index (fromJust (checkLocal matchArraysR avar arrpv)) (go e pv)
+        D.Index (Right _) _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e pv) body
