@@ -113,9 +113,17 @@ adtuple3 = do
 
 arrad :: IO ()
 arrad = do
+  -- print . I.run $
+  --   A.gradientA (\arr -> A.sum (A.map (\x -> x * x) arr))
+  --               (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
+
   print . I.run $
-    A.gradientA (\arr -> A.sum (A.map (\x -> x * x) arr))
+    A.gradientA (\arr -> A.sum (A.map (\x -> x * log x) (A.map (\x -> 2 * (x + 3)) arr)))
                 (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
+
+  -- print . I.run $
+  --   A.map (\x -> 2 + 2 * log 2 + 2 * log (x + 3))
+  --       (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
 
 main :: IO ()
 main = do

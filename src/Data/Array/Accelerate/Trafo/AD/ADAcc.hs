@@ -170,8 +170,7 @@ reverseADA paramlhs expr
                   -- lookup produces an Idx, which, put in a Var, should replace the Arg in
                   -- 'argsRHS'.
                   trace ("\nacc context in core: " ++ showContext context) $
-                  -- return $ produceGradient argLabelMap context argsRHS  -- TODO
-                  return Asnowman
+                  return $ produceGradient argLabelMap context argsRHS
       in
           trace ("Acc AD result: " ++ show transformedExp) $
           ReverseADResA paramlhs' (realiseArgs transformedExp paramlhs')
