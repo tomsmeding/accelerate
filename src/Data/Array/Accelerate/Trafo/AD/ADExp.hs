@@ -425,9 +425,9 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- Map will NOT contain:
 -- - Let or Var
 -- - Label: the original expression should not have included Label
-explode :: ELabVal Int env -> OpenExp env aenv unused alab args t -> IdGen (Exploded aenv Int alab args t)
+explode :: Show alab => ELabVal Int env -> OpenExp env aenv unused alab args t -> IdGen (Exploded aenv Int alab args t)
 explode labelenv e =
-    trace ("exp explode: exploding " ++ showsExp (const "L?") (const "AL?") 0 [] [] 9 e "") $
+    trace ("exp explode: exploding " ++ showsExp (const "L?") show 0 [] [] 9 e "") $
     explode' labelenv e
 
 explode' :: ELabVal Int env -> OpenExp env aenv unused alab args t -> IdGen (Exploded aenv Int alab args t)
@@ -634,6 +634,11 @@ primal' nodemap lbl (Context labelenv bindmap)
                   _ ->
                       error "primal: Cond arguments did not compute arguments"
 
+          Shape ref -> do
+              (GenLHS lhs, labs) <- genSingleIds (labelType lbl)
+              return $ PrimalResult (Context (lpushLabTup labelenv lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap))
+                                    (Let lhs (Shape ref))
+
           Get _ path (Label arglab) -> do
               PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
               let pickedlabs = pickDLabels path (bindmap' `dmapFind` fmapLabel P arglab)
@@ -806,6 +811,11 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
       -- Also, since contributions of integer-valued nodes are not used
       -- anywhere, we don't even have to generate this zero adjoint. TODO: is this true?
       PrimApp (TupRsingle (SingleScalarType (NumSingleType (IntegralNumType _)))) _ _ ->
+          return $ DualResult (Context labelenv bindmap) contribmap id
+
+      -- No adjoint because the result is an integral type, and no
+      -- contributions because there are no parents
+      Shape _ ->
           return $ DualResult (Context labelenv bindmap) contribmap id
 
       Cond restype (Label condlab) (Label thenlab) (Label elselab) -> do

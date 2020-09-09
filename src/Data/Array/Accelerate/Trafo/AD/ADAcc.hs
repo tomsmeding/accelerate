@@ -236,6 +236,7 @@ explode labelenv e =
 
 explode' :: ALabVal Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
 explode' labelenv = \case
+    e | trace ("acc explode': | " ++ showsAcc (const "L?") (const "AL?") 0 ['t' : show i | i <- [1::Int ..]] 0 e "") False -> undefined
     Aconst ty x -> do
         lab <- genId (TupRsingle ty)
         return (lab, DMap.singleton lab (Aconst ty x), mempty)
@@ -262,6 +263,7 @@ explode' labelenv = \case
             argmp = DMap.unionsWithKey (error "explode: Overlapping arg's") [argmp1, argmp2]
         return (lab, mp, argmp)
     Map ty@(ArrayR sht _) (Right e) a -> do
+        traceM $ "Calling splitLambdaAD with array labelenv: " ++ showLabelenv labelenv
         e' <- splitLambdaAD labelenv (genSingleId . ArrayR sht) (generaliseLabFun e)
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
@@ -388,7 +390,7 @@ primal' :: DMap (ADLabelT Int) (Acc (PDExp Int) Int args)
         -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PDExp Int) (PDAcc Int) args res))
         -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args res)
 primal' nodemap lbl (Context labelenv bindmap) cont
---   | trace ("primal': computing " ++ show lbl) False = undefined
+  | trace ("primal': computing " ++ show lbl) False = undefined
   | fmapLabel P lbl `DMap.member` bindmap =
       cont (Context labelenv bindmap)
   | not (uniqueLabVal labelenv) =  -- TODO: remove this check
@@ -442,6 +444,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                       _ ->
                           error "primal: Cond arguments did not compute arguments"
 
+          TODO: -- lambdaLabs is a tuple of _tuple labels_, all of which need to be dereferenced via the bindmap to produce scalar labels, which can then be looked up in the environment.
           Map restype@(ArrayR resshape reselty) (Left (SplitLambdaAD lambdaPrimal _ lambdaLabs (lambdaTmpType, lambdaTmpLab))) (Alabel arglab) ->
               primal' nodemap arglab (Context labelenv bindmap) $ \(Context labelenv' bindmap') ->
                   let TupRsingle arglabS@(DLabel argtypeS _) = bindmap' `dmapFind` fmapLabel P arglab
@@ -461,7 +464,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                                <$> cont (Context (LPush (LPush labelenv' lab) lambdaTmpLab)
                                                  (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap'))
                       _ ->
-                          error "primal: Map arguments did not compute arguments"
+                          error $ "primal: Map arguments did not compute arguments: lbl = " ++ showDLabel lbl ++ "; arglab = " ++ showDLabel arglab ++ "; arglabS = " ++ showDLabel arglabS ++ "; lambdaLabs = " ++ showTupR show lambdaLabs ++ "; CONTEXT = " ++ showContext (Context labelenv' bindmap')
 
           ZipWith restype (Left lambda) (Alabel arglab1) (Alabel arglab2) ->
               primal' nodemap arglab1 (Context labelenv bindmap) $ \ctx1 ->
@@ -579,7 +582,7 @@ dual (endlab, nodemap, _) context cont =
     -- to use the 'Ord' instance on 'Int' while carrying along the full 'DLabel'
     -- objects, and we index the 'parentmap' on the integer value too.
     parentsOf :: AnyLabelT Int -> [AnyLabelT Int]
-    parentsOf (AnyLabel lbl) = expLabelParents context (nodemap `dmapFind` lbl)
+    parentsOf (AnyLabel lbl) = expLabelParents (nodemap `dmapFind` lbl)
 
     alllabels :: [AnyLabelT Int]
     alllabels =
@@ -850,13 +853,13 @@ generateConstantArray ty e sht she =
 -- oneHotTup _ _ _ = error "oneHotTup: impossible GADTs"
 
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
-expLabelParents :: Ord alab => AContext alab aenv' -> OpenAcc aenv lab alab args t -> [AnyLabelT alab]
-expLabelParents ctx = \case
+expLabelParents :: OpenAcc aenv lab alab args t -> [AnyLabelT alab]
+expLabelParents = \case
     Aconst _ _ -> []
     Apair _ e1 e2 -> fromLabel e1 ++ fromLabel e2
     Anil -> []
     Acond _ _ e1 e2 -> fromLabel e1 ++ fromLabel e2
-    Map _ lam e -> fromLabel e ++ lamLabels ctx lam
+    Map _ lam e -> fromLabel e ++ lamLabels lam
     Sum _ e -> fromLabel e
     Aget _ _ e -> fromLabel e
     Aarg _ _ -> []
@@ -870,26 +873,9 @@ expLabelParents ctx = \case
     fromLabel (Alabel lab) = [AnyLabel lab]
     fromLabel _ = error "expLabelParents: Parent is not a label set"
 
-    -- TODO: this is about the ugliest function around here (both due to the P assumption and the performance problem of using flipBindmap); fix this
-    lamLabels :: Ord alab => AContext alab aenv' -> ExpLambda1 aenv lab alab sh t1 t2 -> [AnyLabel ArraysR alab]
-    lamLabels _ (Left _) = []
-    lamLabels (Context _ bindmap) (Right fun) =
-        let lookupDict = flipBindmap bindmap
-        in [case lookupDict Map.! AnyLabel lab of
-                AnyLabel tlab -> AnyLabel (fmapLabel (\(P ptlab) -> ptlab) tlab)
-           | AnyLabel lab <- expFunALabels fun]
-
-    flipBindmap :: Ord alab
-                => DMap (ADLabelT (PDAcc alab)) (TupR (ADLabel alab))
-                -> Map (AnyLabel ArrayR alab) (AnyLabel ArraysR (PDAcc alab))
-    flipBindmap bindmap =
-        Map.fromList $ concat [map (,AnyLabel tlab) (allLabelsInTup labtup)
-                              | tlab :=> labtup <- DMap.assocs bindmap]
-      where
-        allLabelsInTup :: TupR (ADLabel alab) t -> [AnyLabel ArrayR alab]
-        allLabelsInTup TupRunit = []
-        allLabelsInTup (TupRsingle lab) = [AnyLabel lab]
-        allLabelsInTup (TupRpair t1 t2) = allLabelsInTup t1 ++ allLabelsInTup t2
+    lamLabels :: ExpLambda1 aenv lab alab sh t1 t2 -> [AnyLabel ArraysR alab]
+    lamLabels (Left _) = []
+    lamLabels (Right fun) = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expFunALabels fun]
 
 dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
 dmapFind mp elt = case DMap.lookup elt mp of

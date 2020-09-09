@@ -68,6 +68,8 @@ translateExp expr = case expr of
     A.Nil -> D.Nil
     A.Cond c t e -> D.Cond (A.expType t) (translateExp c) (translateExp t) (translateExp e)
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
+    A.Shape var -> D.Shape (Left var)
+    A.Index var e -> D.Index (Left var) (translateExp e)
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
 
 data PartialVal s topenv env where
