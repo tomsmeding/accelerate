@@ -171,8 +171,7 @@ produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case ar
                         'A' : show (A.idxToInt idx) ++ " not computed"
     _ -> error "produceGradient: what?"
 
-splitLambdaAD :: forall f aenv t t' sh unused unused2.
-                 Functor f
+splitLambdaAD :: forall f aenv t t' sh unused unused2. Functor f
               => LabVal ArrayR Int aenv
               -> (forall ty. TypeR ty -> f (DLabel ArrayR Int (Array sh ty)))
               -> Fun aenv unused unused2 (t -> t')
@@ -186,46 +185,44 @@ splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
   , let argsRHS = varsToArgs (varsgen A.weakenId)
         closedExpr = Let paramlhs' argsRHS (generaliseArgs (sinkExp paramWeaken (generaliseLab expr)))
   , (labelisedExpr, fvlablist) <- W.runWriter (collectFreeAvars alabelenv closedExpr)
-  , TuplifyAvars _ fvlabs fvlhs <- tuplifyAvars fvlablist
-  = let transformedExp = evalIdGen $ do
-            exploded@(reslab, _, argLabelMap) <- explode LEmpty labelisedExpr
-            traceM ("exp exploded: " ++ showExploded exploded)
-            PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
-            traceM ("\nexp context in core: " ++ showContext context)
-            let reslabs = bindmap DMap.! fmapLabel P reslab
-            case (elabValFinds labelenv reslabs, constructPrimalBundle context) of
-                (Just resultvars, PrimalBundle tmpvars (PrimalInstantiator instantiator))
-                  | LetBoundExpE tmpRestoreLHS tmpRestoreVars <- elhsCopy (A.varsType tmpvars) -> do
-                      let e' = builder (evars (TupRpair resultvars tmpvars))
-                      adjlab <- genSingleId scalarType
-                      (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpRestoreVars)
-                      dualBody <- instantiator
-                                      (Context (lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs) mempty)
-                                      (evars tmpRestoreVars)
-                                      (\ctx -> do traceM $ "invoking exp dual with context: " ++ showContext ctx
-                                                  let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args t'
-                                                      adjointProducer (Context labelenv' _) =
-                                                        case elabValFind labelenv' adjlab of
-                                                            Just idx -> Var (A.Var exprtypeS idx)
-                                                  DualResult ctx' _ builder' <- dual exploded adjointProducer ctx
-                                                  return $ builder' $ produceGradient argLabelMap ctx' argsRHS)
-                      -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
-                      return $ SplitLambdaAD (\fvavars ->
-                                                  Lam paramlhs'
-                                                    (Body (realiseArgs
-                                                              (inlineAvarLabels fvlabs fvavars e')
-                                                              paramlhs')))
-                                             (\fvavars ->
-                                                  Lam (A.LeftHandSidePair (A.LeftHandSideSingle scalarType) tmpRestoreLHS)
-                                                      (Body (generaliseArgs  {- TODO: is this generalisation correct? -}
-                                                                (inlineAvarLabels fvlabs fvavars dualBody))))
-                                             fvlabs
-                                             <$> fmap (A.varsType tmpvars,) (tmplabGen (A.varsType tmpvars))
-                _ ->
-                    error "Final primal value not computed"
-    in -- trace ("AD result: " ++ show transformedExp) $
-       -- ReverseADResE paramlhs' (realiseArgs transformedExp paramlhs')
-       transformedExp
+  , TuplifyAvars _ fvlabs _ <- tuplifyAvars fvlablist
+  = -- trace ("AD result: " ++ show transformedExp) $
+    evalIdGen $ do
+        exploded@(reslab, _, argLabelMap) <- explode LEmpty labelisedExpr
+        traceM ("exp exploded: " ++ showExploded exploded)
+        PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
+        traceM ("\nexp context in core: " ++ showContext context)
+        let reslabs = bindmap DMap.! fmapLabel P reslab
+        case (elabValFinds labelenv reslabs, constructPrimalBundle context) of
+            (Just resultvars, PrimalBundle tmpvars (PrimalInstantiator instantiator))
+              | LetBoundExpE tmpRestoreLHS tmpRestoreVars <- elhsCopy (A.varsType tmpvars) -> do
+                  let e' = builder (evars (TupRpair resultvars tmpvars))
+                  adjlab <- genSingleId scalarType
+                  (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpRestoreVars)
+                  dualBody <- instantiator
+                                  (Context (lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs) mempty)
+                                  (evars tmpRestoreVars)
+                                  (\ctx -> do traceM $ "invoking exp dual with context: " ++ showContext ctx
+                                              let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args t'
+                                                  adjointProducer (Context labelenv' _) =
+                                                    case elabValFind labelenv' adjlab of
+                                                        Just idx -> Var (A.Var exprtypeS idx)
+                                              DualResult ctx' _ builder' <- dual exploded adjointProducer ctx
+                                              return $ builder' $ produceGradient argLabelMap ctx' argsRHS)
+                  -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
+                  return $ SplitLambdaAD (\fvavars ->
+                                              Lam paramlhs'
+                                                (Body (realiseArgs
+                                                          (inlineAvarLabels fvlabs fvavars e')
+                                                          paramlhs')))
+                                         (\fvavars ->
+                                              Lam (A.LeftHandSidePair (A.LeftHandSideSingle scalarType) tmpRestoreLHS)
+                                                  (Body (generaliseArgs  {- TODO: is this generalisation correct? -}
+                                                            (inlineAvarLabels fvlabs fvavars dualBody))))
+                                         fvlabs
+                                         <$> fmap (A.varsType tmpvars,) (tmplabGen (A.varsType tmpvars))
+            _ ->
+                error "Final primal value not computed"
   | otherwise =
       internalError "Non-Float-producing lambdas under gradientA currently unsupported"
 splitLambdaAD _ _ _ =
