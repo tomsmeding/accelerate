@@ -171,13 +171,15 @@ produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case ar
                         'A' : show (A.idxToInt idx) ++ " not computed"
     _ -> error "produceGradient: what?"
 
-splitLambdaAD :: Functor f
+splitLambdaAD :: forall f aenv t t' sh unused unused2.
+                 Functor f
               => LabVal ArrayR Int aenv
               -> (forall ty. TypeR ty -> f (DLabel ArrayR Int (Array sh ty)))
               -> Fun aenv unused unused2 (t -> t')
               -> f (SplitLambdaAD t t' (PDExp Int) Int sh)
 splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
-  | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- etypeOf expr
+  | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- etypeOf expr  -- Float result type assertion
+  , TupRsingle exprtypeS <- etypeOf expr
   , ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
   , DeclareVars paramlhs'2 _ varsgen <- declareVars (A.lhsToTupR paramlhs)
   , Refl <- sameLHSsameEnv paramlhs' paramlhs'2
@@ -201,7 +203,11 @@ splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
                                       (Context (lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs) mempty)
                                       (evars tmpRestoreVars)
                                       (\ctx -> do traceM $ "invoking exp dual with context: " ++ showContext ctx
-                                                  DualResult ctx' _ builder' <- dual exploded ctx
+                                                  let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args t'
+                                                      adjointProducer (Context labelenv' _) =
+                                                        case elabValFind labelenv' adjlab of
+                                                            Just idx -> Var (A.Var exprtypeS idx)
+                                                  DualResult ctx' _ builder' <- dual exploded adjointProducer ctx
                                                   return $ builder' $ produceGradient argLabelMap ctx' argsRHS)
                       -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
                       return $ SplitLambdaAD (\fvavars ->
@@ -542,7 +548,7 @@ primaldual :: Show alab
            -> IdGen (Exp aenv (PDExp Int) alab args t)
 primaldual exploded cont = do
     PrimalResult context1 builder1 <- primal exploded
-    DualResult context2 _ builder2 <- dual exploded context1
+    DualResult context2 _ builder2 <- dual exploded (const (Const scalarType 1.0)) context1
     builder1 . builder2 <$> cont context2
 
 -- Before, the primal computation generator function was in CPS form, taking a
@@ -674,16 +680,14 @@ data DualResult env aenv alab args =
                    (forall res. OpenExp env' aenv (PDExp Int) alab args res
                              -> OpenExp env aenv (PDExp Int) alab args res)
 
--- TODO: remove Show constraint from alab
 dual :: Show alab
-     => Exploded aenv Int alab args Float
+     => Exploded aenv Int alab args t
+     -> (forall env'. EContext Int env' -> OpenExp env' aenv (PDExp Int) alab args t)
      -> EContext Int env
      -> IdGen (DualResult env aenv alab args)
-dual (endlab, nodemap, _) context =
+dual (endlab, nodemap, _) endadjoint context =
     trace ("\nexp labelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
-    -- TODO: Can I use those scalarType shortcut methods to easily produce more type witnesses elsewhere?
-    let contribmap = DMap.singleton (fmapLabel D endlab)
-                                    (AdjList (const [Const scalarType 1.0]))
+    let contribmap = DMap.singleton (fmapLabel D endlab) (AdjList (pure . endadjoint))
     in dual's nodemap labelorder context contribmap
   where
     -- Every numeric label is unique; we don't need the type information for that.

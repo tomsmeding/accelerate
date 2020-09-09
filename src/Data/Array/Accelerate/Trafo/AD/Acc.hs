@@ -102,8 +102,6 @@ data OpenAcc aenv lab alab args t where
     Alabel  :: ADLabelT alab t
             -> OpenAcc env lab alab args t
 
-    Asnowman :: OpenAcc env lab alab args t
-
 type Acc = OpenAcc ()
 
 -- Closed array program with an unknown type
@@ -183,7 +181,6 @@ showsAcc _ _ _ env _ (Avar (A.Var _ idx)) =
                       show (idxToInt idx) ++ " in " ++ show env
 showsAcc _ alabf _ _ d (Alabel lab) = showParen (d > 0) $
     showString ('L' : alabf (labelLabel lab) ++ " :: " ++ show (labelType lab))
-showsAcc _ _ _ _ _ Asnowman = showString "⛄"
 
 showsFun :: (lab -> String) -> (alab -> String) -> Int -> [String] -> [String] -> Int -> OpenFun env aenv lab alab t -> ShowS
 showsFun labf alabf seed env aenv d (Body expr) = showsExp labf alabf seed env aenv d expr
