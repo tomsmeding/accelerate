@@ -542,13 +542,13 @@ primal' nodemap lbl (Context labelenv bindmap) cont
     expFstLam :: TypeR (t1, t2) -> Fun aenv lab alab ((t1, t2) -> t1)
     expFstLam (TupRpair t1 t2)
       | LetBoundExpE lhs ex <- elhsCopy t1
-      = Lam (A.LeftHandSidePair lhs (A.LeftHandSideWildcard t2)) (Body ex)
+      = Lam (A.LeftHandSidePair lhs (A.LeftHandSideWildcard t2)) (Body (evars ex))
     expFstLam _ = error "expFstLam: Invalid GADTs"
 
     expSndLam :: TypeR (t1, t2) -> Fun aenv lab alab ((t1, t2) -> t2)
     expSndLam (TupRpair t1 t2)
       | LetBoundExpE lhs ex <- elhsCopy t2
-      = Lam (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs) (Body ex)
+      = Lam (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs) (Body (evars ex))
     expSndLam _ = error "expSndLam: Invalid GADTs"
 
 -- List of adjoints, collected for a particular label.
@@ -568,7 +568,7 @@ dual :: Exploded (PDExp Int) Int args (Array () Float)
      -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PDExp Int) (PDAcc Int) args t))
      -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args t)
 dual (endlab, nodemap, _) context cont =
-    trace ("\nlabelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
+    trace ("\nacc labelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
     -- TODO: Can I use those scalarType shortcut methods to easily produce more type witnesses elsewhere?
     let contribmap = DMap.singleton (fmapLabel D endlab)
                                     (AdjList (const [let typ = ArrayR ShapeRz (TupRsingle scalarType)
@@ -667,7 +667,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                                 let lhs' = A.LeftHandSidePair lhs
                                                               (A.LeftHandSideWildcard (TupRsingle scalarType))
                                                 in Generate argtypeS (Shape (Left pvar))
-                                                            (Right (Lam lhs' (Body (Index (Left adjvar) shvars))))]
+                                                            (Right (Lam lhs' (Body (Index (Left adjvar) (evars shvars)))))]
                                 contribmap
           (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
           Alet lhs adjoint

@@ -26,6 +26,7 @@ import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Shows
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
+import qualified Data.Array.Accelerate.Trafo.Substitution as A (weakenVars)
 
 
 type ELabVal = LabVal ScalarType
@@ -358,17 +359,17 @@ fmapAlabSplitLambdaAD f (SplitLambdaAD f1 f2 tup (ty, lab)) =
                   (fmapTupR f tup)
                   (ty, f lab)
 
-data LetBoundExpE env aenv lab alab args t s =
-    forall env'. LetBoundExpE (A.ELeftHandSide t env env') (OpenExp env' aenv lab alab args s)
+data LetBoundExpE env t s =
+    forall env'. LetBoundExpE (A.ELeftHandSide t env env') (A.ExpVars env' s)
 
-elhsCopy :: TypeR t -> LetBoundExpE env aenv lab alab args t t
-elhsCopy TupRunit = LetBoundExpE (A.LeftHandSideWildcard TupRunit) Nil
-elhsCopy (TupRsingle sty) = LetBoundExpE (A.LeftHandSideSingle sty) (Var (A.Var sty A.ZeroIdx))
+elhsCopy :: TypeR t -> LetBoundExpE env t t
+elhsCopy TupRunit = LetBoundExpE (A.LeftHandSideWildcard TupRunit) TupRunit
+elhsCopy (TupRsingle sty) = LetBoundExpE (A.LeftHandSideSingle sty) (TupRsingle (A.Var sty A.ZeroIdx))
 elhsCopy (TupRpair t1 t2)
-  | LetBoundExpE lhs1 ex1 <- elhsCopy t1
-  , LetBoundExpE lhs2 ex2 <- elhsCopy t2
-  = let ex1' = sinkExp (A.weakenWithLHS lhs2) ex1
-    in LetBoundExpE (A.LeftHandSidePair lhs1 lhs2) (Pair (TupRpair t1 t2) ex1' ex2)
+  | LetBoundExpE lhs1 vars1 <- elhsCopy t1
+  , LetBoundExpE lhs2 vars2 <- elhsCopy t2
+  = let vars1' = A.weakenVars (A.weakenWithLHS lhs2) vars1
+    in LetBoundExpE (A.LeftHandSidePair lhs1 lhs2) (TupRpair vars1' vars2)
 
 sinkExp :: env A.:> env' -> OpenExp env aenv lab alab args t -> OpenExp env' aenv lab alab args t
 sinkExp _ (Const ty x) = Const ty x
