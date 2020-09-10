@@ -115,54 +115,54 @@ deriving instance Show AnyScalarType
 -- Instances
 -- ---------
 
-showsExp :: (lab -> String) -> (alab -> String) -> Int -> [String] -> [String] -> Int -> OpenExp env aenv lab alab args t -> ShowS
-showsExp _ _ _ _ _ _ (Const ty x) = showString (showScalar ty x)
-showsExp labf alabf seed env aenv d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
+showsExp :: EShowEnv lab alab -> Int -> OpenExp env aenv lab alab args t -> ShowS
+showsExp _ _ (Const ty x) = showString (showScalar ty x)
+showsExp se d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
     let prec = precedence f
         ops = prettyPrimFun Infix f
     in showParen (d > prec) $
-            showsExp labf alabf seed env aenv (prec+1) e1 . showString (' ' : ops ++ " ") .
-                showsExp labf alabf seed env aenv (prec+1) e2
-showsExp labf alabf seed env aenv d (PrimApp _ f e) =
+            showsExp se (prec+1) e1 . showString (' ' : ops ++ " ") .
+                showsExp se (prec+1) e2
+showsExp se d (PrimApp _ f e) =
     let prec = precedence f
         ops = prettyPrimFun Prefix f
     in showParen (d > prec) $
-            showString (ops ++ " ") . showsExp labf alabf seed env aenv (prec+1) e
-showsExp labf alabf seed env aenv _ (Pair _ e1 e2) =
-    showString "(" . showsExp labf alabf seed env aenv 0 e1 . showString ", " .
-        showsExp labf alabf seed env aenv 0 e2 . showString ")"
-showsExp _ _ _ _ _ _ Nil =
+            showString (ops ++ " ") . showsExp se (prec+1) e
+showsExp se _ (Pair _ e1 e2) =
+    showString "(" . showsExp se 0 e1 . showString ", " .
+        showsExp se 0 e2 . showString ")"
+showsExp _ _ Nil =
     showString "()"
-showsExp labf alabf seed env aenv d (Cond _ c t e) =
+showsExp se d (Cond _ c t e) =
     showParen (d > 10) $
         showString "cond " .
-            showsExp labf alabf seed env aenv 11 c . showString " " .
-            showsExp labf alabf seed env aenv 11 t . showString " " .
-            showsExp labf alabf seed env aenv 11 e
-showsExp _ _ _ _ aenv d (Shape (Left (A.Var _ idx))) =
+            showsExp se 11 c . showString " " .
+            showsExp se 11 t . showString " " .
+            showsExp se 11 e
+showsExp se d (Shape (Left (A.Var _ idx))) =
     showParen (d > 10) $
         showString "shape " .
-        (case drop (idxToInt idx) aenv of
+        (case drop (idxToInt idx) (seAenv se) of
             descr : _ -> showString descr
             [] -> error $ "Avar out of aenv range in showsExp: " ++
-                          show (idxToInt idx) ++ " in " ++ show aenv)
-showsExp _ alabf _ _ _ d (Shape (Right lab)) =
+                          show (idxToInt idx) ++ " in " ++ show (seAenv se))
+showsExp se d (Shape (Right lab)) =
     showParen (d > 10) $
         showString "shape " .
-        showString ("(L" ++ alabf (labelLabel lab) ++ " :: " ++ show (labelType lab) ++ ")")
-showsExp labf alabf seed env aenv d (Index (Left (A.Var _ idx)) e) =
+        showString ("(L" ++ seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab) ++ ")")
+showsExp se d (Index (Left (A.Var _ idx)) e) =
     showParen (d > 10) $
-        (case drop (idxToInt idx) aenv of
+        (case drop (idxToInt idx) (seAenv se) of
             descr : _ -> showString descr
             [] -> error $ "Avar out of aenv range in showsExp: " ++
-                          show (idxToInt idx) ++ " in " ++ show aenv)
-        . showString " ! " . showsExp labf alabf seed env aenv 11 e
-showsExp labf alabf seed env aenv d (Index (Right lab) e) =
+                          show (idxToInt idx) ++ " in " ++ show (seAenv se))
+        . showString " ! " . showsExp se 11 e
+showsExp se d (Index (Right lab) e) =
     showParen (d > 10) $
-        showString ('L' : alabf (labelLabel lab) ++ " :: " ++ show (labelType lab))
-        . showString " ! " . showsExp labf alabf seed env aenv 11 e
-showsExp labf alabf seed env aenv d (Get _ ti e) = showParen (d > 10) $
-    showString (tiPrefix ti) . showsExp labf alabf seed env aenv 10 e
+        showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
+        . showString " ! " . showsExp se 11 e
+showsExp se d (Get _ ti e) = showParen (d > 10) $
+    showString (tiPrefix ti) . showsExp se 10 e
   where
     tiPrefix :: TupleIdx t t' -> String
     tiPrefix = (++ " ") . intercalate "." . reverse . tiPrefix'
@@ -171,26 +171,26 @@ showsExp labf alabf seed env aenv d (Get _ ti e) = showParen (d > 10) $
     tiPrefix' TIHere = []
     tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
     tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
-showsExp labf alabf seed env aenv d (Let lhs rhs body) = showParen (d > 0) $
-    let (descr, descrs, seed') = namifyLHS seed lhs
-        env' = descrs ++ env
-    in showString ("let " ++ descr ++ " = ") . showsExp labf alabf seed' env aenv 0 rhs .
-            showString " in " . showsExp labf alabf seed' env' aenv 0 body
-showsExp _ _ _ _ _ d (Arg ty idx) = showParen (d > 0) $
+showsExp se d (Let lhs rhs body) = showParen (d > 0) $
+    let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
+        env' = descrs ++ seEnv se
+    in showString ("let " ++ descr ++ " = ") . showsExp (se { seSeed = seed' }) 0 rhs .
+            showString " in " . showsExp (se { seSeed = seed', seEnv = env' }) 0 body
+showsExp _ d (Arg ty idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx) ++ " :: " ++ show ty)
-showsExp _ _ _ env _ _ (Var (A.Var _ idx)) =
-    case drop (idxToInt idx) env of
+showsExp se _ (Var (A.Var _ idx)) =
+    case drop (idxToInt idx) (seEnv se) of
         descr : _ -> showString descr
         [] -> error $ "Var out of env range in showsExp: " ++
-                      show (idxToInt idx) ++ " in " ++ show env
-showsExp labf _ _ _ _ d (Label lab) = showParen (d > 0) $
-    showString ('L' : labf (labelLabel lab) ++ " :: " ++ show (labelType lab))
+                      show (idxToInt idx) ++ " in " ++ show (seEnv se)
+showsExp se d (Label lab) = showParen (d > 0) $
+    showString ('L' : seLabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
 -- instance Show (OpenExp env Int t) where
 --     showsPrec = showsExp subscript 0 []
 
 instance (Show lab, Show alab) => Show (OpenExp env aenv lab alab args t) where
-    showsPrec = showsExp show show 0 [] []
+    showsPrec = showsExp (ShowEnv show show 0 [] [])
 
 instance (Show lab, Show alab) => GShow (OpenExp env aenv lab alab args) where
     gshowsPrec = showsPrec

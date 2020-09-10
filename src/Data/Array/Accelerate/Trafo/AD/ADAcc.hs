@@ -233,12 +233,12 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- - Label: the original expression should not have included Label
 explode :: ALabVal Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
 explode labelenv e =
-    trace ("acc explode: exploding " ++ showsAcc (const "L?") (const "AL?") 0 [] 9 e "") $
+    trace ("acc explode: exploding " ++ showsAcc (ShowEnv (const "L?") (const "AL?") 0 () []) 9 e "") $
     explode' labelenv e
 
 explode' :: ALabVal Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
 explode' labelenv = \case
-    e | trace ("acc explode': | " ++ showsAcc (const "L?") (const "AL?") 0 ['t' : show i | i <- [1::Int ..]] 0 e "") False -> undefined
+    e | trace ("acc explode': | " ++ showsAcc (ShowEnv (const "L?") (const "AL?") 0 () ['t' : show i | i <- [1::Int ..]]) 0 e "") False -> undefined
     Aconst ty x -> do
         lab <- genId (TupRsingle ty)
         return (lab, DMap.singleton lab (Aconst ty x), mempty)

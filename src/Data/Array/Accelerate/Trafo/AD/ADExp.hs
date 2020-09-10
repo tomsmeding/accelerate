@@ -427,7 +427,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- - Label: the original expression should not have included Label
 explode :: Show alab => ELabVal Int env -> OpenExp env aenv unused alab args t -> IdGen (Exploded aenv Int alab args t)
 explode labelenv e =
-    trace ("exp explode: exploding " ++ showsExp (const "L?") show 0 [] [] 9 e "") $
+    trace ("exp explode: exploding " ++ showsExp (ShowEnv (const "L?") show 0 [] []) 9 e "") $
     explode' labelenv e
 
 explode' :: ELabVal Int env -> OpenExp env aenv unused alab args t -> IdGen (Exploded aenv Int alab args t)

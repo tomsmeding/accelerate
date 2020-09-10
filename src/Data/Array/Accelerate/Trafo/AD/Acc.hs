@@ -117,48 +117,48 @@ deriving instance Show AnyArrayR
 -- Instances
 -- ---------
 
-showsAcc :: (lab -> String) -> (alab -> String) -> Int -> [String] -> Int -> OpenAcc env lab alab args t -> ShowS
-showsAcc _ _ _ _ _ (Aconst ty x) =
+showsAcc :: AShowEnv lab alab -> Int -> OpenAcc env lab alab args t -> ShowS
+showsAcc _ _ (Aconst ty x) =
     showString (showArray (showString . showTupR' showScalar (arrayRtype ty)) ty x)
-showsAcc labf alabf seed env _ (Apair _ e1 e2) =
-    showString "(" . showsAcc labf alabf seed env 0 e1 . showString ", " .
-        showsAcc labf alabf seed env 0 e2 . showString ")"
-showsAcc _ _ _ _ _ Anil =
+showsAcc se _ (Apair _ e1 e2) =
+    showString "(" . showsAcc se 0 e1 . showString ", " .
+        showsAcc se 0 e2 . showString ")"
+showsAcc _ _ Anil =
     showString "()"
-showsAcc labf alabf seed env d (Acond _ c t e) =
+showsAcc se d (Acond _ c t e) =
     showParen (d > 10) $
         showString "acond " .
-            showsExp labf alabf seed [] env 11 c . showString " " .
-            showsAcc labf alabf seed env 11 t . showString " " .
-            showsAcc labf alabf seed env 11 e
-showsAcc labf alabf seed env d (Map _ f e) =
+            showsExp (se { seEnv = [] }) 11 c . showString " " .
+            showsAcc se 11 t . showString " " .
+            showsAcc se 11 e
+showsAcc se d (Map _ f e) =
     showParen (d > 10) $
         showString "map " .
-            showsLambda labf alabf seed [] env 11 f . showString " " .
-            showsAcc labf alabf seed env 11 e
-showsAcc labf alabf seed env d (ZipWith _ f e1 e2) =
+            showsLambda (se { seEnv = [] }) 11 f . showString " " .
+            showsAcc se 11 e
+showsAcc se d (ZipWith _ f e1 e2) =
     showParen (d > 10) $
         showString "zipWith " .
-            showsLambda labf alabf seed [] env 11 f . showString " " .
-            showsAcc labf alabf seed env 11 e1 . showString " " .
-            showsAcc labf alabf seed env 11 e2
-showsAcc labf alabf seed env d (Fold _ f me0 e) =
+            showsLambda (se { seEnv = [] }) 11 f . showString " " .
+            showsAcc se 11 e1 . showString " " .
+            showsAcc se 11 e2
+showsAcc se d (Fold _ f me0 e) =
     showParen (d > 10) $
         showString (maybe "fold1 " (const "fold ") me0) .
-            showsLambda labf alabf seed [] env 11 f . showString " " .
-            maybe id (\e0 -> showsExp labf alabf seed [] env 11 e0 . showString " ") me0 .
-            showsAcc labf alabf seed env 11 e
-showsAcc labf alabf seed env d (Sum _ e) =
+            showsLambda (se { seEnv = [] }) 11 f . showString " " .
+            maybe id (\e0 -> showsExp (se { seEnv = [] }) 11 e0 . showString " ") me0 .
+            showsAcc se 11 e
+showsAcc se d (Sum _ e) =
     showParen (d > 10) $
         showString "sum " .
-            showsAcc labf alabf seed env 11 e
-showsAcc labf alabf seed env d (Generate _ sh f) =
+            showsAcc se 11 e
+showsAcc se d (Generate _ sh f) =
     showParen (d > 10) $
         showString "generate " .
-            showsExp labf alabf seed [] env 11 sh . showString " " .
-            showsLambda labf alabf seed [] env 11 f
-showsAcc labf alabf seed env d (Aget _ ti e) = showParen (d > 10) $
-    showString (tiPrefix ti) . showsAcc labf alabf seed env 10 e
+            showsExp (se { seEnv = [] }) 11 sh . showString " " .
+            showsLambda (se { seEnv = [] }) 11 f
+showsAcc se d (Aget _ ti e) = showParen (d > 10) $
+    showString (tiPrefix ti) . showsAcc se 10 e
   where
     tiPrefix :: TupleIdx t t' -> String
     tiPrefix = (++ " ") . intercalate "." . reverse . tiPrefix'
@@ -167,36 +167,36 @@ showsAcc labf alabf seed env d (Aget _ ti e) = showParen (d > 10) $
     tiPrefix' TIHere = []
     tiPrefix' (TILeft ti') = "afst" : tiPrefix' ti'
     tiPrefix' (TIRight ti') = "asnd" : tiPrefix' ti'
-showsAcc labf alabf seed env d (Alet lhs rhs body) = showParen (d > 0) $
-    let (descr, descrs, seed') = namifyLHS seed lhs
-        env' = descrs ++ env
-    in showString ("let " ++ descr ++ " = ") . showsAcc labf alabf seed' env 0 rhs .
-            showString " in " . showsAcc labf alabf seed' env' 0 body
-showsAcc _ _ _ _ d (Aarg ty idx) = showParen (d > 0) $
+showsAcc se d (Alet lhs rhs body) = showParen (d > 0) $
+    let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
+        env' = descrs ++ seAenv se
+    in showString ("let " ++ descr ++ " = ") . showsAcc (se { seSeed = seed' }) 0 rhs .
+            showString " in " . showsAcc (se { seSeed = seed', seAenv = env' }) 0 body
+showsAcc _ d (Aarg ty idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx) ++ " :: " ++ show ty)
-showsAcc _ _ _ env _ (Avar (A.Var _ idx)) =
-    case drop (idxToInt idx) env of
+showsAcc se _ (Avar (A.Var _ idx)) =
+    case drop (idxToInt idx) (seAenv se) of
         descr : _ -> showString descr
         [] -> error $ "Var out of env range in showsAcc: " ++
-                      show (idxToInt idx) ++ " in " ++ show env
-showsAcc _ alabf _ _ d (Alabel lab) = showParen (d > 0) $
-    showString ('L' : alabf (labelLabel lab) ++ " :: " ++ show (labelType lab))
+                      show (idxToInt idx) ++ " in " ++ show (seEnv se)
+showsAcc se d (Alabel lab) = showParen (d > 0) $
+    showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
-showsFun :: (lab -> String) -> (alab -> String) -> Int -> [String] -> [String] -> Int -> OpenFun env aenv lab alab t -> ShowS
-showsFun labf alabf seed env aenv d (Body expr) = showsExp labf alabf seed env aenv d expr
-showsFun labf alabf seed env aenv d (Lam lhs fun) =
-    let (descr, descrs, seed') = namifyLHS seed lhs
-        env' = descrs ++ env
+showsFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab t -> ShowS
+showsFun se d (Body expr) = showsExp se d expr
+showsFun se d (Lam lhs fun) =
+    let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
+        env' = descrs ++ seEnv se
     in showParen (d > 0) $
         showString "\\" . showString descr .
-        showString " -> " . showsFun labf alabf seed' env' aenv 0 fun
+          showString " -> " . showsFun (se { seSeed = seed', seEnv = env' }) 0 fun
 
-showsLambda :: (lab -> String) -> (alab -> String) -> Int -> [String] -> [String] -> Int -> ExpLambda1 aenv lab alab sh t1 t2 -> ShowS
-showsLambda labf alabf seed env aenv d (Right fun) = showsFun labf alabf seed env aenv d fun
-showsLambda _ _ _ _ _ _ (Left _) = showString "{splitlambda}"
+showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab sh t1 t2 -> ShowS
+showsLambda se d (Right fun) = showsFun se d fun
+showsLambda _ _ (Left _) = showString "{splitlambda}"
 
 instance (Show lab, Show alab) => Show (OpenAcc aenv lab alab args t) where
-    showsPrec = showsAcc show show 0 []
+    showsPrec = showsAcc (ShowEnv show show 0 () [])
 
 instance (Show lab, Show alab) => GShow (OpenAcc aenv lab alab args) where
     gshowsPrec = showsPrec
