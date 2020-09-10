@@ -127,7 +127,7 @@ arrad = do
 
   print . I.run $
     A.gradientA (\arr -> A.sum (A.map (\x -> A.toFloating (A.unindex1 (A.shape arr)) * x) arr))
-                (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
+                (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
 
 main :: IO ()
 main = do

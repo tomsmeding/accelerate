@@ -444,11 +444,11 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                       _ ->
                           error "primal: Cond arguments did not compute arguments"
 
-          TODO: -- lambdaLabs is a tuple of _tuple labels_, all of which need to be dereferenced via the bindmap to produce scalar labels, which can then be looked up in the environment.
           Map restype@(ArrayR resshape reselty) (Left (SplitLambdaAD lambdaPrimal _ lambdaLabs (lambdaTmpType, lambdaTmpLab))) (Alabel arglab) ->
               primal' nodemap arglab (Context labelenv bindmap) $ \(Context labelenv' bindmap') ->
-                  let TupRsingle arglabS@(DLabel argtypeS _) = bindmap' `dmapFind` fmapLabel P arglab
-                  in case (alabValFind labelenv' arglabS, alabValFinds labelenv' lambdaLabs) of
+                  let lambdaLabs' = lookupLambdaLabs bindmap' lambdaLabs
+                      TupRsingle arglabS@(DLabel argtypeS _) = bindmap' `dmapFind` fmapLabel P arglab
+                  in case (alabValFind labelenv' arglabS, alabValFinds labelenv' lambdaLabs') of
                       (Just argidx, Just lambdaVars) -> do
                           lab <- genSingleId restype
                           let pairEltType = TupRpair reselty lambdaTmpType
@@ -464,7 +464,7 @@ primal' nodemap lbl (Context labelenv bindmap) cont
                                <$> cont (Context (LPush (LPush labelenv' lab) lambdaTmpLab)
                                                  (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap'))
                       _ ->
-                          error $ "primal: Map arguments did not compute arguments: lbl = " ++ showDLabel lbl ++ "; arglab = " ++ showDLabel arglab ++ "; arglabS = " ++ showDLabel arglabS ++ "; lambdaLabs = " ++ showTupR show lambdaLabs ++ "; CONTEXT = " ++ showContext (Context labelenv' bindmap')
+                          error $ "primal: Map arguments did not compute arguments: lbl = " ++ showDLabel lbl ++ "; arglab = " ++ showDLabel arglab ++ "; arglabS = " ++ showDLabel arglabS ++ "; lambdaLabs = " ++ showTupR show lambdaLabs ++ "; lambdaLabs' = " ++ showTupR show lambdaLabs' ++ "; CONTEXT = " ++ showContext (Context labelenv' bindmap')
 
           ZipWith restype (Left lambda) (Alabel arglab1) (Alabel arglab2) ->
               primal' nodemap arglab1 (Context labelenv bindmap) $ \ctx1 ->
@@ -552,6 +552,14 @@ primal' nodemap lbl (Context labelenv bindmap) cont
       | LetBoundExpE lhs ex <- elhsCopy t2
       = Lam (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs) (Body (evars ex))
     expSndLam _ = error "expSndLam: Invalid GADTs"
+
+    lookupLambdaLabs :: DMap (DLabel (TupR ArrayR) (PDAcc Int)) (TupR (ADLabel Int))  -- bindmap
+                     -> TupR (ADLabel Int) t  -- free variable labels from SplitLambdaAD
+                     -> TupR (ADLabel Int) t  -- resolved labels pointing into the current labelenv
+    lookupLambdaLabs bindmap' =
+        fmapTupR $ \lamlab -> case bindmap' `dmapFind` fmapLabel P (tupleLabel lamlab) of
+                                  TupRsingle singlelab -> singlelab
+                                  _ -> error "Unexpected non-scalar label in free array variables in lambdaLabs"
 
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
