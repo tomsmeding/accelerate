@@ -46,6 +46,7 @@ import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD)
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
+import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.TupleZip
 import Data.Array.Accelerate.Trafo.AD.Sink
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
@@ -174,7 +175,7 @@ reverseADA paramlhs expr
                   trace ("\nacc context in core: " ++ showContext context) $
                   return $ produceGradient argLabelMap context argsRHS
       in
-          trace ("Acc AD result: " ++ show transformedExp) $
+          trace ("Acc AD result: " ++ prettyPrint transformedExp) $
           ReverseADResA paramlhs' (realiseArgs transformedExp paramlhs')
   where
     varsToArgs :: A.ArrayVars aenv t -> OpenAcc aenv' lab alab aenv t
