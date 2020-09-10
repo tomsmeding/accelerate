@@ -974,7 +974,7 @@ expLabelParents = \case
         error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
 
     fromLabel (Label lab) = [AnyLabel lab]
-    fromLabel _ = error "expLabelParents: Parent is not a label set"
+    fromLabel _ = error "expLabelParents: Parent is not a label"
 
 dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
 dmapFind mp elt = case DMap.lookup elt mp of

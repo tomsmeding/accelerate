@@ -9,6 +9,7 @@ import Data.Char (isDigit)
 import Data.Dependent.Map (DMap)
 import Data.GADT.Compare
 import Data.GADT.Show
+import Data.Some (Some, mkSome)
 import Data.Typeable ((:~:)(Refl))
 import Data.Void
 
@@ -109,6 +110,11 @@ fmapTupR :: (forall t'. s t' -> s' t') -> TupR s t -> TupR s' t
 fmapTupR _ TupRunit = TupRunit
 fmapTupR f (TupRsingle x) = TupRsingle (f x)
 fmapTupR f (TupRpair t1 t2) = TupRpair (fmapTupR f t1) (fmapTupR f t2)
+
+enumerateTupR :: TupR s t -> [Some s]
+enumerateTupR TupRunit = []
+enumerateTupR (TupRsingle x) = [mkSome x]
+enumerateTupR (TupRpair t1 t2) = enumerateTupR t1 ++ enumerateTupR t2
 
 prjL :: Idx env t -> LabVal s lab env -> DLabel s lab t
 prjL ZeroIdx (LPush _ x) = x
