@@ -43,6 +43,7 @@ import Data.Array.Accelerate.Trafo.AD.Additive
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
+import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
@@ -142,7 +143,7 @@ reverseAD paramlhs expr
                   trace ("\ncontext in core: " ++ showContext context) $
                   return $ produceGradient argLabelMap context argsRHS
       in
-          trace ("AD result: " ++ show transformedExp) $
+          trace ("AD result: " ++ prettyPrint transformedExp) $
           ReverseADResE paramlhs' (realiseArgs transformedExp paramlhs')
 
 varsToArgs :: A.ExpVars env t -> OpenExp env' aenv lab alab env t
