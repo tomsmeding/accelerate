@@ -568,11 +568,6 @@ newtype AdjList lab alab args t = AdjList (forall aenv. AContext alab aenv -> [O
 
 type AnyLabelT = AnyLabel ArraysR
 
--- The Ord and Eq instances refer only to 'a'.
-data OrdBox a b = OrdBox { _ordboxTag :: a, ordboxAuxiliary :: b }
-instance Eq  a => Eq  (OrdBox a b) where OrdBox x _    ==     OrdBox y _ = x == y
-instance Ord a => Ord (OrdBox a b) where OrdBox x _ `compare` OrdBox y _ = compare x y
-
 dual :: Exploded (PDExp Int) Int args (Array () Float)
      -> AContext Int aenv
      -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PDExp Int) (PDAcc Int) args t))
@@ -585,20 +580,11 @@ dual (endlab, nodemap, _) context cont =
                                                      in Aconst typ (fromList typ () [1.0])]))
     in dual' nodemap labelorder context contribmap cont
   where
-    -- Every numeric label is unique; we don't need the type information for that.
-    -- We play fast and loose with that here: we use an 'OrdBox' for 'floodfill'
-    -- to use the 'Ord' instance on 'Int' while carrying along the full 'DLabel'
-    -- objects, and we index the 'parentmap' on the integer value too.
     parentsOf :: AnyLabelT Int -> [AnyLabelT Int]
     parentsOf (AnyLabel lbl) = expLabelParents (nodemap `dmapFind` lbl)
 
     alllabels :: [AnyLabelT Int]
-    alllabels =
-        map ordboxAuxiliary . Set.toList
-            $ floodfill (OrdBox (labelLabel endlab) (AnyLabel endlab))
-                        (\box -> [OrdBox (labelLabel l) (AnyLabel l)
-                                 | AnyLabel l <- parentsOf (ordboxAuxiliary box)])
-                        mempty
+    alllabels = Set.toList $ floodfill (AnyLabel endlab) parentsOf mempty
 
     parentmap :: Map Int [AnyLabelT Int]
     parentmap = Map.fromList [(labelLabel numlbl, parentsOf l)
