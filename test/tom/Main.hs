@@ -125,8 +125,20 @@ arrad = do
   --   A.map (\x -> 2 + 2 * log 2 + 2 * log (x + 3))
   --       (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
 
+  -- print . I.run $
+  --   A.gradientA (\arr -> A.sum (A.map (\x -> A.toFloating (A.unindex1 (A.shape arr)) * x) arr))
+  --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
+
   print . I.run $
-    A.gradientA (\arr -> A.sum (A.map (\x -> A.toFloating (A.unindex1 (A.shape arr)) * x) arr))
+    A.gradientA (\arr ->
+                    let a1 = A.map (\x -> 2 * x) arr
+                        a2 = A.map (\x -> log x) arr
+                        a3 = A.map (\x -> x + 3) a1
+                    in A.sum (A.map (\x -> let i1 = A.toFloating (A.unindex1 (A.shape a2))
+                                               -- i2 = A.toFloating (A.unindex1 (A.shape a2))
+                                               -- i3 = A.toFloating (A.unindex1 (A.shape a3))
+                                           in i1 * x)
+                                    a1))
                 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
 
 main :: IO ()
