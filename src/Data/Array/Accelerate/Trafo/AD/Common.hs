@@ -106,6 +106,16 @@ showDLabel (DLabel ty lab) =
            then "L" ++ labshow ++ " :: " ++ show ty
            else labshow ++ " :: " ++ show ty
 
+data ShowEnv eenv lab alab =
+    ShowEnv { seLabf :: lab -> String
+            , seAlabf :: alab -> String
+            , seSeed :: Int
+            , seEnv :: eenv
+            , seAenv :: [String] }
+
+type EShowEnv = ShowEnv [String]
+type AShowEnv = ShowEnv ()
+
 fmapTupR :: (forall t'. s t' -> s' t') -> TupR s t -> TupR s' t
 fmapTupR _ TupRunit = TupRunit
 fmapTupR f (TupRsingle x) = TupRsingle (f x)
