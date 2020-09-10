@@ -75,6 +75,7 @@ adtest2 :: IO ()
 adtest2 = do
   print (I.run (A.map (A.gradientE (\x -> x * x))
                       (A.generate (A.index1 15) (\i -> A.toFloating @Int @Float (A.unindex1 i)))))
+
 adtest3 :: IO ()
 adtest3 = do
   print $ I.run (A.unit (A.gradientE @Float (\x -> A.toFloating @Int @Float (A.round x * 2)) 3))
@@ -91,6 +92,7 @@ adtuple1 = do
                A.T2 _ y3 = x2
            in (3 * x) + y1 * x * y3)
     42
+  -- expected output: 31755
 
 adtuple2 :: IO ()
 adtuple2 = do
@@ -102,6 +104,7 @@ adtuple2 = do
                A.T2 y1 _ = x1
            in x * y1 * y2)
     42
+  -- expected output: 12
 
 adtuple3 :: IO ()
 adtuple3 = do
@@ -134,12 +137,13 @@ arrad = do
                     let a1 = A.map (\x -> 2 * x) arr
                         a2 = A.map (\x -> log x) arr
                         a3 = A.map (\x -> x + 3) a1
-                    in A.sum (A.map (\x -> let i1 = A.toFloating (A.unindex1 (A.shape a2))
-                                               -- i2 = A.toFloating (A.unindex1 (A.shape a2))
-                                               -- i3 = A.toFloating (A.unindex1 (A.shape a3))
-                                           in i1 * x)
-                                    a1))
+                    in A.sum (A.map (\x -> let i1 = A.toFloating (A.unindex1 (A.shape a1))
+                                               i2 = A.toFloating (A.unindex1 (A.shape a2))
+                                               i3 = A.toFloating (A.unindex1 (A.shape a3))
+                                           in i1 * i2 * i3 * x)
+                                    arr))
                 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
+  -- expected result: 6 * 6 * 6 = 216
 
 main :: IO ()
 main = do
