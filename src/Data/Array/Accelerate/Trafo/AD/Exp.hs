@@ -242,6 +242,7 @@ data Fixity = Prefix | Infix
 
 prettyPrimFun :: Fixity -> A.PrimFun sig -> String
 prettyPrimFun Infix (A.PrimAdd _) = "+"
+prettyPrimFun Infix (A.PrimSub _) = "-"
 prettyPrimFun Infix (A.PrimMul _) = "*"
 prettyPrimFun Infix (A.PrimFDiv _) = "/"
 prettyPrimFun Infix (A.PrimNeg _) = "-"
@@ -251,6 +252,7 @@ prettyPrimFun Infix (A.PrimGt _) = ">"
 prettyPrimFun Infix (A.PrimGtEq _) = ">="
 prettyPrimFun Infix (A.PrimIDiv _) = "`div`"
 prettyPrimFun Prefix (A.PrimLog _) = "log"
+prettyPrimFun Prefix (A.PrimExpFloating _) = "exp"
 prettyPrimFun Prefix (A.PrimToFloating _ _) = "toFloating"
 prettyPrimFun Prefix (A.PrimRound _ _) = "round"
 prettyPrimFun Prefix op = '(' : prettyPrimFun Infix op ++ ")"
