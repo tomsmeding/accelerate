@@ -10,6 +10,7 @@ module Data.Array.Accelerate.Trafo.AD (
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
+-- import Data.Array.Accelerate.Pretty.NoTrafo ()
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Trafo.Config
 import Data.Array.Accelerate.Type
@@ -20,6 +21,8 @@ import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
+
+-- import Debug.Trace
 
 
 convertExp :: OpenExp env aenv e -> OpenExp env aenv e
@@ -52,7 +55,7 @@ convertExp e =
 
 convertAccWith :: Config -> Acc arrs -> Acc arrs
 convertAccWith _ = convertAcc
--- convertAccWith _ acc@(OpenAcc a) = trace ("ENTRY " ++ showPreAccOp a) $ convertAcc acc
+-- convertAccWith _ a = convertAcc (traceShowId a)
 
 convertAcc :: OpenAcc env arrs -> OpenAcc env arrs
 convertAcc (OpenAcc (Unit ty e)) = OpenAcc (Unit ty (convertExp e))
