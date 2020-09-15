@@ -8,7 +8,6 @@ module Data.Array.Accelerate.Trafo.AD (
 ) where
 
 import Data.Array.Accelerate.AST
-import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Array
@@ -16,37 +15,22 @@ import Data.Array.Accelerate.Trafo.Config
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Type
--- import Data.Array.Accelerate.Array.Representation (showArrayR)
-import Data.Array.Accelerate.Shows
 import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
 
-import Debug.Trace
-
-
-convertVar :: Var ArrayR aenv t -> Var ArrayR aenv t
-convertVar (Var rep idx) =
-  trace ("Exp: Referencing array variable at index: " ++ show (idxToInt idx)) $
-    Var rep idx
 
 convertExp :: OpenExp env aenv e -> OpenExp env aenv e
 convertExp (Const ty con) = Const ty con
-convertExp (PrimApp f e) =
-  trace ("Exp: applying primitive " ++ showPrimFun f) $
-    PrimApp f (convertExp e)
-convertExp (Evar (Var rep idx)) =
-  trace ("Exp: Referencing variable at index: " ++ show (idxToInt idx)) $
-    Evar (Var rep idx)
-convertExp (Let lhs def body) =
-  trace ("Exp: Let-assigning to: " ++ showLHS lhs) $
-    Let lhs (convertExp def) (convertExp body)
+convertExp (PrimApp f e) = PrimApp f (convertExp e)
+convertExp (Evar (Var rep idx)) = Evar (Var rep idx)
+convertExp (Let lhs def body) = Let lhs (convertExp def) (convertExp body)
 convertExp Nil = Nil
 convertExp (Pair e1 e2) = Pair (convertExp e1) (convertExp e2)
-convertExp (Shape var) = Shape (convertVar var)
-convertExp (Index var dim) = Index (convertVar var) (convertExp dim)
+convertExp (Shape var) = Shape var
+convertExp (Index var dim) = Index var (convertExp dim)
 convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   | SingleScalarType (NumSingleType (FloatingNumType TypeFloat)) <- sty
   , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
@@ -71,15 +55,9 @@ convertAccWith _ = convertAcc
 
 convertAcc :: OpenAcc env arrs -> OpenAcc env arrs
 convertAcc (OpenAcc (Unit ty e)) = OpenAcc (Unit ty (convertExp e))
-convertAcc (OpenAcc (Map ty f a)) =
-  trace "MAP" $
-    OpenAcc (Map ty (convertFun f) (convertAcc a))
-convertAcc (OpenAcc (Alet lhs def body)) =
-  trace ("Let-assigning to: " ++ showLHSA lhs) $
-    OpenAcc (Alet lhs (convertAcc def) (convertAcc body))
-convertAcc (OpenAcc (Avar (Var rep idx))) =
-  trace ("Referencing variable at index: " ++ show (idxToInt idx)) $
-    OpenAcc (Avar (Var rep idx))
+convertAcc (OpenAcc (Map ty f a)) = OpenAcc (Map ty (convertFun f) (convertAcc a))
+convertAcc (OpenAcc (Alet lhs def body)) = OpenAcc (Alet lhs (convertAcc def) (convertAcc body))
+convertAcc (OpenAcc (Avar (Var rep idx))) = OpenAcc (Avar (Var rep idx))
 convertAcc (OpenAcc (Apair a1 a2)) = OpenAcc (Apair (convertAcc a1) (convertAcc a2))
 convertAcc (OpenAcc Anil) = OpenAcc Anil
 convertAcc (OpenAcc (Use rep a)) = OpenAcc (Use rep a)
@@ -93,13 +71,6 @@ convertAcc (OpenAcc (Generate rep sz f)) = OpenAcc (Generate rep (convertExp sz)
 convertAcc (OpenAcc (GradientA _ sty (Alam lhs (Abody body)) arg))
   | ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))) <- sty
   , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
-      -- case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
-      --     Just transBody
-      --       | Just shiftArg <- AD.aCheckClosed (AD.translateAcc arg) ->
-      --           let trans = transBody `asTypeOf` ADAcc.Alabel (ADAcc.DLabel (TupRsingle (ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))))) ())
-      --           in trace (show (ADAcc.Alet lhs' shiftArg trans)) $
-      --              AD.test lhs' trans `seq` error "kaas"
-      --     _ -> undefined
       case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
           Just transBody
             | AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' transBody
