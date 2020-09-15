@@ -10,6 +10,7 @@ import Data.Array.Accelerate (Z(..), (:.)(..))
 
 import qualified ADHelp as AD
 import qualified Logistic
+import qualified Neural
 import qualified Optimise
 
 
@@ -24,6 +25,24 @@ optimise :: IO ()
 optimise = do
   let theta = A.fromList (Z :. Optimise.dimension) (repeat 0)
   print (I.run (Optimise.optimise (A.use theta) (A.use (A.fromList Z [0.3]))))
+
+neural :: IO ()
+neural = do
+  print $ I.run $ Neural.matvec (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
+                                (A.use (A.fromList (Z :. 4) [10, 12, 13, 17]))
+  print $ I.run $ Neural.matmat (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
+                                (A.use (A.fromList (Z :. 4 :. 3) [2..13]))
+
+  let network1 = A.T2 (A.use (A.fromList (Z :. 3 :. 3) [-5.6,4.6,-2.3, 2.4,2.2,0.5, -4.8,5.8,2.3]))
+                      (A.use (A.fromList (Z :. 1 :. 3) [7.9, 3.9, -7.5]))
+      input1 = A.use (A.fromList (Z :. 4 :. 3) [0,0,1, 0,1,1, 1,0,1, 1,1,1])
+      -- output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
+      -- lossfunc wanted got = A.fold1All (+) (A.zipWith (-) wanted got)
+
+  print $ I.run $ Neural.forward network1 input1
+
+  -- print $ A.gradientA (\netw -> lossfunc output1 (Neural.forward netw input1))
+  --                     network1
 
 indexing :: IO ()
 indexing = do
@@ -87,6 +106,7 @@ adtuple1 :: IO ()
 adtuple1 = do
   print . I.run . A.unit $ A.gradientE @Float
     (\x -> let swap (A.T2 a b) = A.T2 b a
+               swap _ = undefined
                x1 = A.T2 (A.T2 x (2 * x)) (3 * x)
                A.T2 y1 x2 = swap x1
                A.T2 _ y3 = x2
@@ -98,6 +118,7 @@ adtuple2 :: IO ()
 adtuple2 = do
   print . I.run . A.unit $ A.gradientE @Float
     (\x -> let swap (A.T2 a b) = A.T2 b a
+               swap _ = undefined
                x1 = A.cond (x A.> 0) (A.T2 3 4) (A.T2 1 2) :: A.Exp (Float, Float)
                x2 = A.T2 x1 (swap x1)
                A.T2 _ (A.T2 y2 _) = x2
@@ -132,18 +153,22 @@ arrad = do
   --   A.gradientA (\arr -> A.sum (A.map (\x -> A.toFloating (A.unindex1 (A.shape arr)) * x) arr))
   --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
 
-  print . I.run $
-    A.gradientA (\arr ->
-                    let a1 = A.map (\x -> 2 * x) arr
-                        a2 = A.map (\x -> log x) arr
-                        a3 = A.map (\x -> x + 3) a1
-                    in A.sum (A.map (\x -> let i1 = A.toFloating (A.unindex1 (A.shape a1))
-                                               i2 = A.toFloating (A.unindex1 (A.shape a2))
-                                               i3 = A.toFloating (A.unindex1 (A.shape a3))
-                                           in i1 * i2 * i3 * x)
-                                    arr))
+  -- print . I.run $
+  --   A.gradientA (\arr ->
+  --                   let a1 = A.map (\x -> 2 * x) arr
+  --                       a2 = A.map (\x -> log x) arr
+  --                       a3 = A.map (\x -> x + 3) a1
+  --                   in A.sum (A.map (\x -> let i1 = A.toFloating (A.unindex1 (A.shape a1))
+  --                                              i2 = A.toFloating (A.unindex1 (A.shape a2))
+  --                                              i3 = A.toFloating (A.unindex1 (A.shape a3))
+  --                                          in i1 * i2 * i3 * x)
+  --                                   arr))
+  --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
+  -- -- expected result: 6 * 6 * 6 = 216
+
+  print $
+    A.gradientA (\arr -> A.sum (A.map (\x -> x * x * x + 2 * x) arr))
                 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
-  -- expected result: 6 * 6 * 6 = 216
 
 main :: IO ()
 main = do
@@ -158,4 +183,5 @@ main = do
   -- adtuple1
   -- adtuple2
   -- adtuple3
-  arrad
+  -- arrad
+  neural
