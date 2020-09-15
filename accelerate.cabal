@@ -343,6 +343,7 @@ library
         Data.Array.Accelerate.Error
         Data.Array.Accelerate.Lifetime
         Data.Array.Accelerate.Pretty
+        Data.Array.Accelerate.Pretty.NoTrafo
         Data.Array.Accelerate.Representation.Array
         Data.Array.Accelerate.Representation.Elt
         Data.Array.Accelerate.Representation.Shape
