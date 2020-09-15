@@ -145,7 +145,7 @@ aCheckClosedInTagval tv expr = case expr of
     Acond ty c t e -> Acond ty <$> eCheckAClosedInTagval tv c <*> aCheckClosedInTagval tv t <*> aCheckClosedInTagval tv e
     Map ty f e -> Map ty <$> traverse (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e
     ZipWith ty f e1 e2 -> ZipWith ty <$> traverse (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
-    Fold ty f me0 e -> Fold ty <$> traverse (efCheckAClosedInTagval tv) f <*> (eCheckAClosedInTagval tv <$> me0) <*> aCheckClosedInTagval tv e
+    Fold ty f me0 e -> Fold ty <$> traverse (efCheckAClosedInTagval tv) f <*> traverse (eCheckAClosedInTagval tv) me0 <*> aCheckClosedInTagval tv e
     Sum ty e -> Sum ty <$> aCheckClosedInTagval tv e
     Generate ty e f -> Generate ty <$> eCheckAClosedInTagval tv e <*> traverse (efCheckAClosedInTagval tv) f
     Aget ty ti e -> Aget ty ti <$> aCheckClosedInTagval tv e
