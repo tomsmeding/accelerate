@@ -335,6 +335,7 @@ library
         Data.Array.Accelerate.Debug.Internal
         Data.Array.Accelerate.Lifetime
         Data.Array.Accelerate.Pretty
+        Data.Array.Accelerate.Pretty.NoTrafo
         Data.Array.Accelerate.Representation.Array
         Data.Array.Accelerate.Representation.Elt
         Data.Array.Accelerate.Representation.Shape
