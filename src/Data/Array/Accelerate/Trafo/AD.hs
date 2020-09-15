@@ -31,6 +31,7 @@ convertExp Nil = Nil
 convertExp (Pair e1 e2) = Pair (convertExp e1) (convertExp e2)
 convertExp (Shape var) = Shape var
 convertExp (Index var dim) = Index var (convertExp dim)
+convertExp (ShapeSize shr e) = ShapeSize shr (convertExp e)
 convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   | SingleScalarType (NumSingleType (FloatingNumType TypeFloat)) <- sty
   , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
@@ -60,6 +61,8 @@ convertAcc (OpenAcc (Alet lhs def body)) = OpenAcc (Alet lhs (convertAcc def) (c
 convertAcc (OpenAcc (Avar (Var rep idx))) = OpenAcc (Avar (Var rep idx))
 convertAcc (OpenAcc (Apair a1 a2)) = OpenAcc (Apair (convertAcc a1) (convertAcc a2))
 convertAcc (OpenAcc Anil) = OpenAcc Anil
+convertAcc (OpenAcc (Apply ty f a)) = OpenAcc (Apply ty (convertAfun f) (convertAcc a))
+convertAcc (OpenAcc (Reshape shr she a)) = OpenAcc (Reshape shr (convertExp she) (convertAcc a))
 convertAcc (OpenAcc (Use rep a)) = OpenAcc (Use rep a)
 convertAcc (OpenAcc (Fold f e a)) = OpenAcc (Fold (convertFun f) (convertExp <$> e) (convertAcc a))
 convertAcc (OpenAcc (ZipWith ty f a1 a2)) = OpenAcc (ZipWith ty (convertFun f) (convertAcc a1) (convertAcc a2))
