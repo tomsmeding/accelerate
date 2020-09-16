@@ -1,16 +1,27 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
-module Neural (forward, matmat, matvec) where
+module Neural (forward, matmat, matvec, Network(..)) where
 
 import qualified Data.Array.Accelerate as A
 import Data.Array.Accelerate (Z(..), (:.)(..))
 
+type Weights = A.Matrix Float
+type RowBatch = A.Matrix Float
+type ColBatch = A.Matrix Float
+
+data Network a where
+    InputLayer :: Network ()
+    NextLayer :: A.Acc Weights -> Network a -> Network (a, ())
+
 -- layers: from closest to input, to output layer; Z :. output :. input
 -- input: Z :. batchsize :. vector
 -- output: Z :. batchsize :. vector
-forward :: A.Acc (A.Matrix Float, A.Matrix Float) -> A.Acc (A.Matrix Float) -> A.Acc (A.Matrix Float)
-forward (A.T2 ly1m ly2m) input =
-    layer ly2m . layer ly1m $ A.transpose input
-  where layer = (A.map sigmoid .) . matmat
+forward :: Network a -> A.Acc RowBatch -> A.Acc RowBatch
+forward net input = A.transpose $ applyNetwork (\w i -> A.map sigmoid (matmat w i)) net (A.transpose input)
+
+applyNetwork :: (A.Acc Weights -> A.Acc ColBatch -> A.Acc ColBatch) -> Network a -> A.Acc ColBatch -> A.Acc ColBatch
+applyNetwork _ InputLayer i = i
+applyNetwork f (NextLayer ws net) i = f ws (applyNetwork f net i)
 
 sigmoid :: A.Exp Float -> A.Exp Float
 sigmoid x = 1 / (1 + exp (-x))
