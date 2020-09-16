@@ -33,8 +33,10 @@ neural = do
   print $ I.run $ Neural.matmat (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
                                 (A.use (A.fromList (Z :. 4 :. 3) [2..13]))
 
-  let network1 = A.T2 (A.use (A.fromList (Z :. 3 :. 3) [-5.6,4.6,-2.3, 2.4,2.2,0.5, -4.8,5.8,2.3]))
-                      (A.use (A.fromList (Z :. 1 :. 3) [7.9, 3.9, -7.5]))
+  let network1 =
+          Neural.NextLayer (A.use (A.fromList (Z :. 1 :. 3) [7.9, 3.9, -7.5])) $
+          Neural.NextLayer (A.use (A.fromList (Z :. 3 :. 3) [-5.6,4.6,-2.3, 2.4,2.2,0.5, -4.8,5.8,2.3])) $
+          Neural.InputLayer
       input1 = A.use (A.fromList (Z :. 4 :. 3) [0,0,1, 0,1,1, 1,0,1, 1,1,1])
       -- output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
       -- lossfunc wanted got = A.fold1All (+) (A.zipWith (-) wanted got)
