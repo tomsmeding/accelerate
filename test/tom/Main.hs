@@ -168,9 +168,18 @@ arrad = do
   --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
   -- -- expected result: 6 * 6 * 6 = 216
 
-  print $
-    A.gradientA (\arr -> A.sum (A.map (\x -> x * x * x + 2 * x) arr))
+  -- print $
+  --   A.gradientA (\arr -> A.sum (A.map (\x -> x * x * x + 2 * x) arr))
+  --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
+
+  print . I.run $
+    A.gradientA (\a -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a (A.map (+6) a)))
                 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
+
+  -- print $
+  --   A.gradientA (\(A.T2 a1 a2) -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a1 a2))
+  --               (A.T2 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
+  --                     (A.use (A.fromList (Z :. (6 :: Int)) [7, 8, 9, 10, 11, 12])))
 
 main :: IO ()
 main = do
@@ -185,5 +194,5 @@ main = do
   -- adtuple1
   -- adtuple2
   -- adtuple3
-  -- arrad
-  neural
+  arrad
+  -- neural

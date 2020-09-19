@@ -236,6 +236,8 @@ untranslateLHSboundAcc toplhs topexpr
 
     fromPairedBinop :: D.OpenFun env aenv lab alab ((t1, t2) -> t3) -> D.OpenFun env aenv lab alab (t1 -> t2 -> t3)
     fromPairedBinop (D.Lam (A.LeftHandSidePair lhs1 lhs2) (D.Body ex)) = D.Lam lhs1 (D.Lam lhs2 (D.Body ex))
+    fromPairedBinop (D.Lam (A.LeftHandSideWildcard (TupRpair t1 t2)) (D.Body ex)) =
+        D.Lam (A.LeftHandSideWildcard t1) (D.Lam (A.LeftHandSideWildcard t2) (D.Body ex))
     fromPairedBinop _ = error "Impossible GADTs"
 
 checkLocal :: (forall t1 t2. TupR s t1 -> TupR s t2 -> Maybe (t1 :~: t2)) -> A.Var s env t -> PartialVal s topenv env2 -> Maybe (A.Var s env2 t)

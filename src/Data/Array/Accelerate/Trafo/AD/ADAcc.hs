@@ -492,18 +492,26 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                   _ ->
                       error $ "primal: Map arguments did not compute arguments: lbl = " ++ showDLabel lbl ++ "; arglab = " ++ showDLabel arglab ++ "; arglabS = " ++ showDLabel arglabS ++ "; lambdaLabs = " ++ showTupR show lambdaLabs ++ "; lambdaLabs' = " ++ showTupR show lambdaLabs' ++ "; CONTEXT = " ++ showContext (Context labelenv bindmap)
 
-          ZipWith restype (Left lambda) (Alabel arglab1) (Alabel arglab2) ->
-              let TupRsingle arglab1S = bindmap `dmapFind` fmapLabel P arglab1
+          ZipWith restype@(ArrayR resshape reselty) (Left (SplitLambdaAD lambdaPrimal _ lambdaLabs (lambdaTmpType, lambdaTmpLab))) (Alabel arglab1) (Alabel arglab2) ->
+              let lambdaLabs' = lookupLambdaLabs bindmap lambdaLabs
+                  TupRsingle arglab1S = bindmap `dmapFind` fmapLabel P arglab1
                   TupRsingle arglab2S = bindmap `dmapFind` fmapLabel P arglab2
-              in case (alabValFind labelenv arglab1S, alabValFind labelenv arglab2S) of
-                  (Just argidx1, Just argidx2) -> do
+              in case (alabValFind labelenv arglab1S, alabValFind labelenv arglab2S, alabValFinds labelenv lambdaLabs') of
+                  (Just argidx1, Just argidx2, Just lambdaVars) -> do
                       lab <- genSingleId restype
-                      Alet (A.LeftHandSideSingle restype)
-                           (ZipWith restype (Left (fmapAlabSplitLambdaAD (fmapLabel P) lambda))
-                                            (Avar (A.Var (labelType arglab1S) argidx1))
-                                            (Avar (A.Var (labelType arglab2S) argidx2)))
+                      let pairEltType = TupRpair reselty lambdaTmpType
+                          pairArrType = ArrayR resshape pairEltType
+                          tmpArrType = ArrayR resshape lambdaTmpType
+                      Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
+                           (Alet (A.LeftHandSideSingle pairArrType)
+                                 (ZipWith pairArrType (Right (fmapAlabFun (fmapLabel P) (lambdaPrimal lambdaVars)))
+                                                      (Avar (A.Var (labelType arglab1S) argidx1))
+                                                      (Avar (A.Var (labelType arglab2S) argidx2)))
+                                 (smartPair
+                                      (Map restype (Right (expFstLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))
+                                      (Map tmpArrType (Right (expSndLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))))
                            <$> primal' nodemap restlabels
-                                       (Context (LPush labelenv lab)
+                                       (Context (LPush (LPush labelenv lab) lambdaTmpLab )
                                                 (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                                        cont
                   _ ->
@@ -572,18 +580,6 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
   where
     smartPair :: OpenAcc aenv lab alab args a -> OpenAcc aenv lab alab args b -> OpenAcc aenv lab alab args (a, b)
     smartPair a b = Apair (TupRpair (atypeOf a) (atypeOf b)) a b
-
-    expFstLam :: TypeR (t1, t2) -> Fun aenv lab alab ((t1, t2) -> t1)
-    expFstLam (TupRpair t1 t2)
-      | LetBoundExpE lhs ex <- elhsCopy t1
-      = Lam (A.LeftHandSidePair lhs (A.LeftHandSideWildcard t2)) (Body (evars ex))
-    expFstLam _ = error "expFstLam: Invalid GADTs"
-
-    expSndLam :: TypeR (t1, t2) -> Fun aenv lab alab ((t1, t2) -> t2)
-    expSndLam (TupRpair t1 t2)
-      | LetBoundExpE lhs ex <- elhsCopy t2
-      = Lam (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs) (Body (evars ex))
-    expSndLam _ = error "expSndLam: Invalid GADTs"
 
     lookupLambdaLabs :: DMap (DLabel (TupR ArrayR) (PDAcc Int)) (TupR (ADLabel Int))  -- bindmap
                      -> TupR (ADLabel Int) t  -- free variable labels from SplitLambdaAD
@@ -669,6 +665,43 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
                          contribmap' cont
+
+      ZipWith restype (Left (SplitLambdaAD _ lambdaDual lambdaLabs (lambdaTmpType, lambdaTmpLab))) (Alabel arglab1) (Alabel arglab2) -> do
+          -- This one works a bit differently from the other duals. The dual
+          -- lambda computes, for each primal-output array element, a _tuple_
+          -- containing the element adjoints for the left and right argument to
+          -- the ZipWith. What we want is to "unzip" this array to get the two
+          -- adjoint contribution arrays. However, we cannot do this whole
+          -- computation at the point of the arguments as we usually do in a
+          -- Contribution, because then we compute the ZipWith adjoint twice.
+          -- Thus, we compute it once here, immediately, and then in the
+          -- Contribution's ignore the ZipWith's adjoint and use the computed
+          -- tuple-array directly.
+          let TupRsingle argtype1S@(ArrayR shtype arg1elt) = labelType arglab1
+              TupRsingle argtype2S@(ArrayR _      arg2elt) = labelType arglab2
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+          templab <- genSingleId (ArrayR shtype (TupRpair arg1elt arg2elt))
+          let contribmap' = updateContribmap lbl
+                                [Contribution arglab1 TLNil (TupRsingle templab :@ TLNil) $
+                                    \_ _ (TupRsingle tempVar :@ TLNil) ->
+                                        Map argtype1S (Right (expFstLam (TupRpair arg1elt arg2elt))) (Avar tempVar)
+                                ,Contribution arglab2 TLNil (TupRsingle templab :@ TLNil) $
+                                    \_ _ (TupRsingle tempVar :@ TLNil) ->
+                                        Map argtype2S (Right (expSndLam (TupRpair arg1elt arg2elt))) (Avar tempVar)]
+                                contribmap
+          lab <- genSingleId restype
+          Alet (A.LeftHandSideSingle restype) adjoint
+               <$> let labelenv' = LPush labelenv lab
+                   in case (alabValFind labelenv' lambdaTmpLab, alabValFinds labelenv' lambdaLabs) of
+                          (Just lambdaTmpVar, Just fvvars) ->
+                              Alet (A.LeftHandSideSingle (labelType templab))
+                                   (ZipWith (labelType templab) (Right (fmapAlabFun (fmapLabel P) (lambdaDual fvvars)))
+                                            (Avar (A.Var restype ZeroIdx))
+                                            (Avar (A.Var (ArrayR shtype lambdaTmpType) lambdaTmpVar)))
+                              <$> dual' nodemap restlabels (Context (LPush labelenv' templab)
+                                                                    (DMap.insert (fmapLabel D lbl) (TupRsingle lab) bindmap))
+                                        contribmap' cont
+                          _ -> error $ "dual ZipWith: lambda tmp var and/or fvvars not computed"
 
       Sum restype@(ArrayR sht _) (Alabel arglab) -> do
           let TupRsingle argtypeS = labelType arglab
@@ -816,6 +849,7 @@ collectAdjoint contribmap lbl (Context labelenv bindmap)
   = case DMap.lookup (fmapLabel D lbl) contribmap of
         Just (AdjList listgen) -> arraysSum (labelType lbl) pvars (listgen (Context labelenv bindmap))
         Nothing -> arraysSum (labelType lbl) pvars []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
+collectAdjoint _ _ _ = error "Impossible GADTs"
 
 arrayPlus :: OpenAcc aenv lab alab args (Array sh t)
           -> OpenAcc aenv lab alab args (Array sh t)
@@ -857,6 +891,18 @@ generateConstantArray ty e sht she =
     Generate (ArrayR sht ty) she
              (Right (Lam (A.LeftHandSideWildcard (shapeType sht)) (Body e)))
 
+expFstLam :: TypeR (t1, t2) -> Fun aenv lab alab ((t1, t2) -> t1)
+expFstLam (TupRpair t1 t2)
+  | LetBoundExpE lhs ex <- elhsCopy t1
+  = Lam (A.LeftHandSidePair lhs (A.LeftHandSideWildcard t2)) (Body (evars ex))
+expFstLam _ = error "expFstLam: Invalid GADTs"
+
+expSndLam :: TypeR (t1, t2) -> Fun aenv lab alab ((t1, t2) -> t2)
+expSndLam (TupRpair t1 t2)
+  | LetBoundExpE lhs ex <- elhsCopy t2
+  = Lam (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs) (Body (evars ex))
+expSndLam _ = error "expSndLam: Invalid GADTs"
+
 -- TODO: not yet converted to array language
 -- oneHotTup :: TypeR t -> TupleIdx t t' -> OpenAcc aenv lab args t' -> OpenAcc aenv lab args t
 -- oneHotTup _ TIHere ex = ex
@@ -872,6 +918,7 @@ accLabelParents = \case
     Anil -> []
     Acond _ _ e1 e2 -> fromLabel e1 ++ fromLabel e2
     Map _ lam e -> fromLabel e ++ lamLabels lam
+    ZipWith _ lam e1 e2 -> fromLabel e1 ++ fromLabel e2 ++ lamLabels lam
     Sum _ e -> fromLabel e
     Aget _ _ e -> fromLabel e
     Aarg _ _ -> []

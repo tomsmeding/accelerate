@@ -208,6 +208,7 @@ splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
                                                   adjointProducer (Context labelenv' _) =
                                                     case elabValFind labelenv' adjlab of
                                                         Just idx -> Var (A.Var exprtypeS idx)
+                                                        Nothing -> error "splitLambdaAD: adjoint of final value not computed"
                                               DualResult ctx' _ builder' <- dual exploded adjointProducer ctx
                                               return $ builder' $ produceGradient argLabelMap ctx' argsRHS)
                   -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
