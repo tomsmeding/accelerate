@@ -13,7 +13,7 @@ import Data.List (intercalate)
 import Data.GADT.Show
 
 import Data.Array.Accelerate.Representation.Array
-import Data.Array.Accelerate.Representation.Shape (shapeType)
+import Data.Array.Accelerate.Representation.Shape (shapeType, ShapeR)
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST as A
@@ -70,6 +70,10 @@ data OpenExp env aenv lab alab args t where
                       (DLabel ArrayR alab (Array sh e))
             -> OpenExp env aenv lab alab args sh
             -> OpenExp env aenv lab alab args e
+
+    ShapeSize :: ShapeR dim
+              -> OpenExp env aenv lab alab args dim
+              -> OpenExp env aenv lab alab args Int
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
@@ -161,6 +165,10 @@ showsExp se d (Index (Right lab) e) =
     showParen (d > 10) $
         showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
         . showString " ! " . showsExp se 11 e
+showsExp se d (ShapeSize _ e) =
+    showParen (d > 10) $
+        showString "shapeSize " .
+        showsExp se 11 e
 showsExp se d (Get _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsExp se 10 e
   where
@@ -208,6 +216,7 @@ etypeOf (Shape (Left (A.Var (ArrayR sht _) _))) = shapeType sht
 etypeOf (Shape (Right (DLabel (ArrayR sht _) _))) = shapeType sht
 etypeOf (Index (Left (A.Var (ArrayR _ ty) _)) _) = ty
 etypeOf (Index (Right (DLabel (ArrayR _ ty) _)) _) = ty
+etypeOf (ShapeSize _ _) = TupRsingle scalarType
 etypeOf (Get ty _ _) = ty
 etypeOf (Let _ _ body) = etypeOf body
 etypeOf (Var (A.Var ty _)) = TupRsingle ty
@@ -300,6 +309,7 @@ generaliseLab (Shape (Left avar)) = Shape (Left avar)
 generaliseLab (Shape (Right alab)) = Shape (Right alab)
 generaliseLab (Index (Left avar) e) = Index (Left avar) (generaliseLab e)
 generaliseLab (Index (Right alab) e) = Index (Right alab) (generaliseLab e)
+generaliseLab (ShapeSize sht e) = ShapeSize sht (generaliseLab e)
 generaliseLab (Get ty path ex) = Get ty path (generaliseLab ex)
 generaliseLab (Let lhs rhs ex) = Let lhs (generaliseLab rhs) (generaliseLab ex)
 generaliseLab (Var v) = Var v
@@ -317,6 +327,7 @@ generaliseLabA (Shape (Left avar)) = Shape (Left avar)
 generaliseLabA (Shape (Right _)) = error "generaliseLabA: Shape with label found"
 generaliseLabA (Index (Left avar) e) = Index (Left avar) (generaliseLabA e)
 generaliseLabA (Index (Right _) _) = error "generaliseLabA: Index with label found"
+generaliseLabA (ShapeSize sht e) = ShapeSize sht (generaliseLabA e)
 generaliseLabA (Get ty path ex) = Get ty path (generaliseLabA ex)
 generaliseLabA (Let lhs rhs ex) = Let lhs (generaliseLabA rhs) (generaliseLabA ex)
 generaliseLabA (Var v) = Var v
@@ -334,6 +345,7 @@ fmapAlabExp f ex = case ex of
     Cond ty e1 e2 e3 -> Cond ty (fmapAlabExp f e1) (fmapAlabExp f e2) (fmapAlabExp f e3)
     Shape ref -> Shape (f <$> ref)
     Index ref e -> Index (f <$> ref) (fmapAlabExp f e)
+    ShapeSize sht e -> ShapeSize sht (fmapAlabExp f e)
     Get ty ti e -> Get ty ti (fmapAlabExp f e)
     Let lhs rhs e -> Let lhs (fmapAlabExp f rhs) (fmapAlabExp f e)
     Arg ty idx -> Arg ty idx
@@ -381,6 +393,7 @@ sinkExp _ Nil = Nil
 sinkExp k (Cond ty c t e) = Cond ty (sinkExp k c) (sinkExp k t) (sinkExp k e)
 sinkExp _ (Shape var) = Shape var
 sinkExp k (Index var e) = Index var (sinkExp k e)
+sinkExp k (ShapeSize sht e) = ShapeSize sht (sinkExp k e)
 sinkExp k (Get ty ti e) = Get ty ti (sinkExp k e)
 sinkExp k (Let lhs rhs e)
   | GenLHS lhs' <- generaliseLHS lhs =
@@ -397,6 +410,7 @@ expALabels Nil = []
 expALabels (Cond _ c t e) = expALabels c ++ expALabels t ++ expALabels e
 expALabels (Shape var) = either (const []) (pure . AnyLabel) var
 expALabels (Index var e) = either (const []) (pure . AnyLabel) var ++ expALabels e
+expALabels (ShapeSize _ e) = expALabels e
 expALabels (Get _ _ e) = expALabels e
 expALabels (Let _ rhs e) = expALabels rhs ++ expALabels e
 expALabels (Var _) = []

@@ -98,6 +98,7 @@ generaliseArgs (Pair ty e1 e2) = Pair ty (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs Nil = Nil
 generaliseArgs (Cond ty e1 e2 e3) = Cond ty (generaliseArgs e1) (generaliseArgs e2) (generaliseArgs e3)
 generaliseArgs (Shape avar) = Shape avar
+generaliseArgs (ShapeSize sht e) = ShapeSize sht (generaliseArgs e)
 generaliseArgs (Get ty path ex) = Get ty path (generaliseArgs ex)
 generaliseArgs (Let lhs rhs ex) = Let lhs (generaliseArgs rhs) (generaliseArgs ex)
 generaliseArgs (Var v) = Var v
@@ -271,6 +272,7 @@ collectFreeAvars labelenv ex = case ex of
         W.tell [AnyLabel lab]
         return (Shape (Right lab))
     Shape (Right _) -> error "Unexpected Shape(Label) in collectFreeAvars"
+    ShapeSize sht e -> ShapeSize sht <$> collectFreeAvars labelenv e
     Get ty ti e -> Get ty ti <$> collectFreeAvars labelenv e
     Let lhs rhs e -> Let lhs <$> collectFreeAvars labelenv rhs <*> collectFreeAvars labelenv e
     Arg ty idx -> return (Arg ty idx)
@@ -396,6 +398,7 @@ inlineAvarLabels labs vars = go (buildVarLabMap labs vars)
           | Just var <- DMap.lookup lab mp -> Shape (Left var)
           | otherwise -> error "inlineAvarLabels: Not all labels instantiated"
         Shape (Left _) -> error "inlineAvarLabels: Array variable found in labelised expression"
+        ShapeSize sht e -> ShapeSize sht (go mp e)
         Get ty tidx ex -> Get ty tidx (go mp ex)
         Let lhs rhs ex -> Let lhs (go mp rhs) (go mp ex)
         Var v -> Var v
@@ -415,6 +418,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Nil -> Nil
         Cond ty e1 e2 e3 -> Cond ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
         Shape avar -> Shape avar
+        ShapeSize sht e -> ShapeSize sht (go argWeaken varWeaken e)
         Get ty tidx ex -> Get ty tidx (go argWeaken varWeaken ex)
         Let lhs rhs ex
           | GenLHS lhs' <- generaliseLHS lhs ->
@@ -472,6 +476,13 @@ explode' env = \case
     Shape (Right alab@(DLabel (ArrayR sht _) _)) -> do
         lab <- genId (shapeType sht)
         return (lab, DMap.singleton lab (Shape (Right alab)), mempty)
+    ShapeSize sht e -> do
+        (lab1, mp1, argmp1) <- explode' env e
+        lab <- genId (TupRsingle scalarType)
+        let pruned = ShapeSize sht (Label lab1)
+        let itemmp = DMap.singleton lab pruned
+            mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
+        return (lab, mp, argmp1)
     Let lhs rhs body -> do
         (lab1, mp1, argmp1) <- explode' env rhs
         (_, labs) <- genSingleIds (etypeOf rhs)
@@ -641,6 +652,16 @@ primal' nodemap lbl (Context labelenv bindmap)
               return $ PrimalResult (Context (lpushLabTup labelenv lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap))
                                     (Let lhs (Shape ref))
 
+          ShapeSize sht (Label arglab) -> do
+              PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
+              let arglabs = bindmap' `dmapFind` fmapLabel P arglab
+              case elabValFinds labelenv' arglabs of
+                  Just vars -> do
+                      (GenLHS lhs, labs) <- genSingleIds (TupRsingle scalarType)
+                      return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
+                                            (f1 . Let lhs (ShapeSize sht (evars vars)))
+                  _ -> error "primal: ShapeSize arguments did not compute arguments"
+
           Get _ path (Label arglab) -> do
               PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
               let pickedlabs = pickDLabels path (bindmap' `dmapFind` fmapLabel P arglab)
@@ -801,9 +822,14 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
       PrimApp (TupRsingle (SingleScalarType (NumSingleType (IntegralNumType _)))) _ _ ->
           return $ DualResult (Context labelenv bindmap) contribmap id
 
-      -- No adjoint because the result is an integral type, and no
-      -- contributions because there are no parents
+      -- No adjoint because the result is an integral type, thus also no
+      -- contributions to make
       Shape _ ->
+          return $ DualResult (Context labelenv bindmap) contribmap id
+
+      -- No adjoint because the result is an integral type, thus also no
+      -- contributions to make
+      ShapeSize _ _ ->
           return $ DualResult (Context labelenv bindmap) contribmap id
 
       Cond restype (Label condlab) (Label thenlab) (Label elselab) -> do
@@ -966,6 +992,7 @@ expLabelParents = \case
     Nil -> []
     Cond _ e1 e2 e3 -> fromLabel e1 ++ fromLabel e2 ++ fromLabel e3
     Shape _ -> []
+    ShapeSize _ e -> fromLabel e
     Get _ _ e -> fromLabel e
     Arg _ _ -> []
     Label lab -> [AnyLabel lab]

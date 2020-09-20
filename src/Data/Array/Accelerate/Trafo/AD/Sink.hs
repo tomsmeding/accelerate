@@ -32,6 +32,7 @@ sinkExpAenv k (Shape (Left (A.Var sht idx))) = Shape (Left (A.Var sht (k A.>:> i
 sinkExpAenv _ (Shape (Right lab)) = Shape (Right lab)
 sinkExpAenv k (Index (Left (A.Var sht idx)) e) = Index (Left (A.Var sht (k A.>:> idx))) (sinkExpAenv k e)
 sinkExpAenv k (Index (Right lab) e) = Index (Right lab) (sinkExpAenv k e)
+sinkExpAenv k (ShapeSize sht e) = ShapeSize sht (sinkExpAenv k e)
 sinkExpAenv k (Get ty ti e) = Get ty ti (sinkExpAenv k e)
 sinkExpAenv k (Let lhs rhs e) = Let lhs (sinkExpAenv k rhs) (sinkExpAenv k e)
 sinkExpAenv _ (Var (A.Var sty idx)) = Var (A.Var sty idx)
@@ -100,6 +101,7 @@ eCheckClosedInTagval tv expr = case expr of
     Nil -> Just Nil
     Cond ty c t e -> Cond ty <$> eCheckClosedInTagval tv c <*> eCheckClosedInTagval tv t <*> eCheckClosedInTagval tv e
     Shape avar -> Just (Shape avar)
+    ShapeSize sht e -> ShapeSize sht <$> eCheckClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckClosedInTagval tv e
     Let lhs rhs e
       | GenLHS lhs' <- generaliseLHS lhs ->
@@ -116,6 +118,7 @@ eCheckAClosedInTagval tv expr = case expr of
     Nil -> Just Nil
     Shape (Left var) -> Shape . Left <$> aCheckLocal var tv
     Shape (Right _) -> error "Exp with label in arrayvar position is not closed, todo?"
+    ShapeSize sht e -> ShapeSize sht <$> eCheckAClosedInTagval tv e
     Cond ty c t e -> Cond ty <$> eCheckAClosedInTagval tv c <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckAClosedInTagval tv e
     Let lhs rhs e -> Let lhs <$> eCheckAClosedInTagval tv rhs <*> eCheckAClosedInTagval tv e
