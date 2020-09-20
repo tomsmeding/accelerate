@@ -24,17 +24,16 @@ class IsAdditive s where
 
 instance IsAdditive IntegralType where
     zeroForType' z ty = case ty of
-        TypeInt -> Const (scalar TypeInt) z
-        TypeInt8 -> Const (scalar TypeInt8) z
-        TypeInt16 -> Const (scalar TypeInt16) z
-        TypeInt32 -> Const (scalar TypeInt32) z
-        TypeInt64 -> Const (scalar TypeInt64) z
-        TypeWord -> Const (scalar TypeWord) z
-        TypeWord8 -> Const (scalar TypeWord8) z
-        TypeWord16 -> Const (scalar TypeWord16) z
-        TypeWord32 -> Const (scalar TypeWord32) z
-        TypeWord64 -> Const (scalar TypeWord64) z
-      where scalar = SingleScalarType . NumSingleType . IntegralNumType
+        TypeInt -> Const scalarType z
+        TypeInt8 -> Const scalarType z
+        TypeInt16 -> Const scalarType z
+        TypeInt32 -> Const scalarType z
+        TypeInt64 -> Const scalarType z
+        TypeWord -> Const scalarType z
+        TypeWord8 -> Const scalarType z
+        TypeWord16 -> Const scalarType z
+        TypeWord32 -> Const scalarType z
+        TypeWord64 -> Const scalarType z
 
     expPlus ty e1 e2 =
       PrimApp (TupRsingle (scalar ty)) (A.PrimAdd (IntegralNumType ty))
@@ -43,10 +42,9 @@ instance IsAdditive IntegralType where
 
 instance IsAdditive FloatingType where
     zeroForType' z ty = case ty of
-        TypeHalf -> Const (flttype TypeHalf) z
-        TypeFloat -> Const (flttype TypeFloat) z
-        TypeDouble -> Const (flttype TypeDouble) z
-      where flttype = SingleScalarType . NumSingleType . FloatingNumType
+        TypeHalf -> Const scalarType z
+        TypeFloat -> Const scalarType z
+        TypeDouble -> Const scalarType z
 
     expPlus ty e1 e2 =
       PrimApp (TupRsingle (scalar ty)) (A.PrimAdd (FloatingNumType ty))
