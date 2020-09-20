@@ -9,10 +9,10 @@ import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.List (intercalate)
 
 
-data Layout = LPrefix String Layout
-            | LBlock [Layout]
-            | LSeq [Layout]
-            | LMaybeHanging Layout Layout
+data Layout = LPrefix String Layout        -- Prefix to top line of layout block
+            | LBlock [Layout]              -- Block of left-aligned layouts
+            | LSeq Layout [Layout]         -- (sep,lts); if all lts are single-line, then separated by sep, else LBlock ignoring sep
+            | LMaybeHanging Layout Layout  -- (main,sub); if sub is single-line, then LSeq " ", else LBlock with indent before sub
   deriving (Show)
 
 class Pretty a where
@@ -29,18 +29,15 @@ format = go 0
     go _ (LBlock []) = ""
     go d (LBlock (layout : layouts)) =
         go d layout ++ concat ['\n' : replicate d ' ' ++ go d l | l <- layouts]
-    go d (LSeq layouts) =
-        go d $ lblock (foldr (\layout rest -> case layout of
-                                                  LPrefix str (LBlock []) -> mergeInto str rest
-                                                  _ -> layout : rest)
-                             [] layouts)
-      where
-        mergeInto :: String -> [Layout] -> [Layout]
-        mergeInto str [] = [string str]
-        mergeInto str (LPrefix str' (LBlock []) : rest) = string (str ++ str') : rest
-        mergeInto str rest = string str : rest
+    go d (LSeq sep layouts)
+      | Just strs <- mapM fromSingleLine layouts =
+          case fromSingleLine sep of
+            Just sepstr -> intercalate sepstr strs
+            Nothing -> error "Pretty: Non-single-line separator in LSeq"
+      | otherwise =
+          go d (LBlock layouts)
     go d (LMaybeHanging main sub)
-      | Just str <- fromSingleLine sub = go d (lseq [main, string (' ' : str)])
+      | Just str <- fromSingleLine sub = go d (lseq' [main, string str])
       | otherwise = go d (hanging main sub)
 
 fromSingleLine :: Layout -> Maybe String
@@ -48,7 +45,7 @@ fromSingleLine (LPrefix str l) = (str ++) <$> fromSingleLine l
 fromSingleLine (LBlock []) = Just ""
 fromSingleLine (LBlock [l]) = fromSingleLine l
 fromSingleLine (LBlock _) = Nothing
-fromSingleLine (LSeq ls) = concat <$> mapM fromSingleLine ls
+fromSingleLine (LSeq sep ls) = intercalate <$> fromSingleLine sep <*> mapM fromSingleLine ls
 fromSingleLine (LMaybeHanging main sub) =
     (++) <$> fromSingleLine main <*> ((' ' :) <$> fromSingleLine sub)
 
@@ -59,8 +56,7 @@ string :: String -> Layout
 string str = lprefix str (LBlock [])
 
 lprefix :: String -> Layout -> Layout
-lprefix str (LPrefix str' layout) = LPrefix (str ++ str') layout
-lprefix str layout = LPrefix str layout
+lprefix = LPrefix
 
 lblock :: [Layout] -> Layout
 lblock = LBlock . flattenBlocks
@@ -69,17 +65,11 @@ lblock = LBlock . flattenBlocks
     flattenBlocks (LBlock ls : ls') = flattenBlocks (ls ++ ls')
     flattenBlocks (l : ls) = l : flattenBlocks ls
 
-lseq :: [Layout] -> Layout
-lseq layouts = case flattenSeqs layouts of
-                 layouts' | Just strs <- mapM fromString layouts' -> string (concat strs)
-                          | otherwise -> LSeq layouts'
-  where
-    flattenSeqs [] = []
-    flattenSeqs (LSeq ls : ls') = flattenSeqs (ls ++ ls')
-    flattenSeqs (l : ls) = l : flattenSeqs ls
+lseq :: Layout -> [Layout] -> Layout
+lseq = LSeq
 
-    fromString (LPrefix str (LBlock [])) = Just str
-    fromString _ = Nothing
+lseq' :: [Layout] -> Layout
+lseq' = lseq (string " ")
 
 parenthesise :: Bool -> Layout -> Layout
 parenthesise True layout = lprefix "(" (insertAtEnd ")" layout)
@@ -90,7 +80,7 @@ insertAtEnd str (LPrefix str' (LBlock [])) = LPrefix (str' ++ str) (LBlock [])
 insertAtEnd str (LPrefix str' layout) = LPrefix str' (insertAtEnd str layout)
 insertAtEnd str (LBlock []) = string str
 insertAtEnd str (LBlock ls) = LBlock (init ls ++ [insertAtEnd str (last ls)])
-insertAtEnd str (LSeq ls) = LSeq (init ls ++ [insertAtEnd str (last ls)])
+insertAtEnd str (LSeq sep ls) = LSeq sep (init ls ++ [insertAtEnd str (last ls)])
 insertAtEnd str (LMaybeHanging main sub) = LMaybeHanging main (insertAtEnd str sub)
 
 tuple :: [Layout] -> Layout
@@ -110,47 +100,47 @@ layoutExp _ _ (Const ty x) = string (showScalar ty x)
 layoutExp se d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
     let prec = precedence f
         ops = prettyPrimFun Infix f
-    in parenthesise (d > prec) $ lseq
-          [layoutExp se (prec+1) e1, string (' ' : ops ++ " ")
+    in parenthesise (d > prec) $ lseq'
+          [layoutExp se (prec+1) e1, string ops
           ,layoutExp se (prec+1) e2]
 layoutExp se d (PrimApp _ f e) =
     let prec = precedence f
         ops = prettyPrimFun Prefix f
     in parenthesise (d > prec) $
-          lseq [string (ops ++ " "), layoutExp se (prec+1) e]
+          lseq' [string ops, layoutExp se (prec+1) e]
 layoutExp se _ (Pair _ e1 e2) =
     tuple [layoutExp se 0 e1, layoutExp se 0 e2]
 layoutExp _ _ Nil =
     string "()"
 layoutExp se d (Cond _ c t e) =
-    parenthesise (d > 10) $ lseq
-        [string "cond "
-        ,layoutExp se 11 c, string " "
-        ,layoutExp se 11 t, string " "
-        ,layoutExp se 11 e]
+    parenthesise (d > 10) $
+        lprefix "cond "
+            (lseq' [layoutExp se 11 c
+                   ,layoutExp se 11 t
+                   ,layoutExp se 11 e])
 layoutExp se d (Shape (Left (A.Var _ idx))) =
-    parenthesise (d > 10) $ lseq
-        [string "shape "
-        ,case drop (idxToInt idx) (seAenv se) of
-            descr : _ -> string descr
-            [] -> error $ "Avar out of aenv range in layoutExp: " ++
-                          show (idxToInt idx) ++ " in " ++ show (seAenv se)]
+    parenthesise (d > 10) $
+        lprefix "shape "
+            (case drop (idxToInt idx) (seAenv se) of
+                descr : _ -> string descr
+                [] -> error $ "Avar out of aenv range in layoutExp: " ++
+                              show (idxToInt idx) ++ " in " ++ show (seAenv se))
 layoutExp se d (Shape (Right lab)) =
     parenthesise (d > 10) $
         string $ "shape (L" ++ seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab) ++ ")"
 layoutExp se d (Index (Left (A.Var _ idx)) e) =
-    parenthesise (d > 10) $ lseq
+    parenthesise (d > 10) $ lseq'
         [case drop (idxToInt idx) (seAenv se) of
             descr : _ -> string descr
             [] -> error $ "Avar out of aenv range in layoutExp: " ++
                           show (idxToInt idx) ++ " in " ++ show (seAenv se)
-        ,string " ! ", layoutExp se 11 e]
+        ,string "!", layoutExp se 11 e]
 layoutExp se d (Index (Right lab) e) =
-    parenthesise (d > 10) $ lseq
+    parenthesise (d > 10) $ lseq'
         [string ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
-        ,string " ! ", layoutExp se 11 e]
-layoutExp se d (Get _ ti e) = parenthesise (d > 10) $ lseq
-    [string (tiPrefix ti), layoutExp se 10 e]
+        ,string "!", layoutExp se 11 e]
+layoutExp se d (Get _ ti e) = parenthesise (d > 10) $
+    lprefix (tiPrefix ti) (layoutExp se 11 e)
   where
     tiPrefix :: TupleIdx t t' -> String
     tiPrefix = (++ " ") . intercalate "." . reverse . tiPrefix'
@@ -185,38 +175,38 @@ layoutAcc se _ (Apair _ e1 e2) =
 layoutAcc _ _ Anil =
     string "()"
 layoutAcc se d (Acond _ c t e) =
-    parenthesise (d > 10) $ lseq
-        [string "acond "
-        ,layoutExp (se { seEnv = [] }) 11 c, string " "
-        ,layoutAcc se 11 t, string " "
-        ,layoutAcc se 11 e]
+    parenthesise (d > 10) $
+        lprefix "acond "
+            (lseq' [layoutExp (se { seEnv = [] }) 11 c
+                   ,layoutAcc se 11 t
+                   ,layoutAcc se 11 e])
 layoutAcc se d (Map _ f e) =
     parenthesise (d > 10) $
         lprefix "map "
-            (lblock [layoutLambda (se { seEnv = [] }) 11 f
-                    ,layoutAcc se 11 e])
+            (lseq' [layoutLambda (se { seEnv = [] }) 11 f
+                   ,layoutAcc se 11 e])
 layoutAcc se d (ZipWith _ f e1 e2) =
     parenthesise (d > 10) $
         lprefix "zipWith "
-            (lblock [layoutLambda (se { seEnv = [] }) 11 f
-                    ,layoutAcc se 11 e1
-                    ,layoutAcc se 11 e2])
+            (lseq' [layoutLambda (se { seEnv = [] }) 11 f
+                   ,layoutAcc se 11 e1
+                   ,layoutAcc se 11 e2])
 layoutAcc se d (Fold _ f me0 e) =
     parenthesise (d > 10) $
         lprefix (maybe "fold1 " (const "fold ") me0)
-            (lblock $ concat [[layoutLambda (se { seEnv = [] }) 11 f]
-                             ,maybe [] (\e0 -> [layoutExp (se { seEnv = [] }) 11 e0]) me0
-                             ,[layoutAcc se 11 e]])
+            (lseq' $ concat [[layoutLambda (se { seEnv = [] }) 11 f]
+                            ,maybe [] (\e0 -> [layoutExp (se { seEnv = [] }) 11 e0]) me0
+                            ,[layoutAcc se 11 e]])
 layoutAcc se d (Sum _ e) =
-    parenthesise (d > 10) $ lseq
-        [string "sum ", layoutAcc se 11 e]
+    parenthesise (d > 10) $
+        lprefix "sum " (layoutAcc se 11 e)
 layoutAcc se d (Generate _ sh f) =
-    parenthesise (d > 10) $ lseq
-        [string "generate "
-        ,layoutExp (se { seEnv = [] }) 11 sh, string " "
-        ,layoutLambda (se { seEnv = [] }) 11 f]
+    parenthesise (d > 10) $
+        lprefix "generate "
+            (lseq' [layoutExp (se { seEnv = [] }) 11 sh
+                   ,layoutLambda (se { seEnv = [] }) 11 f])
 layoutAcc se d (Aget _ ti e) = parenthesise (d > 10) $
-    lprefix (tiPrefix ti) (layoutAcc se 10 e)
+    lprefix (tiPrefix ti) (layoutAcc se 11 e)
   where
     tiPrefix :: TupleIdx t t' -> String
     tiPrefix = (++ " ") . intercalate "." . reverse . tiPrefix'
