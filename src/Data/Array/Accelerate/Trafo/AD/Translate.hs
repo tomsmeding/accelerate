@@ -38,8 +38,10 @@ translateAcc (A.OpenAcc expr) = case expr of
               (A.Body (A.PrimApp (A.PrimAdd _)
                                  (A.Pair (A.Evar (A.Var _ (A.SuccIdx A.ZeroIdx)))
                                          (A.Evar (A.Var _ A.ZeroIdx)))))))
-           (Just (A.Const _ x)) e
-      | isZeroConstant t x ->
+           initval e
+      | Just (A.Const _ x) <- initval, isZeroConstant t x ->
+          D.Sum (A.arrayR expr) (translateAcc e)
+      | Nothing <- initval ->
           D.Sum (A.arrayR expr) (translateAcc e)
     A.Fold f me0 e ->
         D.Fold (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
