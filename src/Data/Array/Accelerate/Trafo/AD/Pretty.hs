@@ -139,6 +139,9 @@ layoutExp se d (Index (Right lab) e) =
     parenthesise (d > 10) $ lseq'
         [string ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
         ,string "!", layoutExp se 11 e]
+layoutExp se d (ShapeSize _ e) =
+    parenthesise (d > 10) $
+        lprefix "shapeSize " (layoutExp se 11 e)
 layoutExp se d (Get _ ti e) = parenthesise (d > 10) $
     lprefix (tiPrefix ti) (layoutExp se 11 e)
   where

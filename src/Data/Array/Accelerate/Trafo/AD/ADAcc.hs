@@ -116,6 +116,7 @@ doesNotContainArrayVars (Pair ty e1 e2) = Pair ty (doesNotContainArrayVars e1) (
 doesNotContainArrayVars Nil = Nil
 doesNotContainArrayVars (Cond ty e1 e2 e3) = Cond ty (doesNotContainArrayVars e1) (doesNotContainArrayVars e2) (doesNotContainArrayVars e3)
 doesNotContainArrayVars (Shape _) = error "doesNotContainArrayVars: Shape found"
+doesNotContainArrayVars (ShapeSize sht e) = ShapeSize sht (doesNotContainArrayVars e)
 doesNotContainArrayVars (Get ty path ex) = Get ty path (doesNotContainArrayVars ex)
 doesNotContainArrayVars (Let lhs rhs ex) = Let lhs (doesNotContainArrayVars rhs) (doesNotContainArrayVars ex)
 doesNotContainArrayVars (Var v) = Var v

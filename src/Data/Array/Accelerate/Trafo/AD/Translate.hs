@@ -70,6 +70,7 @@ translateExp expr = case expr of
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
     A.Shape var -> D.Shape (Left var)
     A.Index var e -> D.Index (Left var) (translateExp e)
+    A.ShapeSize sht e -> D.ShapeSize sht (translateExp e)
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
 
 data PartialVal s topenv env where
@@ -104,6 +105,7 @@ untranslateLHSboundExp toplhs topexpr
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
         D.Shape (Left avar) -> A.Shape avar
         D.Shape (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate labeAn in array var position"
+        D.ShapeSize sht e -> A.ShapeSize sht (go e pv)
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e pv) body
@@ -134,6 +136,7 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Shape (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
         D.Index (Left avar) e -> A.Index (fromJust (checkLocal matchArraysR avar arrpv)) (go e pv)
         D.Index (Right _) _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
+        D.ShapeSize sht e -> A.ShapeSize sht (go e pv)
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e pv) body
