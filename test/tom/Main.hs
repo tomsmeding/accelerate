@@ -45,8 +45,8 @@ neural = do
 
   print $ I.run $ Neural.forward network1 input1
 
-  print $ A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1))
-                      (A.T2 network1_l1 network1_l2)
+  print $ I.run $ A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1))
+                              (A.T2 network1_l1 network1_l2)
 
 indexing :: IO ()
 indexing = do
@@ -200,5 +200,5 @@ main = do
   -- adtuple1
   -- adtuple2
   -- adtuple3
-  arrad
-  -- neural
+  -- arrad
+  neural

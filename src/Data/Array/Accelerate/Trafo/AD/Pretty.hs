@@ -204,7 +204,14 @@ layoutAcc se d (Backpermute _ dim f e) =
     parenthesise (d > 10) $
         lprefix "backpermute "
             (lseq' [layoutExp (se { seEnv = [] }) 11 dim
-                   ,layoutLambda (se { seEnv = [] }) 11 f
+                   ,layoutFun (se { seEnv = [] }) 11 f
+                   ,layoutAcc se 11 e])
+layoutAcc se d (Permute _ cf def pf e) =
+    parenthesise (d > 10) $
+        lprefix "permute "
+            (lseq' [layoutFun (se { seEnv = [] }) 11 cf
+                   ,layoutAcc se 11 def
+                   ,layoutFun (se { seEnv = [] }) 11 pf
                    ,layoutAcc se 11 e])
 layoutAcc se d (Sum _ e) =
     parenthesise (d > 10) $
