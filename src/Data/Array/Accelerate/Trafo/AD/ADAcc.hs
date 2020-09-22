@@ -42,7 +42,7 @@ import Data.Array.Accelerate.Representation.Slice
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Additive
-import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD, labeliseExp, inlineAvarLabels')
+import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD, labeliseExp, labeliseFun, inlineAvarLabels')
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
@@ -222,7 +222,8 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Map ty f e -> Map ty (sinkFunAenv varWeaken <$> f) (go argWeaken varWeaken e)
         ZipWith ty f e1 e2 -> ZipWith ty (sinkFunAenv varWeaken <$> f) (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
         Fold ty f me0 e -> Fold ty (sinkFunAenv varWeaken <$> f) (sinkExpAenv varWeaken <$> me0) (go argWeaken varWeaken e)
-        Backpermute ty dim f e -> Backpermute ty (sinkExpAenv varWeaken dim) (sinkFunAenv varWeaken <$> f) (go argWeaken varWeaken e)
+        Backpermute ty dim f e -> Backpermute ty (sinkExpAenv varWeaken dim) (sinkFunAenv varWeaken f) (go argWeaken varWeaken e)
+        Permute ty cf def pf e -> Permute ty (sinkFunAenv varWeaken cf) (go argWeaken varWeaken def) (sinkFunAenv varWeaken pf) (go argWeaken varWeaken e)
         Sum ty e -> Sum ty (go argWeaken varWeaken e)
         Generate ty she f -> Generate ty (sinkExpAenv varWeaken she) (sinkFunAenv varWeaken <$> f)
         Replicate ty slt sle e -> Replicate ty slt (sinkExpAenv varWeaken sle) (go argWeaken varWeaken e)
@@ -304,16 +305,15 @@ explode' labelenv = \case
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
     Fold _ (Left _) _ _ -> error "explode: Unexpected Fold SplitLambdaAD"
-    Backpermute ty@(ArrayR sht _) dim (Right e) a -> do
-        e' <- splitLambdaAD labelenv (genSingleId . ArrayR sht) (generaliseLabFun e)
-        let dim' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ dim
+    Backpermute ty dim f a -> do
+        let f' = snd . labeliseFun labelenv . generaliseLabFunA . generaliseLabFun $ f
+            dim' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ dim
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
-        let pruned = Backpermute ty dim' (Left e') (Alabel lab1)
+        let pruned = Backpermute ty dim' f' (Alabel lab1)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
-    Backpermute _ _ (Left _) _ -> error "explode: Unexpected Backpermute SplitLambdaAD"
     Sum ty a -> do
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
@@ -610,6 +610,22 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                    _ ->
                       error "primal: Reshape arguments did not compute arguments"
 
+          Backpermute restype shexp indexfunc (Alabel arglab) ->
+              let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
+              in case alabValFind labelenv arglabS of
+                   Just argidx -> do
+                      lab <- genSingleId restype
+                      Alet (A.LeftHandSideSingle restype)
+                           (Backpermute restype (resolveAlabs (Context labelenv bindmap) shexp)
+                                                (resolveAlabsFun (Context labelenv bindmap) indexfunc)
+                                                (Avar (A.Var argtype argidx)))
+                           <$> primal' nodemap restlabels
+                                       (Context (LPush labelenv lab)
+                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
+                                       cont
+                   _ ->
+                      error "primal: Reshape arguments did not compute arguments"
+
           Aget _ path (Alabel arglab) ->
               let pickedlabs = pickDLabels path (bindmap `dmapFind` fmapLabel P arglab)
               in -- Note: We don't re-bind the picked tuple into a new let binding
@@ -807,6 +823,27 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 [Contribution arglab (arglab :@ TLNil) TLNil $
                                     \(TupRsingle adjvar) (TupRsingle pvar :@ TLNil) _ _ ->
                                         Reshape (ArrayR shtype' eltty) (Shape (Left pvar)) (Avar adjvar)]
+                                contribmap
+          (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
+          Alet lhs adjoint
+               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
+                         contribmap' cont
+
+      Backpermute restype@(ArrayR _ eltty) _ (Lam indexfuncLHS (Body indexfuncBody)) (Alabel arglab) -> do
+          let TupRsingle argtype@(ArrayR shtypeArg _) = labelType arglab
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab (arglab :@ TLNil) TLNil $
+                                    \(TupRsingle adjvar) (TupRsingle pvar :@ TLNil) _ labelenv' ->
+                                        Permute argtype (plusLam eltty)
+                                                (arraySum argtype (Shape (Left pvar)) [])
+                                                (case declareVars (shapeType shtypeArg) of
+                                                   DeclareVars lhsArg _ varsgenArg ->
+                                                      Lam indexfuncLHS . Body $
+                                                          Let lhsArg (resolveAlabs (Context labelenv' bindmap) indexfuncBody)
+                                                              (mkJust (evars (varsgenArg A.weakenId))))
+                                                (Avar adjvar)]
                                 contribmap
           (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
           Alet lhs adjoint
@@ -1028,7 +1065,7 @@ accLabelParents = \case
     Sum _ e -> fromLabel e
     Replicate _ _ she e -> expLabels she ++ fromLabel e
     Reshape _ she e -> expLabels she ++ fromLabel e
-    Backpermute _ she lam e -> expLabels she ++ lamLabels lam ++ fromLabel e
+    Backpermute _ she f e -> expLabels she ++ funLabels f ++ fromLabel e
     Aget _ _ e -> fromLabel e
     Aarg _ _ -> []
     Alabel lab -> [AnyLabel lab]
@@ -1042,8 +1079,12 @@ accLabelParents = \case
     fromLabel (Alabel lab) = [AnyLabel lab]
     fromLabel _ = error "accLabelParents: Parent is not a label"
 
-    expLabels :: Exp aenv lab alab args t -> [AnyLabel ArraysR alab]
+    expLabels :: OpenExp env aenv lab alab args t -> [AnyLabel ArraysR alab]
     expLabels e = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expALabels e]
+
+    funLabels :: OpenFun env aenv lab alab t -> [AnyLabel ArraysR alab]
+    funLabels (Lam _ f) = funLabels f
+    funLabels (Body e) = expLabels e
 
     lamLabels :: ExpLambda1 aenv lab alab sh t1 t2 -> [AnyLabel ArraysR alab]
     lamLabels (Left (SplitLambdaAD _ _ fvtup _)) = [AnyLabel (tupleLabel lab) | Some lab <- enumerateTupR fvtup]
@@ -1060,6 +1101,13 @@ resolveAlabs (Context labelenv bindmap) =
                 Just (TupRsingle var) -> var
                 Just _ -> error $ "Array label in labelised expression refers to tuple?: " ++ show lab
                 Nothing -> error $ "Array label in labelised expression not found in env: " ++ show lab
+
+resolveAlabsFun :: (Ord alab, Show alab)
+                => AContext alab aenv
+                -> OpenFun env aenv' lab alab t
+                -> OpenFun env aenv lab alab' t
+resolveAlabsFun ctx (Lam lhs fun) = Lam lhs (resolveAlabsFun ctx fun)
+resolveAlabsFun ctx (Body e) = Body (resolveAlabs ctx e)
 
 dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
 dmapFind mp elt = case DMap.lookup elt mp of

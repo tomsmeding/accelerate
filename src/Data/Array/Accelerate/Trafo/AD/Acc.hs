@@ -103,10 +103,20 @@ data OpenAcc aenv lab alab args t where
             -> OpenAcc aenv lab alab args (Array sh e)
 
     Backpermute :: ArrayR (Array sh' e)
-                -> Exp aenv lab alab () sh'                       -- dimensions of the result
-                -> ExpLambda1 aenv lab alab sh' sh' sh            -- permutation function
-                -> OpenAcc aenv lab alab args (Array sh e)        -- source array
+                -> Exp aenv lab alab () sh'                 -- dimensions of the result
+                -> Fun aenv lab alab (sh' -> sh)            -- permutation function
+                -> OpenAcc aenv lab alab args (Array sh e)  -- source array
                 -> OpenAcc aenv lab alab args (Array sh' e)
+
+    -- The combination function is not stored as an ExpLambda1, because we
+    -- don't currently support taking the derivative of a Permute: we only
+    -- generate it as the derivative of a Backpermute.
+    Permute :: ArrayR (Array sh' e)
+            -> Fun aenv lab alab (e -> e -> e)            -- combination function
+            -> OpenAcc aenv lab alab args (Array sh' e)   -- default values
+            -> Fun aenv lab alab (sh -> A.PrimMaybe sh')  -- permutation function
+            -> OpenAcc aenv lab alab args (Array sh e)    -- source array
+            -> OpenAcc aenv lab alab args (Array sh' e)
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
@@ -204,8 +214,15 @@ showsAcc se d (Backpermute _ dim f e) =
     showParen (d > 10) $
         showString "backpermute " .
             showsExp (se { seEnv = [] }) 11 dim . showString " " .
-            showsLambda (se { seEnv = [] }) 11 f . showString " " .
+            showsFun (se { seEnv = [] }) 11 f . showString " " .
             showsAcc se 11 e
+showsAcc se d (Permute _ f1 e1 f2 e2) =
+    showParen (d > 10) $
+        showString "permute " .
+            showsFun (se { seEnv = [] }) 11 f1 . showString " " .
+            showsAcc se 11 e1 . showString " " .
+            showsFun (se { seEnv = [] }) 11 f2 . showString " " .
+            showsAcc se 11 e2
 showsAcc se d (Sum _ e) =
     showParen (d > 10) $
         showString "sum " .
@@ -287,6 +304,7 @@ atypeOf (ZipWith ty _ _ _) = TupRsingle ty
 atypeOf (Generate ty _ _) = TupRsingle ty
 atypeOf (Fold ty _ _ _) = TupRsingle ty
 atypeOf (Backpermute ty _ _ _) = TupRsingle ty
+atypeOf (Permute ty _ _ _ _) = TupRsingle ty
 atypeOf (Replicate ty _ _ _) = TupRsingle ty
 atypeOf (Reduce ty _ _ _) = TupRsingle ty
 atypeOf (Reshape ty _ _) = TupRsingle ty

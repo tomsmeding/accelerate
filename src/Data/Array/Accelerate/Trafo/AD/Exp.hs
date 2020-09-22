@@ -424,3 +424,10 @@ expALabels (Label _) = []
 expFunALabels :: OpenFun env aenv lab alab t -> [AnyLabel ArrayR alab]
 expFunALabels (Lam _ fun) = expFunALabels fun
 expFunALabels (Body ex) = expALabels ex
+
+
+-- TODO: Don't hard-code 1, but derive it from a non-g version of gtags in Sugar.Elt.
+mkJust :: OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args (A.PrimMaybe t)
+mkJust ex =
+    let sndty = TupRpair TupRunit (etypeOf ex)
+    in Pair (TupRpair (TupRsingle scalarType) sndty) (Const scalarType 1) (Pair sndty Nil ex)

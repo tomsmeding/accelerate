@@ -58,7 +58,7 @@ translateAcc (A.OpenAcc expr) = case expr of
     A.Reshape _ sle e ->
         D.Reshape (A.arrayR expr) (translateExp sle) (translateAcc e)
     A.Backpermute shr dim f e ->
-        D.Backpermute (ArrayR shr (arrayRtype (A.arrayR e))) (translateExp dim) (Right $ translateFun f) (translateAcc e)
+        D.Backpermute (ArrayR shr (arrayRtype (A.arrayR e))) (translateExp dim) (translateFun f) (translateAcc e)
     A.Alet lhs def body -> D.Alet lhs (translateAcc def) (translateAcc body)
     A.Avar var -> D.Avar var
     _ -> internalError ("AD.translateAcc: Cannot perform AD on Acc node <" ++ A.showPreAccOp expr ++ ">")
@@ -261,6 +261,8 @@ untranslateLHSboundAcc toplhs topexpr
                                  A.OpenAcc $ A.Backpermute shtype shexp (A.Lam shlhs (A.Body (a_evars sortedToFull)))
                                                            (A.OpenAcc $ A.Avar (A.Var argtype A.ZeroIdx)))
         D.Reshape (ArrayR sht _) she e -> A.Reshape sht (untranslateClosedExpA she pv) (go e pv)
+        D.Backpermute (ArrayR sht _) dim f e -> A.Backpermute sht (untranslateClosedExpA dim pv) (untranslateClosedFunA f pv) (go e pv)
+        D.Permute _ cf def pf e -> A.Permute (untranslateClosedFunA cf pv) (go def pv) (untranslateClosedFunA pf pv) (go e pv)
         D.Aget _ path e
           | LetBoundExpA lhs body <- auntranslateGet (D.atypeOf e) path
           -> A.Alet lhs (go e pv) body
