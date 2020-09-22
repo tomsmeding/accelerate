@@ -2,7 +2,9 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.Exp (
     module Data.Array.Accelerate.Trafo.AD.Exp,
@@ -24,6 +26,7 @@ import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Shows
+import qualified Data.Array.Accelerate.Sugar.Tag as A
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
 import qualified Data.Array.Accelerate.Trafo.Substitution as A (weakenVars)
@@ -426,8 +429,9 @@ expFunALabels (Lam _ fun) = expFunALabels fun
 expFunALabels (Body ex) = expALabels ex
 
 
--- TODO: Don't hard-code 1, but derive it from a non-g version of gtags in Sugar.Elt.
-mkJust :: OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args (A.PrimMaybe t)
-mkJust ex =
-    let sndty = TupRpair TupRunit (etypeOf ex)
-    in Pair (TupRpair (TupRsingle scalarType) sndty) (Const scalarType 1) (Pair sndty Nil ex)
+mkJust :: forall env aenv lab alab args t. OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args (A.PrimMaybe t)
+mkJust ex
+  | [tag] <- [tag | ("Just", tag) <- A.tags @(Maybe t)] =
+      let sndty = TupRpair TupRunit (etypeOf ex)
+      in Pair (TupRpair (TupRsingle scalarType) sndty) (Const scalarType tag) (Pair sndty Nil ex)
+  | otherwise = error "Maybe does not have a Just constructor?"
