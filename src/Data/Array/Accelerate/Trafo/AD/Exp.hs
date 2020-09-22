@@ -225,6 +225,7 @@ etypeOf (Label lab) = labelType lab
 
 isInfixOp :: A.PrimFun ((a, b) -> c) -> Bool
 isInfixOp (A.PrimAdd _) = True
+isInfixOp (A.PrimSub _) = True
 isInfixOp (A.PrimMul _) = True
 isInfixOp (A.PrimFDiv _) = True
 isInfixOp (A.PrimLt _) = True
@@ -236,9 +237,11 @@ isInfixOp _ = False
 
 precedence :: A.PrimFun sig -> Int
 precedence (A.PrimAdd _) = 6
+precedence (A.PrimSub _) = 6
 precedence (A.PrimMul _) = 7
 precedence (A.PrimFDiv _) = 7
 precedence (A.PrimNeg _) = 7  -- ?
+precedence (A.PrimRecip _) = 10
 precedence (A.PrimLog _) = 10
 precedence (A.PrimLt _) = 4
 precedence (A.PrimLtEq _) = 4
@@ -260,6 +263,7 @@ prettyPrimFun Infix (A.PrimLtEq _) = "<="
 prettyPrimFun Infix (A.PrimGt _) = ">"
 prettyPrimFun Infix (A.PrimGtEq _) = ">="
 prettyPrimFun Infix (A.PrimIDiv _) = "`div`"
+prettyPrimFun Prefix (A.PrimRecip _) = "recip"
 prettyPrimFun Prefix (A.PrimLog _) = "log"
 prettyPrimFun Prefix (A.PrimExpFloating _) = "exp"
 prettyPrimFun Prefix (A.PrimToFloating _ _) = "toFloating"
