@@ -758,14 +758,12 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               contribmap'
                               (Let (A.LeftHandSideSingle restypeS) adjoint)
 
-      PrimApp restype (A.PrimMul restypeN) (Label arglab) -> do
+      PrimApp _ (A.PrimSub restypeN) (Label arglab) -> do
           let restypeS = SingleScalarType (NumSingleType restypeN)
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
               contribmap' = updateContribmap lbl
-                                [Contribution arglab (arglab :@ TLNil) $ \(TupRsingle adjvar) (TupRpair (TupRsingle argvar1) (TupRsingle argvar2) :@ TLNil) ->
-                                    smartPair
-                                         (PrimApp restype (A.PrimMul restypeN) (smartPair (Var adjvar) (Var argvar2)))
-                                         (PrimApp restype (A.PrimMul restypeN) (smartPair (Var adjvar) (Var argvar1)))]
+                                [Contribution arglab TLNil $ \(TupRsingle adjvar) _ ->
+                                    smartPair (Var adjvar) (smartNeg restypeN (Var adjvar))]
                                 contribmap
           lblS <- genSingleId restypeS
           return $ DualResult (Context (LPush labelenv lblS)
@@ -773,14 +771,74 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               contribmap'
                               (Let (A.LeftHandSideSingle restypeS) adjoint)
 
-      PrimApp restype (A.PrimLog restypeF) (Label arglab) -> do
+      PrimApp _ (A.PrimMul restypeN) (Label arglab) -> do
+          let restypeS = SingleScalarType (NumSingleType restypeN)
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab (arglab :@ TLNil) $ \(TupRsingle adjvar) (TupRpair (TupRsingle argvar1) (TupRsingle argvar2) :@ TLNil) ->
+                                    smartPair
+                                         (smartMul restypeN (Var adjvar) (Var argvar2))
+                                         (smartMul restypeN (Var adjvar) (Var argvar1))]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
+      PrimApp _ (A.PrimFDiv restypeF) (Label arglab) -> do
+          let restypeN = FloatingNumType restypeF
+              restypeS = SingleScalarType (NumSingleType restypeN)
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab (arglab :@ TLNil) $ \(TupRsingle adjvar) (TupRpair (TupRsingle argvar1) (TupRsingle argvar2) :@ TLNil) ->
+                                    smartPair
+                                         (smartMul restypeN (Var adjvar) (smartRecip restypeF (Var argvar2)))
+                                         (smartMul restypeN (Var adjvar)
+                                              (smartFDiv restypeF (smartNeg restypeN (Var argvar1))
+                                                                  (smartMul restypeN (Var argvar2) (Var argvar2))))]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
+      PrimApp _ (A.PrimNeg restypeN) (Label arglab) -> do
+          let restypeS = SingleScalarType (NumSingleType restypeN)
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                -- Note: derivative of -x is -1, so we just return -adjoint
+                                [Contribution arglab TLNil $ \(TupRsingle adjvar) _ ->
+                                    smartNeg restypeN (Var adjvar)]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
+      PrimApp _ (A.PrimLog restypeF) (Label arglab) -> do
           let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
               contribmap' = updateContribmap lbl
                                 [Contribution arglab (arglab :@ TLNil) $ \(TupRsingle adjvar) (TupRsingle argvar :@ TLNil) ->
                                     -- dE/dx = dE/d(log x) * d(log x)/dx = adjoint * 1/x = adjoint / x
-                                    PrimApp restype (A.PrimFDiv restypeF)
-                                        (smartPair (Var adjvar) (Var argvar))]
+                                    smartFDiv restypeF (Var adjvar) (Var argvar)]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
+      PrimApp _ (A.PrimExpFloating restypeF) (Label arglab) -> do
+          let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                -- Note: derivative of e^x is e^x, so we just copy the primal value over
+                                [Contribution arglab (lbl :@ TLNil) $ \(TupRsingle adjvar) (TupRsingle primvar :@ TLNil) ->
+                                    smartMul (FloatingNumType restypeF) (Var adjvar) (Var primvar)]
                                 contribmap
           lblS <- genSingleId restypeS
           return $ DualResult (Context (LPush labelenv lblS)
@@ -878,6 +936,18 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
   where
     smartPair :: OpenExp env aenv lab alab args a -> OpenExp env aenv lab alab args b -> OpenExp env aenv lab alab args (a, b)
     smartPair a b = Pair (TupRpair (etypeOf a) (etypeOf b)) a b
+
+    smartNeg :: NumType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
+    smartNeg ty a = PrimApp (TupRsingle (SingleScalarType (NumSingleType ty))) (A.PrimNeg ty) a
+
+    smartRecip :: FloatingType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
+    smartRecip ty a = PrimApp (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType ty)))) (A.PrimRecip ty) a
+
+    smartMul :: NumType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
+    smartMul ty a b = PrimApp (TupRsingle (SingleScalarType (NumSingleType ty))) (A.PrimMul ty) (smartPair a b)
+
+    smartFDiv :: FloatingType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
+    smartFDiv ty a b = PrimApp (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType ty)))) (A.PrimFDiv ty) (smartPair a b)
 
 -- TODO: make a new abstraction after the refactor, possibly inspired by this function, which was the abstraction pre-refactor
 -- dualStoreAdjoint
