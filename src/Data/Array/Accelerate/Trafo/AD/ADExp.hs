@@ -11,11 +11,11 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 module Data.Array.Accelerate.Trafo.AD.ADExp (
   reverseAD, ReverseADResE(..),
-  splitLambdaAD, labeliseFun
+  splitLambdaAD, labeliseFun,
+  labeliseExp, inlineAvarLabels'
 ) where
 
 import qualified Control.Monad.Writer as W
-import Control.Monad.Writer (Writer)
 import Data.List (intercalate, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
@@ -186,7 +186,7 @@ splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
   , Refl <- sameLHSsameEnv paramlhs' paramlhs'2
   , let argsRHS = varsToArgs (varsgen A.weakenId)
         closedExpr = Let paramlhs' argsRHS (generaliseArgs (sinkExp paramWeaken (generaliseLab expr)))
-  , (labelisedExpr, fvlablist) <- W.runWriter (collectFreeAvars alabelenv closedExpr)
+  , (fvlablist, labelisedExpr) <- labeliseExp alabelenv closedExpr
   , TuplifyAvars _ fvlabs _ <- tuplifyAvars fvlablist
   = -- trace ("AD result: " ++ show transformedExp) $
     evalIdGen $ do
@@ -231,50 +231,33 @@ splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
 splitLambdaAD _ _ _ =
     internalError "splitLambdaAD passed function with more than 1 argument"
 
--- Asserts that there are no array labels yet in the expression, and reset the array environment
-labeliseExp :: LabVal ArrayR alab aenv
-            -> OpenExp env aenv lab alab' args t
-            -> OpenExp env aenv' lab alab args t
-labeliseExp labelenv ex = case ex of
-    Const ty x -> Const ty x
-    PrimApp ty op e -> PrimApp ty op (labeliseExp labelenv e)
-    Pair ty e1 e2 -> Pair ty (labeliseExp labelenv e1) (labeliseExp labelenv e2)
-    Nil -> Nil
-    Cond ty e1 e2 e3 -> Cond ty (labeliseExp labelenv e1) (labeliseExp labelenv e2) (labeliseExp labelenv e3)
-    Shape (Left (A.Var _ idx)) ->
-        let lab = prjL idx labelenv
-        in Shape (Right lab)
-    Shape (Right _) -> error "Unexpected Shape(Label) in collectFreeAvars"
-    Get ty ti e -> Get ty ti (labeliseExp labelenv e)
-    Let lhs rhs e -> Let lhs (labeliseExp labelenv rhs) (labeliseExp labelenv e)
-    Arg ty idx -> Arg ty idx
-    Var var -> Var var
-    Label lab -> Label lab
-
--- Asserts that there are no array labels yet in the expression, and reset the array environment
+-- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.
+-- Asserts that there are no array labels yet in the expression, and resets the array environment.
 labeliseFun :: LabVal ArrayR alab aenv
             -> OpenFun env aenv lab alab' t
-            -> OpenFun env aenv' lab alab t
-labeliseFun labelenv (Lam lhs fun) = Lam lhs (labeliseFun labelenv fun)
-labeliseFun labelenv (Body ex) = Body (labeliseExp labelenv ex)
+            -> ([AnyLabel ArrayR alab], OpenFun env aenv' lab alab t)
+labeliseFun labelenv (Lam lhs fun) = Lam lhs <$> labeliseFun labelenv fun
+labeliseFun labelenv (Body ex) = Body <$> labeliseExp labelenv ex
 
-collectFreeAvars :: LabVal ArrayR alab aenv
-                 -> OpenExp env aenv lab unused args t
-                 -> Writer [AnyLabel ArrayR alab] (OpenExp env aenv lab alab args t)
-collectFreeAvars labelenv ex = case ex of
+-- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.
+-- Asserts that there are no array labels yet in the expression, and resets the array environment.
+labeliseExp :: LabVal ArrayR alab aenv
+            -> OpenExp env aenv lab alab' args t
+            -> ([AnyLabel ArrayR alab], OpenExp env aenv' lab alab args t)
+labeliseExp labelenv ex = case ex of
     Const ty x -> return (Const ty x)
-    PrimApp ty op e -> PrimApp ty op <$> collectFreeAvars labelenv e
-    Pair ty e1 e2 -> Pair ty <$> collectFreeAvars labelenv e1 <*> collectFreeAvars labelenv e2
+    PrimApp ty op e -> PrimApp ty op <$> labeliseExp labelenv e
+    Pair ty e1 e2 -> Pair ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2
     Nil -> return Nil
-    Cond ty e1 e2 e3 -> Cond ty <$> collectFreeAvars labelenv e1 <*> collectFreeAvars labelenv e2 <*> collectFreeAvars labelenv e3
+    Cond ty e1 e2 e3 -> Cond ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2 <*> labeliseExp labelenv e3
     Shape (Left (A.Var _ idx)) -> do
         let lab = prjL idx labelenv
         W.tell [AnyLabel lab]
         return (Shape (Right lab))
-    Shape (Right _) -> error "Unexpected Shape(Label) in collectFreeAvars"
-    ShapeSize sht e -> ShapeSize sht <$> collectFreeAvars labelenv e
-    Get ty ti e -> Get ty ti <$> collectFreeAvars labelenv e
-    Let lhs rhs e -> Let lhs <$> collectFreeAvars labelenv rhs <*> collectFreeAvars labelenv e
+    Shape (Right _) -> error "Unexpected Shape(Label) in labeliseExp"
+    ShapeSize sht e -> ShapeSize sht <$> labeliseExp labelenv e
+    Get ty ti e -> Get ty ti <$> labeliseExp labelenv e
+    Let lhs rhs e -> Let lhs <$> labeliseExp labelenv rhs <*> labeliseExp labelenv e
     Arg ty idx -> return (Arg ty idx)
     Var var -> return (Var var)
     Label lab -> return (Label lab)
@@ -372,7 +355,11 @@ inlineAvarLabels :: Ord alab
                  -> A.ArrayVars aenv' fv
                  -> OpenExp env aenv lab alab args t
                  -> OpenExp env aenv' lab alab' args t
-inlineAvarLabels labs vars = go (buildVarLabMap labs vars)
+inlineAvarLabels labs vars =
+    let mp = buildVarLabMap labs vars
+    in inlineAvarLabels' (\lab -> case DMap.lookup lab mp of
+                                    Just var -> var
+                                    Nothing -> error "inlineAvarLabels: Not all labels instantiated")
   where
     buildVarLabMap :: Ord alab
                    => TupR (DLabel ArrayR alab) fv
@@ -384,26 +371,23 @@ inlineAvarLabels labs vars = go (buildVarLabMap labs vars)
         DMap.unionWithKey (error "Overlapping labels in buildVarLabMap") (buildVarLabMap l1 v1) (buildVarLabMap l2 v2)
     buildVarLabMap _ _ = error "Impossible GADTs"
 
-    go :: Ord alab
-       => DMap (DLabel ArrayR alab) (A.ArrayVar aenv')
-       -> OpenExp env aenv lab alab args t
-       -> OpenExp env aenv' lab alab' args t
-    go mp = \case
-        Const ty x -> Const ty x
-        PrimApp ty op ex -> PrimApp ty op (go mp ex)
-        Pair ty e1 e2 -> Pair ty (go mp e1) (go mp e2)
-        Nil -> Nil
-        Cond ty e1 e2 e3 -> Cond ty (go mp e1) (go mp e2) (go mp e3)
-        Shape (Right lab)
-          | Just var <- DMap.lookup lab mp -> Shape (Left var)
-          | otherwise -> error "inlineAvarLabels: Not all labels instantiated"
-        Shape (Left _) -> error "inlineAvarLabels: Array variable found in labelised expression"
-        ShapeSize sht e -> ShapeSize sht (go mp e)
-        Get ty tidx ex -> Get ty tidx (go mp ex)
-        Let lhs rhs ex -> Let lhs (go mp rhs) (go mp ex)
-        Var v -> Var v
-        Arg ty idx -> Arg ty idx
-        Label l -> Label l
+inlineAvarLabels' :: (forall t'. DLabel ArrayR alab t' -> A.ArrayVar aenv' t')
+                  -> OpenExp env aenv lab alab args t
+                  -> OpenExp env aenv' lab alab' args t
+inlineAvarLabels' f = \case
+    Const ty x -> Const ty x
+    PrimApp ty op ex -> PrimApp ty op (inlineAvarLabels' f ex)
+    Pair ty e1 e2 -> Pair ty (inlineAvarLabels' f e1) (inlineAvarLabels' f e2)
+    Nil -> Nil
+    Cond ty e1 e2 e3 -> Cond ty (inlineAvarLabels' f e1) (inlineAvarLabels' f e2) (inlineAvarLabels' f e3)
+    Shape (Right lab) -> Shape (Left (f lab))
+    Shape (Left _) -> error "inlineAvarLabels': Array variable found in labelised expression"
+    ShapeSize sht e -> ShapeSize sht (inlineAvarLabels' f e)
+    Get ty tidx ex -> Get ty tidx (inlineAvarLabels' f ex)
+    Let lhs rhs ex -> Let lhs (inlineAvarLabels' f rhs) (inlineAvarLabels' f ex)
+    Var v -> Var v
+    Arg ty idx -> Arg ty idx
+    Label l -> Label l
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.

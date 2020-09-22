@@ -1,10 +1,17 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
-module Data.Array.Accelerate.Trafo.AD.Translate where
+module Data.Array.Accelerate.Trafo.AD.Translate (
+    translateAcc, translateExp,
+    untranslateLHSboundExp, UntranslateResultE(..),
+    untranslateLHSboundAcc, UntranslateResultA(..)
+) where
 
+import Data.List (sort, sortBy)
 import Data.Maybe (fromJust)
+import Data.Ord (comparing)
 
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Environment as A
@@ -12,9 +19,10 @@ import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import qualified Data.Array.Accelerate.Trafo.Substitution as A
-import Data.Array.Accelerate.Analysis.Match (matchTypeR, matchArraysR, (:~:)(Refl))
+import Data.Array.Accelerate.Analysis.Match (matchTypeR, matchArraysR, matchShapeR, (:~:)(Refl))
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Representation.Shape hiding (zip)
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Trafo.AD.Acc as D
@@ -45,6 +53,12 @@ translateAcc (A.OpenAcc expr) = case expr of
           D.Sum (A.arrayR expr) (translateAcc e)
     A.Fold f me0 e ->
         D.Fold (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
+    A.Replicate slt sle e ->
+        D.Replicate (A.arrayR expr) slt (translateExp sle) (translateAcc e)
+    A.Reshape _ sle e ->
+        D.Reshape (A.arrayR expr) (translateExp sle) (translateAcc e)
+    A.Backpermute shr dim f e ->
+        D.Backpermute (ArrayR shr (arrayRtype (A.arrayR e))) (translateExp dim) (Right $ translateFun f) (translateAcc e)
     A.Alet lhs def body -> D.Alet lhs (translateAcc def) (translateAcc body)
     A.Avar var -> D.Avar var
     _ -> internalError ("AD.translateAcc: Cannot perform AD on Acc node <" ++ A.showPreAccOp expr ++ ">")
@@ -233,6 +247,20 @@ untranslateLHSboundAcc toplhs topexpr
                    (Just (untranslateClosedExp (D.zeroForType ty)))
                    (go e pv)
         D.Generate ty e (Right f) -> A.Generate ty (untranslateClosedExpA e pv) (untranslateClosedFunA f pv)
+        D.Replicate _ slt sle e -> A.Replicate slt (untranslateClosedExpA sle pv) (go e pv)
+        D.Reduce _ spec combfun e
+          | ReduceConvert shtype sortedSpec shlhs fullToSorted sortedToFull <- reduceConvert spec
+          , TupRsingle argtype@(ArrayR shtype' _) <- D.atypeOf e
+          , Just Refl <- matchShapeR shtype shtype' ->
+              A.Alet (A.LeftHandSideSingle argtype) (go e pv)
+                     (let shexp = A.Let shlhs (A.Shape (A.Var argtype A.ZeroIdx)) (a_evars fullToSorted)
+                          pv' = pvalPushLHS (A.LeftHandSideSingle argtype) pv
+                          reshapeExp = A.Let shlhs shexp (multiplyReduced sortedSpec)
+                      in A.OpenAcc $ A.Fold (untranslateClosedFunA combfun pv') Nothing $
+                             A.OpenAcc $ A.Reshape (ShapeRsnoc (D.rsReducedShapeR spec)) reshapeExp $
+                                 A.OpenAcc $ A.Backpermute shtype shexp (A.Lam shlhs (A.Body (a_evars sortedToFull)))
+                                                           (A.OpenAcc $ A.Avar (A.Var argtype A.ZeroIdx)))
+        D.Reshape (ArrayR sht _) she e -> A.Reshape sht (untranslateClosedExpA she pv) (go e pv)
         D.Aget _ path e
           | LetBoundExpA lhs body <- auntranslateGet (D.atypeOf e) path
           -> A.Alet lhs (go e pv) body
@@ -244,6 +272,125 @@ untranslateLHSboundAcc toplhs topexpr
     fromPairedBinop (D.Lam (A.LeftHandSideWildcard (TupRpair t1 t2)) (D.Body ex)) =
         D.Lam (A.LeftHandSideWildcard t1) (D.Lam (A.LeftHandSideWildcard t2) (D.Body ex))
     fromPairedBinop _ = error "Impossible GADTs"
+
+-- Notable is that the index list is always a list of integers, and a list of
+-- integers sorted is still a list of integers, of the same length. Thus the
+-- sorted index sequence _type_ is exactly equal to the original one. This is
+-- why there is no 'sorted' equivalent to 'full'; both are the same type.
+data ReduceConvert red full =
+    forall spec.
+        ReduceConvert (ShapeR full)
+                      (D.ReduceSpec spec red full)
+                      (A.ELeftHandSide full () full)
+                      (A.ExpVars full ({- sorted -} full))
+                      (A.ExpVars ({- sorted -} full) full)
+
+data SomeReduceSpec =
+    forall spec red full.
+        SomeReduceSpec (D.ReduceSpec spec red full)
+                       (D.TagVal OnlyInt full)
+
+data OnlyInt a where
+    OnlyInt :: OnlyInt Int
+
+-- How does one utterly subvert the Accelerate type safety system to do weird stuff? Like this.
+reduceConvert :: D.ReduceSpec spec red full -> ReduceConvert red full
+reduceConvert spec
+  | let spec' = untypeifySpec spec
+        sortedSpec = sort spec'
+        sortedFullIndices = map snd (sortBy (comparing fst) (zip spec' [0..]))
+        fullSortedIndices = invertPermutation sortedFullIndices
+  , SomeReduceSpec sortedSpec' tagval <- typeifySpec sortedSpec
+  , Just (shaper, shapelhs, Refl) <- specSameFull spec sortedSpec'
+  , Just Refl <- specSameRed spec sortedSpec'
+  , let sortedFullVars = map (enforceLocal tagval) sortedFullIndices
+        sortedFullTup = tuplify tagval sortedFullVars
+        fullSortedVars = map (enforceLocal tagval) fullSortedIndices
+        fullSortedTup = tuplify tagval fullSortedVars
+  = ReduceConvert shaper sortedSpec' shapelhs sortedFullTup fullSortedTup
+  where
+    untypeifySpec :: D.ReduceSpec spec red full -> [Bool]  -- Bool: == Keep
+    untypeifySpec D.RSpecNil = []
+    untypeifySpec (D.RSpecReduce spec') = False : untypeifySpec spec'
+    untypeifySpec (D.RSpecKeep spec') = True : untypeifySpec spec'
+
+    typeifySpec :: [Bool] -> SomeReduceSpec
+    typeifySpec [] = SomeReduceSpec D.RSpecNil D.TEmpty
+    typeifySpec (True : rest)
+      | SomeReduceSpec res val <- typeifySpec rest = SomeReduceSpec (D.RSpecKeep res) (D.TPush val OnlyInt)
+    typeifySpec (False : rest)
+      | SomeReduceSpec res val <- typeifySpec rest = SomeReduceSpec (D.RSpecReduce res) (D.TPush val OnlyInt)
+
+    specSameFull :: D.ReduceSpec spec red full
+                 -> D.ReduceSpec spec' red' full'
+                 -> Maybe (ShapeR full, A.ELeftHandSide full () full, full :~: full')
+    specSameFull D.RSpecNil D.RSpecNil = Just (ShapeRz, A.LeftHandSideWildcard TupRunit, Refl)
+    specSameFull (D.RSpecReduce s1) (D.RSpecReduce s2)
+      | Just (sh, lhs, Refl) <- specSameFull s1 s2 = Just (ShapeRsnoc sh, A.LeftHandSidePair lhs (A.LeftHandSideSingle scalarType), Refl)
+    specSameFull (D.RSpecReduce s1) (D.RSpecKeep s2)
+      | Just (sh, lhs, Refl) <- specSameFull s1 s2 = Just (ShapeRsnoc sh, A.LeftHandSidePair lhs (A.LeftHandSideSingle scalarType), Refl)
+    specSameFull (D.RSpecKeep s1) (D.RSpecReduce s2)
+      | Just (sh, lhs, Refl) <- specSameFull s1 s2 = Just (ShapeRsnoc sh, A.LeftHandSidePair lhs (A.LeftHandSideSingle scalarType), Refl)
+    specSameFull (D.RSpecKeep s1) (D.RSpecKeep s2)
+      | Just (sh, lhs, Refl) <- specSameFull s1 s2 = Just (ShapeRsnoc sh, A.LeftHandSidePair lhs (A.LeftHandSideSingle scalarType), Refl)
+    specSameFull _ _ = Nothing
+
+    specSameRed :: D.ReduceSpec spec red full
+                -> D.ReduceSpec spec' red' full'
+                -> Maybe (red :~: red')
+    specSameRed     D.RSpecNil            D.RSpecNil                                         = Just Refl
+    specSameRed    (D.RSpecKeep s1)      (D.RSpecKeep s2)   | Just Refl <- specSameRed s1 s2 = Just Refl
+    specSameRed    (D.RSpecReduce s1)     s2                | Just Refl <- specSameRed s1 s2 = Just Refl
+    specSameRed     s1                   (D.RSpecReduce s2) | Just Refl <- specSameRed s1 s2 = Just Refl
+    specSameRed     _                     _                                                  = Nothing
+
+    invertPermutation :: [Int] -> [Int]
+    invertPermutation l = map snd (sortBy (comparing fst) (zip l [0..]))
+
+    enforceLocal :: D.TagVal OnlyInt env -> Int -> A.ExpVar env Int
+    enforceLocal D.TEmpty i = error $ "enforceLocal: not local (but " ++ show i ++ ")"
+    enforceLocal (D.TPush _ OnlyInt) 0 = A.Var scalarType A.ZeroIdx
+    enforceLocal (D.TPush env _) n = A.weaken (A.weakenSucc' A.weakenId) (enforceLocal env (pred n))
+
+    tuplify :: D.TagVal OnlyInt env -> [A.ExpVar topenv Int] -> A.ExpVars topenv env
+    tuplify D.TEmpty [] = TupRunit
+    tuplify (D.TPush env OnlyInt) (var : vars) = TupRpair (tuplify env vars) (TupRsingle var)
+    tuplify _ _ = error "tuplify: lists unequal length"
+reduceConvert _ = error "impossible GADTs"
+
+-- Builds expression that takes the runtime array size as environment.
+multiplyReduced :: D.ReduceSpec spec red sorted -> A.OpenExp sorted aenv (red, Int)
+multiplyReduced = \spec -> let (vars, reduced) = goCollectR spec A.weakenId
+                           in A.Pair (a_evars vars) (multiplies (map A.Evar reduced))
+  where
+    goCollectR :: D.ReduceSpec spec red sorted
+               -> sorted A.:> sorted'
+               -> (A.ExpVars sorted' red, [A.ExpVar sorted' Int])
+    goCollectR (D.RSpecReduce spec) w =
+        let var = A.Var scalarType (w A.>:> A.ZeroIdx)
+        in (var :) <$> goCollectR spec (A.weakenSucc w)
+    goCollectR spec w = (goCollectK spec w, [])
+
+    goCollectK :: D.ReduceSpec spec red sorted
+               -> sorted A.:> sorted'
+               -> A.ExpVars sorted' red
+    goCollectK (D.RSpecKeep spec) w =
+        TupRpair (goCollectK spec (A.weakenSucc w))
+                 (TupRsingle (A.Var scalarType (w A.>:> A.ZeroIdx)))
+    goCollectK D.RSpecNil _ = TupRunit
+    goCollectK _ _ = error "multiplyReduced: Specification not sorted!"
+
+    multiply :: NumType t -> A.OpenExp env aenv t -> A.OpenExp env aenv t -> A.OpenExp env aenv t
+    multiply ty a b = A.PrimApp (A.PrimMul ty) (A.Pair a b)
+
+    multiplies :: [A.OpenExp env aenv Int] -> A.OpenExp env aenv Int
+    multiplies [] = A.Const scalarType 0
+    multiplies l = foldl1 (multiply numType) l
+
+a_evars :: A.ExpVars env t -> A.OpenExp env aenv t
+a_evars TupRunit = A.Nil
+a_evars (TupRsingle var) = A.Evar var
+a_evars (TupRpair vars1 vars2) = A.Pair (a_evars vars1) (a_evars vars2)
 
 checkLocal :: (forall t1 t2. TupR s t1 -> TupR s t2 -> Maybe (t1 :~: t2)) -> A.Var s env t -> PartialVal s topenv env2 -> Maybe (A.Var s env2 t)
 checkLocal _ _ PTEmpty = Nothing

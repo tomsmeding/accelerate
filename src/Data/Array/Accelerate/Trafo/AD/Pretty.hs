@@ -200,6 +200,12 @@ layoutAcc se d (Fold _ f me0 e) =
             (lseq' $ concat [[layoutLambda (se { seEnv = [] }) 11 f]
                             ,maybe [] (\e0 -> [layoutExp (se { seEnv = [] }) 11 e0]) me0
                             ,[layoutAcc se 11 e]])
+layoutAcc se d (Backpermute _ dim f e) =
+    parenthesise (d > 10) $
+        lprefix "backpermute "
+            (lseq' [layoutExp (se { seEnv = [] }) 11 dim
+                   ,layoutLambda (se { seEnv = [] }) 11 f
+                   ,layoutAcc se 11 e])
 layoutAcc se d (Sum _ e) =
     parenthesise (d > 10) $
         lprefix "sum " (layoutAcc se 11 e)
@@ -208,6 +214,22 @@ layoutAcc se d (Generate _ sh f) =
         lprefix "generate "
             (lseq' [layoutExp (se { seEnv = [] }) 11 sh
                    ,layoutLambda (se { seEnv = [] }) 11 f])
+layoutAcc se d (Replicate _ _ she e) =
+    parenthesise (d > 10) $
+        lprefix "replicate "
+            (lseq' [layoutExp (se { seEnv = [] }) 11 she
+                   ,layoutAcc se 11 e])
+layoutAcc se d (Reduce _ slt f e) =
+    parenthesise (d > 10) $
+        lprefix "reduce "
+            (lseq' [string (showRSpec slt)
+                   ,layoutFun (se { seEnv = [] }) 11 f
+                   ,layoutAcc se 11 e])
+layoutAcc se d (Reshape _ she e) =
+    parenthesise (d > 10) $
+        lprefix "reshape "
+            (lseq' [layoutExp (se { seEnv = [] }) 11 she
+                   ,layoutAcc se 11 e])
 layoutAcc se d (Aget _ ti e) = parenthesise (d > 10) $
     lprefix (tiPrefix ti) (layoutAcc se 11 e)
   where
@@ -248,3 +270,8 @@ layoutFun se d (Lam lhs fun) =
 layoutLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab sh t1 t2 -> Layout
 layoutLambda se d (Right fun) = layoutFun se d fun
 layoutLambda _ _ (Left _) = string "{splitlambda}"
+
+showRSpec :: ReduceSpec spec red full -> String
+showRSpec RSpecNil = "()"
+showRSpec (RSpecReduce spec) = "(" ++ showRSpec spec ++ ", [red])"
+showRSpec (RSpecKeep spec) = "(" ++ showRSpec spec ++ ", [keep])"
