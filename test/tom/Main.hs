@@ -6,7 +6,7 @@ module Main where
 
 import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Interpreter as I
-import Data.Array.Accelerate (Z(..), (:.)(..))
+import Data.Array.Accelerate (Z(..), (:.)(..), All(..))
 
 import qualified ADHelp as AD
 import qualified Logistic
@@ -33,18 +33,20 @@ neural = do
   print $ I.run $ Neural.matmat (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
                                 (A.use (A.fromList (Z :. 4 :. 3) [2..13]))
 
-  let network1 =
-          Neural.NextLayer (A.use (A.fromList (Z :. 1 :. 3) [7.9, 3.9, -7.5])) $
-          Neural.NextLayer (A.use (A.fromList (Z :. 3 :. 3) [-5.6,4.6,-2.3, 2.4,2.2,0.5, -4.8,5.8,2.3])) $
+  let network1_l1 = A.use (A.fromList (Z :. 1 :. 3) [7.9, 3.9, -7.5])
+      network1_l2 = A.use (A.fromList (Z :. 3 :. 3) [-5.6,4.6,-2.3, 2.4,2.2,0.5, -4.8,5.8,2.3])
+      network1 =
+          Neural.NextLayer network1_l1 $
+          Neural.NextLayer network1_l2 $
           Neural.InputLayer
       input1 = A.use (A.fromList (Z :. 4 :. 3) [0,0,1, 0,1,1, 1,0,1, 1,1,1])
-      -- output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
-      -- lossfunc wanted got = A.fold1All (+) (A.zipWith (-) wanted got)
+      output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
+      lossfunc wanted got = A.fold1All (+) (A.zipWith (-) wanted got)
 
   print $ I.run $ Neural.forward network1 input1
 
-  -- print $ A.gradientA (\netw -> lossfunc output1 (Neural.forward netw input1))
-  --                     network1
+  print $ A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1))
+                      (A.T2 network1_l1 network1_l2)
 
 indexing :: IO ()
 indexing = do
@@ -176,10 +178,14 @@ arrad = do
   --   A.gradientA (\a -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a (A.map (+6) a)))
   --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
 
+  -- print . I.run $
+  --   A.gradientA (\(A.T2 a1 a2) -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a1 a2))
+  --               (A.T2 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
+  --                     (A.use (A.fromList (Z :. (6 :: Int)) [7, 8, 9, 10, 11, 12])))
+
   print . I.run $
-    A.gradientA (\(A.T2 a1 a2) -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a1 a2))
-                (A.T2 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
-                      (A.use (A.fromList (Z :. (6 :: Int)) [7, 8, 9, 10, 11, 12])))
+      A.gradientA (\arr -> (A.sum . A.flatten) (A.map (\x -> x * x) (A.replicate (A.lift (Z :. (3 :: Int) :. All :. (2 :: Int) :. All)) arr)))
+                  (A.use (A.fromList (Z :. 3 :. 4) [1 :: Float .. 12]))
 
 main :: IO ()
 main = do

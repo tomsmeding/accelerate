@@ -55,7 +55,9 @@ convertExp e =
 
 convertAccWith :: Config -> Acc arrs -> Acc arrs
 convertAccWith _ = convertAcc
--- convertAccWith _ a = convertAcc (traceShowId a)
+-- convertAccWith _ a =
+--     let result = convertAcc (trace ("\nComputation before AD pass:\n" ++ show a) a)
+--     in trace ("Computation after AD pass:\n" ++ show result ++ "\n") result
 
 convertAcc :: OpenAcc env arrs -> OpenAcc env arrs
 convertAcc (OpenAcc (Unit ty e)) = OpenAcc (Unit ty (convertExp e))

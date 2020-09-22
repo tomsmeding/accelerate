@@ -82,6 +82,11 @@ sliceDomainR SliceNil        = ShapeRz
 sliceDomainR (SliceAll sl)   = ShapeRsnoc $ sliceDomainR sl
 sliceDomainR (SliceFixed sl) = ShapeRsnoc $ sliceDomainR sl
 
+cosliceR :: SliceIndex slix sl co dim -> ShapeR co
+cosliceR SliceNil        = ShapeRz
+cosliceR (SliceAll sl)   = cosliceR sl
+cosliceR (SliceFixed sl) = ShapeRsnoc $ cosliceR sl
+
 -- | Enumerate all slices within a given bound. The innermost dimension changes
 -- most rapidly.
 --

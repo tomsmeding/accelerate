@@ -12,6 +12,8 @@ import Data.List (intercalate)
 import Data.GADT.Show
 
 import Data.Array.Accelerate.Representation.Array hiding ((!!))
+import Data.Array.Accelerate.Representation.Shape
+import Data.Array.Accelerate.Representation.Slice
 import Data.Array.Accelerate.Representation.Type
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Var as A
@@ -80,6 +82,32 @@ data OpenAcc aenv lab alab args t where
              -> ExpLambda1 aenv lab alab sh sh e
              -> OpenAcc aenv lab alab args (Array sh e)
 
+    Replicate :: ArrayR (Array sh e)
+              -> SliceIndex slix sl co sh
+              -> Exp aenv lab alab () slix
+              -> OpenAcc aenv lab alab args (Array sl e)
+              -> OpenAcc aenv lab alab args (Array sh e)
+
+    -- Has no equivalent in the real AST. Is converted using backpermute, reshape, fold.
+    -- Folds the RSpecReduce-dimensions away using the binary operation.
+    -- Like 'add' is the dual of 'dup', Reduce is the dual of Replicate.
+    Reduce  :: ArrayR (Array redsh e)
+            -> ReduceSpec slix redsh fullsh
+            -> Fun aenv lab alab (e -> e -> e)
+            -> OpenAcc aenv lab alab args (Array fullsh e)
+            -> OpenAcc aenv lab alab args (Array redsh e)
+
+    Reshape :: ArrayR (Array sh e)
+            -> Exp aenv lab alab () sh
+            -> OpenAcc aenv lab alab args (Array sh' e)
+            -> OpenAcc aenv lab alab args (Array sh e)
+
+    Backpermute :: ArrayR (Array sh' e)
+                -> Exp aenv lab alab () sh'                       -- dimensions of the result
+                -> ExpLambda1 aenv lab alab sh' sh' sh            -- permutation function
+                -> OpenAcc aenv lab alab args (Array sh e)        -- source array
+                -> OpenAcc aenv lab alab args (Array sh' e)
+
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
     Aget    :: ArraysR s
@@ -113,6 +141,30 @@ deriving instance Show AnyArraysR
 
 data AnyArrayR = forall t. AnyArrayR (ArrayR t)
 deriving instance Show AnyArrayR
+
+-- Specification for which dimensions to reduce in a Reduce aggregate operation.
+-- spec: Equal to the dual SliceIndex, suitable for Replicate. Dual as in:
+--       Replicate on a SliceIndex with its first 'slix' type argument set to
+--       'spec' will create (expand) precisely those dimensions that a Reduce
+--       with this spec will fold away.
+-- red: The reduced shape type.
+-- full: The pre-reduce, full shape type.
+data ReduceSpec spec red full where
+    RSpecNil    :: ReduceSpec () () ()
+    RSpecReduce :: ReduceSpec spec red full -> ReduceSpec (spec, Int) red (full, Int)
+    RSpecKeep   :: ReduceSpec spec red full -> ReduceSpec (spec, ()) (red, Int) (full, Int)
+
+deriving instance Show (ReduceSpec spec red full)
+
+rsReducedShapeR :: ReduceSpec spec red full -> ShapeR red
+rsReducedShapeR RSpecNil = ShapeRz
+rsReducedShapeR (RSpecReduce spec) = rsReducedShapeR spec
+rsReducedShapeR (RSpecKeep spec) = ShapeRsnoc (rsReducedShapeR spec)
+
+rsFullShapeR :: ReduceSpec spec red full -> ShapeR full
+rsFullShapeR RSpecNil = ShapeRz
+rsFullShapeR (RSpecReduce spec) = ShapeRsnoc (rsFullShapeR spec)
+rsFullShapeR (RSpecKeep spec) = ShapeRsnoc (rsFullShapeR spec)
 
 -- Instances
 -- ---------
@@ -148,6 +200,12 @@ showsAcc se d (Fold _ f me0 e) =
             showsLambda (se { seEnv = [] }) 11 f . showString " " .
             maybe id (\e0 -> showsExp (se { seEnv = [] }) 11 e0 . showString " ") me0 .
             showsAcc se 11 e
+showsAcc se d (Backpermute _ dim f e) =
+    showParen (d > 10) $
+        showString "backpermute " .
+            showsExp (se { seEnv = [] }) 11 dim . showString " " .
+            showsLambda (se { seEnv = [] }) 11 f . showString " " .
+            showsAcc se 11 e
 showsAcc se d (Sum _ e) =
     showParen (d > 10) $
         showString "sum " .
@@ -157,6 +215,21 @@ showsAcc se d (Generate _ sh f) =
         showString "generate " .
             showsExp (se { seEnv = [] }) 11 sh . showString " " .
             showsLambda (se { seEnv = [] }) 11 f
+showsAcc se d (Replicate _ _ e a) =
+    showParen (d > 10) $
+        showString "replicate " .
+            showsExp (se { seEnv = [] }) 11 e . showString " " .
+            showsAcc se 11 a
+showsAcc se d (Reduce _ _ f a) =
+    showParen (d > 10) $
+        showString "reduce " .
+            showsFun (se { seEnv = [] }) 11 f . showString " " .
+            showsAcc se 11 a
+showsAcc se d (Reshape _ e a) =
+    showParen (d > 10) $
+        showString "reshape " .
+            showsExp (se { seEnv = [] }) 11 e . showString " " .
+            showsAcc se 11 a
 showsAcc se d (Aget _ ti e) = showParen (d > 10) $
     showString (tiPrefix ti) . showsAcc se 10 e
   where
@@ -213,6 +286,10 @@ atypeOf (Map ty _ _) = TupRsingle ty
 atypeOf (ZipWith ty _ _ _) = TupRsingle ty
 atypeOf (Generate ty _ _) = TupRsingle ty
 atypeOf (Fold ty _ _ _) = TupRsingle ty
+atypeOf (Backpermute ty _ _ _) = TupRsingle ty
+atypeOf (Replicate ty _ _ _) = TupRsingle ty
+atypeOf (Reduce ty _ _ _) = TupRsingle ty
+atypeOf (Reshape ty _ _) = TupRsingle ty
 atypeOf (Sum ty _) = TupRsingle ty
 atypeOf (Aget ty _ _) = ty
 atypeOf (Alet _ _ body) = atypeOf body
