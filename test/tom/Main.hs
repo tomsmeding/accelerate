@@ -33,11 +33,13 @@ neural = do
   print $ I.run $ Neural.matmat (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
                                 (A.use (A.fromList (Z :. 4 :. 3) [2..13]))
 
-  let network1_l1 = A.use (A.fromList (Z :. 1 :. 3) [7.9, 3.9, -7.5])
-      network1_l2 = A.use (A.fromList (Z :. 3 :. 3) [-5.6,4.6,-2.3, 2.4,2.2,0.5, -4.8,5.8,2.3])
+  let network1_l1 = A.fromList (Z :. 1 :. 3) [7.9, 3.9, -7.5]
+      network1_l1' = A.use network1_l1
+      network1_l2 = A.fromList (Z :. 3 :. 3) [-5.6,4.6,-2.3, 2.4,2.2,0.5, -4.8,5.8,2.3]
+      network1_l2' = A.use network1_l2
       network1 =
-          Neural.NextLayer network1_l1 $
-          Neural.NextLayer network1_l2 $
+          Neural.NextLayer network1_l1' $
+          Neural.NextLayer network1_l2' $
           Neural.InputLayer
       input1 = A.use (A.fromList (Z :. 4 :. 3) [0,0,1, 0,1,1, 1,0,1, 1,1,1])
       output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
@@ -45,8 +47,8 @@ neural = do
 
   print $ I.run $ Neural.forward network1 input1
 
-  print $ I.run $ A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1))
-                              (A.T2 network1_l1 network1_l2)
+  print $ I.run1 (A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)))
+                 (network1_l1, network1_l2)
 
 indexing :: IO ()
 indexing = do

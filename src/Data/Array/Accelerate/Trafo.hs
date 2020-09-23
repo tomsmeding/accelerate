@@ -68,7 +68,7 @@ convertAccWith config
   = phase "array-fusion"           (Fusion.convertAccWith config)
   . phase "array-split-lets"       LetSplit.convertAcc
   -- phase "vectorise-sequences"    Vectorise.vectoriseSeqAcc `when` vectoriseSequences
-  . phase "ad-phase"               (AD.convertAccWith config)
+  . phase "ad-phase"               AD.convertAccEntry
   . phase "sharing-recovery"       (Sharing.convertAccWith config)
 
 
@@ -83,6 +83,7 @@ convertAfunWith config
   = phase "array-fusion"           (Fusion.convertAfunWith config)
   . phase "array-split-lets"       LetSplit.convertAfun
   -- phase "vectorise-sequences"    Vectorise.vectoriseSeqAfun  `when` vectoriseSequences
+  . phase "ad-phase"               AD.convertAfunEntry
   . phase "sharing-recovery"       (Sharing.convertAfunWith config)
 
 

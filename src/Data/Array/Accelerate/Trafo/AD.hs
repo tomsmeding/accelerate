@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts #-}
 module Data.Array.Accelerate.Trafo.AD (
-  convertExp, convertAccWith
+  convertExp, convertAccEntry, convertAfunEntry
 ) where
 
 import Data.Array.Accelerate.AST
@@ -12,7 +12,6 @@ import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
 -- import Data.Array.Accelerate.Pretty.NoTrafo ()
 import Data.Array.Accelerate.Representation.Array
-import Data.Array.Accelerate.Trafo.Config
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Type
@@ -53,11 +52,17 @@ convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
 convertExp e =
   internalError ("convertExp: Cannot convert Exp node <" ++ showExpOp e ++ ">")
 
-convertAccWith :: Config -> Acc arrs -> Acc arrs
-convertAccWith _ = convertAcc
--- convertAccWith _ a =
+convertAccEntry :: Acc arrs -> Acc arrs
+convertAccEntry = convertAcc
+-- convertAccEntry a =
 --     let result = convertAcc (trace ("\nComputation before AD pass:\n" ++ show a) a)
 --     in trace ("Computation after AD pass:\n" ++ show result ++ "\n") result
+
+convertAfunEntry :: Afun t -> Afun t
+convertAfunEntry = convertAfun
+-- convertAfunEntry a =
+--     let result = convertAfun (trace ("\nComputation before AD pass: [run1 FUNCTION]\n" ++ show a) a)
+--     in trace ("Computation after AD pass: [run1 FUNCTION]\n" ++ show result ++ "\n") result
 
 convertAcc :: OpenAcc env arrs -> OpenAcc env arrs
 convertAcc (OpenAcc (Unit ty e)) = OpenAcc (Unit ty (convertExp e))
