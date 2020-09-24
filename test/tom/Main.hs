@@ -28,10 +28,10 @@ optimise = do
 
 neural :: IO ()
 neural = do
-  print $ I.run $ Neural.matvec (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
-                                (A.use (A.fromList (Z :. 4) [10, 12, 13, 17]))
-  print $ I.run $ Neural.matmat (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
-                                (A.use (A.fromList (Z :. 4 :. 3) [2..13]))
+  -- print $ I.run $ Neural.matvec (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
+  --                               (A.use (A.fromList (Z :. 4) [10, 12, 13, 17]))
+  -- print $ I.run $ Neural.matmat (A.use (A.fromList (Z :. 3 :. 4) [1..12]))
+  --                               (A.use (A.fromList (Z :. 4 :. 3) [2..13]))
 
   let network1_l1 = A.fromList (Z :. 1 :. 3) [7.9, 3.9, -7.5]
       network1_l1' = A.use network1_l1
@@ -43,12 +43,26 @@ neural = do
           Neural.InputLayer
       input1 = A.use (A.fromList (Z :. 4 :. 3) [0,0,1, 0,1,1, 1,0,1, 1,1,1])
       output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
-      lossfunc wanted got = A.fold1All (+) (A.zipWith (-) wanted got)
+      lossfunc wanted got = A.fold1All (+) (A.map (\x -> x*x) (A.zipWith (-) wanted got))
 
   print $ I.run $ Neural.forward network1 input1
 
-  print $ I.run1 (A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)))
-                 (network1_l1, network1_l2)
+  -- print $ I.run1 (A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)))
+  --                (network1_l1, network1_l2)
+
+  AD.aCompareAD (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1))
+             (network1_l1, network1_l2)
+
+neural2 :: IO ()
+neural2 = do
+  let l1 = A.fromList (Z :. 1 :. 3) [1, 2, 3]
+      l2 = A.fromList (Z :. 3 :. 3) [0.4, 0.7, 0.2, 0.4, 1.2, 0.5, 0.8, 1.1, 0.9, 0.3]
+      initNet = Neural.NextLayer (A.use l1) $
+                Neural.NextLayer (A.use l2) $
+                Neural.InputLayer
+      input1 = A.use (A.fromList (Z :. 4 :. 3) [0,0,1, 0,1,1, 1,0,1, 1,1,1])
+      output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
+  print $ Neural.forward (Neural.learnLoop initNet input1 output1) input1
 
 indexing :: IO ()
 indexing = do
@@ -203,4 +217,5 @@ main = do
   -- adtuple2
   -- adtuple3
   -- arrad
-  neural
+  -- neural
+  neural2

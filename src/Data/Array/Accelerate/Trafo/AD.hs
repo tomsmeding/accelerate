@@ -31,6 +31,7 @@ convertExp (Evar (Var rep idx)) = Evar (Var rep idx)
 convertExp (Let lhs def body) = Let lhs (convertExp def) (convertExp body)
 convertExp Nil = Nil
 convertExp (Pair e1 e2) = Pair (convertExp e1) (convertExp e2)
+convertExp (Cond c e1 e2) = Cond (convertExp c) (convertExp e1) (convertExp e2)
 convertExp (Shape var) = Shape var
 convertExp (Index var dim) = Index var (convertExp dim)
 convertExp (ShapeSize shr e) = ShapeSize shr (convertExp e)
