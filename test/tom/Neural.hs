@@ -74,10 +74,10 @@ learnSingle net input expectedOutput =
                           let net' = unliftNetwork net lnet
                               output = forward net' input'
                              -- loss = 1/2 (out - expected) ∙ (out - expected)
-                          in A.map (* 0.5) . A.sum . A.flatten . A.map (\x -> x * x) $ A.zipWith (-) output expectedOutput')
+                          in A.map (* 0.5) . A.fold1All (+) . A.map (\x -> x * x) $ A.zipWith (-) output expectedOutput')
                       (A.T3 (liftNetwork net) input expectedOutput)
         contribution = unliftNetwork net contribution'
-        updatedNet = networkZip (A.zipWith (\x dx -> x + learnRate * dx)) net contribution
+        updatedNet = networkZip (A.zipWith (\x dx -> x - learnRate * dx)) net contribution
     in updatedNet
 
 learnLoop :: A.Arrays a => Network A.Acc a -> A.Acc RowBatch -> A.Acc RowBatch -> Network A.Acc a

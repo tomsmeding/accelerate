@@ -55,14 +55,15 @@ neural = do
 
 neural2 :: IO ()
 neural2 = do
-  let l1 = A.fromList (Z :. 1 :. 3) [1, 2, 3]
-      l2 = A.fromList (Z :. 3 :. 3) [0.4, 0.7, 0.2, 0.4, 1.2, 0.5, 0.8, 1.1, 0.9, 0.3]
+  let l1 = A.fromList (Z :. 1 :. 3) [0.99, 0.44, 0.66]
+      l2 = A.fromList (Z :. 3 :. 3) [0.58, 0.31, 0.04, 0.90, 0.31, 0.86, 0.83, 0.77, 0.69]
       initNet = Neural.NextLayer (A.use l1) $
                 Neural.NextLayer (A.use l2) $
                 Neural.InputLayer
       input1 = A.use (A.fromList (Z :. 4 :. 3) [0,0,1, 0,1,1, 1,0,1, 1,1,1])
       output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
-  print $ Neural.forward (Neural.learnLoop initNet input1 output1) input1
+  print . I.run $ Neural.forward (Neural.learnLoop initNet input1 output1) input1
+  -- print . I.run $ Neural.liftNetwork $ Neural.learnLoop initNet input1 output1
 
 indexing :: IO ()
 indexing = do
