@@ -327,9 +327,9 @@ constructPrimalBundle (Context toplabelenv topbindmap)
       = PrimalBundle' (TupRpair vars (TupRsingle (A.Var ty idx)))
                       (TupRpair restty (TupRsingle ty))
                       (\tmpe -> do
-                          (locmp, transmp) <- instantiator (Get restty (TILeft TIHere) tmpe)
+                          (locmp, transmp) <- instantiator (smartFst tmpe)
                           lab' <- genSingleId ty
-                          return ((lab' :=> Get (TupRsingle ty) (TIRight TIHere) tmpe) : locmp
+                          return ((lab' :=> smartSnd tmpe) : locmp
                                  ,DMap.insert lab lab' transmp))
 
     bindAll :: EContext Int env'
@@ -492,29 +492,6 @@ explode' env = \case
         (A.LeftHandSideSingle _, TupRsingle lab) -> (LPush labelenv lab, DMap.singleton (tupleLabel lab) rhs)
         (A.LeftHandSideWildcard _, _) -> (labelenv, mempty)
         _ -> error "lpushLHS_Get: impossible GADTs"
-
-    -- TODO: make smartFst and smartSnd non-quadratic (should be easy)
-    smartFst :: OpenExp env aenv lab alab args (t1, t2) -> OpenExp env aenv lab alab args t1
-    smartFst (Get (TupRpair t1 _) tidx ex) = Get t1 (insertFst tidx) ex
-      where insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
-            insertFst TIHere = TILeft TIHere
-            insertFst (TILeft ti) = TILeft (insertFst ti)
-            insertFst (TIRight ti) = TIRight (insertFst ti)
-    smartFst ex
-      | TupRpair t1 _ <- etypeOf ex
-      = Get t1 (TILeft TIHere) ex
-    smartFst _ = error "smartFst: impossible GADTs"
-
-    smartSnd :: OpenExp env aenv lab alab args (t1, t2) -> OpenExp env aenv lab alab args t2
-    smartSnd (Get (TupRpair _ t2) tidx ex) = Get t2 (insertSnd tidx) ex
-      where insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
-            insertSnd TIHere = TIRight TIHere
-            insertSnd (TILeft ti) = TILeft (insertSnd ti)
-            insertSnd (TIRight ti) = TIRight (insertSnd ti)
-    smartSnd ex
-      | TupRpair _ t2 <- etypeOf ex
-      = Get t2 (TIRight TIHere) ex
-    smartSnd _ = error "smartSnd: impossible GADTs"
 
 showContext :: (Ord lab, Show lab) => EContext lab env -> String
 showContext (Context labelenv bindmap) = "Context " ++ showLabelenv labelenv ++ " " ++ showBindmap bindmap
@@ -1063,3 +1040,28 @@ dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
 dmapFind mp elt = case DMap.lookup elt mp of
                     Just res -> res
                     Nothing -> error "dmapFind: not found"
+
+-- TODO: make smartFst and smartSnd non-quadratic (should be easy)
+smartFst :: OpenExp env aenv lab alab args (t1, t2) -> OpenExp env aenv lab alab args t1
+smartFst (Pair _ ex _) = ex
+smartFst (Get (TupRpair t1 _) tidx ex) = Get t1 (insertFst tidx) ex
+  where insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
+        insertFst TIHere = TILeft TIHere
+        insertFst (TILeft ti) = TILeft (insertFst ti)
+        insertFst (TIRight ti) = TIRight (insertFst ti)
+smartFst ex
+  | TupRpair t1 _ <- etypeOf ex
+  = Get t1 (TILeft TIHere) ex
+smartFst _ = error "smartFst: impossible GADTs"
+
+smartSnd :: OpenExp env aenv lab alab args (t1, t2) -> OpenExp env aenv lab alab args t2
+smartSnd (Pair _ _ ex) = ex
+smartSnd (Get (TupRpair _ t2) tidx ex) = Get t2 (insertSnd tidx) ex
+  where insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
+        insertSnd TIHere = TIRight TIHere
+        insertSnd (TILeft ti) = TILeft (insertSnd ti)
+        insertSnd (TIRight ti) = TIRight (insertSnd ti)
+smartSnd ex
+  | TupRpair _ t2 <- etypeOf ex
+  = Get t2 (TIRight TIHere) ex
+smartSnd _ = error "smartSnd: impossible GADTs"

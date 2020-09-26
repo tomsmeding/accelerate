@@ -365,29 +365,6 @@ explode' labelenv = \case
         (A.LeftHandSideWildcard _, _) -> (labelenv', mempty)
         _ -> error "lpushLHS_Get: impossible GADTs"
 
-    -- TODO: make smartFst and smartSnd non-quadratic (should be easy)
-    smartFst :: OpenAcc aenv lab alab args (t1, t2) -> OpenAcc aenv lab alab args t1
-    smartFst (Aget (TupRpair t1 _) tidx ex) = Aget t1 (insertFst tidx) ex
-      where insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
-            insertFst TIHere = TILeft TIHere
-            insertFst (TILeft ti) = TILeft (insertFst ti)
-            insertFst (TIRight ti) = TIRight (insertFst ti)
-    smartFst ex
-      | TupRpair t1 _ <- atypeOf ex
-      = Aget t1 (TILeft TIHere) ex
-    smartFst _ = error "smartFst: impossible GADTs"
-
-    smartSnd :: OpenAcc aenv lab alab args (t1, t2) -> OpenAcc aenv lab alab args t2
-    smartSnd (Aget (TupRpair _ t2) tidx ex) = Aget t2 (insertSnd tidx) ex
-      where insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
-            insertSnd TIHere = TIRight TIHere
-            insertSnd (TILeft ti) = TILeft (insertSnd ti)
-            insertSnd (TIRight ti) = TIRight (insertSnd ti)
-    smartSnd ex
-      | TupRpair _ t2 <- atypeOf ex
-      = Aget t2 (TIRight TIHere) ex
-    smartSnd _ = error "smartSnd: impossible GADTs"
-
 computeLabelorder :: Exploded (PDExp Int) Int args t -> [AnyLabelT Int]
 computeLabelorder (endlab, nodemap, _) =
     topsort' (\(AnyLabel l) -> labelLabel l)
@@ -1008,8 +985,8 @@ arraysSum TupRunit TupRunit _ = Anil
 arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) l = arraySum ty (Shape (Left pvar)) l
 arraysSum (TupRpair t1 t2) (TupRpair pvars1 pvars2) l =
     Apair (TupRpair t1 t2)
-          (arraysSum t1 pvars1 (map (Aget t1 (TILeft TIHere)) l))
-          (arraysSum t2 pvars2 (map (Aget t2 (TIRight TIHere)) l))
+          (arraysSum t1 pvars1 (map smartFst l))
+          (arraysSum t2 pvars2 (map smartSnd l))
 arraysSum _ _ _ = error "arraysSum: Invalid GADTs"
 
 generateConstantArray :: TypeR t -> Exp aenv lab alab () t
@@ -1113,3 +1090,28 @@ dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
 dmapFind mp elt = case DMap.lookup elt mp of
                     Just res -> res
                     Nothing -> error "dmapFind: not found"
+
+-- TODO: make smartFst and smartSnd non-quadratic (should be easy)
+smartFst :: OpenAcc aenv lab alab args (t1, t2) -> OpenAcc aenv lab alab args t1
+smartFst (Apair _ ex _) = ex
+smartFst (Aget (TupRpair t1 _) tidx ex) = Aget t1 (insertFst tidx) ex
+  where insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
+        insertFst TIHere = TILeft TIHere
+        insertFst (TILeft ti) = TILeft (insertFst ti)
+        insertFst (TIRight ti) = TIRight (insertFst ti)
+smartFst ex
+  | TupRpair t1 _ <- atypeOf ex
+  = Aget t1 (TILeft TIHere) ex
+smartFst _ = error "smartFst: impossible GADTs"
+
+smartSnd :: OpenAcc aenv lab alab args (t1, t2) -> OpenAcc aenv lab alab args t2
+smartSnd (Apair _ _ ex) = ex
+smartSnd (Aget (TupRpair _ t2) tidx ex) = Aget t2 (insertSnd tidx) ex
+  where insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
+        insertSnd TIHere = TIRight TIHere
+        insertSnd (TILeft ti) = TILeft (insertSnd ti)
+        insertSnd (TIRight ti) = TIRight (insertSnd ti)
+smartSnd ex
+  | TupRpair _ t2 <- atypeOf ex
+  = Aget t2 (TIRight TIHere) ex
+smartSnd _ = error "smartSnd: impossible GADTs"
