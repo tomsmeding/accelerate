@@ -223,7 +223,7 @@ data Context s tag lab env =
                   (TupR (DLabel s lab)))
 
 
--- TODO: make this 'type AnyLabel s lab = Some (DLabel s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
+-- TODO: make this 'type AnyLabel s lab = Exists (DLabel s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
 data AnyLabel s lab = forall t. AnyLabel (DLabel s lab t)
 
 -- TODO: This only uses the actual label, not the type, for equality check
@@ -233,14 +233,3 @@ instance Eq lab => Eq (AnyLabel s lab) where
 -- TODO: This only uses the actual label, not the type, for the ordering
 instance Ord lab => Ord (AnyLabel s lab) where
     compare (AnyLabel (DLabel _ lab1)) (AnyLabel (DLabel _ lab2)) = compare lab1 lab2
-
-
-data GenLHS s env t = forall env'. GenLHS (LeftHandSide s t env env')
-
-generaliseLHS :: LeftHandSide s t env1 env1' -> GenLHS s env2 t
-generaliseLHS (LeftHandSideWildcard ty) = GenLHS (LeftHandSideWildcard ty)
-generaliseLHS (LeftHandSideSingle ty) = GenLHS (LeftHandSideSingle ty)
-generaliseLHS (LeftHandSidePair lhs1 lhs2)
-  | GenLHS lhs1' <- generaliseLHS lhs1
-  , GenLHS lhs2' <- generaliseLHS lhs2 =
-      GenLHS (LeftHandSidePair lhs1' lhs2')

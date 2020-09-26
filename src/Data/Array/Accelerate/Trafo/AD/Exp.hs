@@ -29,7 +29,7 @@ import Data.Array.Accelerate.Shows
 import qualified Data.Array.Accelerate.Sugar.Tag as A
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
-import qualified Data.Array.Accelerate.Trafo.Substitution as A (weakenVars)
+import qualified Data.Array.Accelerate.Trafo.Substitution as A (weakenVars, rebuildLHS)
 
 
 type ELabVal = LabVal ScalarType
@@ -403,7 +403,7 @@ sinkExp k (Index var e) = Index var (sinkExp k e)
 sinkExp k (ShapeSize sht e) = ShapeSize sht (sinkExp k e)
 sinkExp k (Get ty ti e) = Get ty ti (sinkExp k e)
 sinkExp k (Let lhs rhs e)
-  | GenLHS lhs' <- generaliseLHS lhs =
+  | A.Exists lhs' <- A.rebuildLHS lhs =
       Let lhs' (sinkExp k rhs) (sinkExp (A.sinkWithLHS lhs lhs' k) e)
 sinkExp k (Var (A.Var sty idx)) = Var (A.Var sty (k A.>:> idx))
 sinkExp _ (Arg ty idx) = Arg ty idx

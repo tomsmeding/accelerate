@@ -3,7 +3,6 @@
 {-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.Sink (
   sinkExp, sinkExpAenv, sinkFunAenv, sinkAcc,
-  GenLHS(..), generaliseLHS,
   eCheckClosed, eCheckClosedInLHS, eCheckClosedInTagval,
   aCheckClosed, aCheckClosedInLHS, aCheckClosedInTagval,
   ExpandLHS(..), expandLHS, sameLHSsameEnv
@@ -16,6 +15,7 @@ import qualified Data.Array.Accelerate.AST.Environment as A
 import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.LeftHandSide as A
 import qualified Data.Array.Accelerate.AST.Var as A
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
 import Data.Array.Accelerate.Analysis.Match (matchTypeR, matchArraysR, (:~:)(Refl))
 import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Common
@@ -60,7 +60,7 @@ sinkAcc k (Reduce ty slt f e) = Reduce ty slt (sinkFunAenv k f) (sinkAcc k e)
 sinkAcc k (Reshape ty sle e) = Reshape ty (sinkExpAenv k sle) (sinkAcc k e)
 sinkAcc k (Aget ty ti e) = Aget ty ti (sinkAcc k e)
 sinkAcc k (Alet lhs rhs e)
-  | GenLHS lhs' <- generaliseLHS lhs =
+  | A.Exists lhs' <- rebuildLHS lhs =
       Alet lhs' (sinkAcc k rhs) (sinkAcc (A.sinkWithLHS lhs lhs' k) e)
 sinkAcc k (Avar (A.Var sty idx)) = Avar (A.Var sty (k A.>:> idx))
 sinkAcc _ (Aarg ty idx) = Aarg ty idx
@@ -109,7 +109,7 @@ eCheckClosedInTagval tv expr = case expr of
     ShapeSize sht e -> ShapeSize sht <$> eCheckClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckClosedInTagval tv e
     Let lhs rhs e
-      | GenLHS lhs' <- generaliseLHS lhs ->
+      | A.Exists lhs' <- rebuildLHS lhs ->
           Let lhs' <$> eCheckClosedInTagval tv rhs <*> eCheckClosedInTagval (valPushLHS lhs' tv) e
     Var var -> Var <$> eCheckLocal var tv
     Arg ty idx -> Just (Arg ty idx)
@@ -163,7 +163,7 @@ aCheckClosedInTagval tv expr = case expr of
     Reshape ty sle e -> Reshape ty <$> eCheckAClosedInTagval tv sle <*> aCheckClosedInTagval tv e
     Aget ty ti e -> Aget ty ti <$> aCheckClosedInTagval tv e
     Alet lhs rhs e
-      | GenLHS lhs' <- generaliseLHS lhs ->
+      | A.Exists lhs' <- rebuildLHS lhs ->
           Alet lhs' <$> aCheckClosedInTagval tv rhs <*> aCheckClosedInTagval (valPushLHS lhs' tv) e
     Avar var -> Avar <$> aCheckLocal var tv
     Aarg ty idx -> Just (Aarg ty idx)
@@ -182,7 +182,7 @@ expandLHS :: A.LeftHandSide s t env0 env1 -> ExpandLHS s t env0 env1
 expandLHS lhs@(A.LeftHandSideSingle _) = ExpandLHS lhs A.weakenId
 expandLHS (A.LeftHandSidePair lhs1 lhs2)
   | ExpandLHS lhs1' weaken1 <- expandLHS lhs1
-  , GenLHS lhs2gen <- generaliseLHS lhs2
+  , A.Exists lhs2gen <- rebuildLHS lhs2
   , ExpandLHS lhs2' weaken2 <- expandLHS lhs2gen
   = ExpandLHS (A.LeftHandSidePair lhs1' lhs2')
               (weaken2 A..> A.sinkWithLHS lhs2 lhs2gen weaken1)
