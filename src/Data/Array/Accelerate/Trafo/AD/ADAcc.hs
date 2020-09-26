@@ -33,6 +33,7 @@ import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Environment as A
 import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.LeftHandSide as A
+import Data.Array.Accelerate.AST.LeftHandSide (Exists(..))
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Error (HasCallStack)
 import Data.Array.Accelerate.Type
@@ -48,6 +49,7 @@ import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
@@ -60,13 +62,13 @@ genId = genId'
 genSingleId :: ArrayR t -> IdGen (ADLabel Int t)
 genSingleId = genId'
 
-genSingleIds :: ArraysR t -> IdGen (GenLHS ArrayR aenv t, TupR (ADLabel Int) t)
-genSingleIds TupRunit = return (GenLHS (A.LeftHandSideWildcard TupRunit), TupRunit)
-genSingleIds (TupRsingle ty) = (GenLHS (A.LeftHandSideSingle ty),) . TupRsingle <$> genSingleId ty
+genSingleIds :: ArraysR t -> IdGen (Exists (A.LeftHandSide ArrayR t aenv), TupR (ADLabel Int) t)
+genSingleIds TupRunit = return (Exists (A.LeftHandSideWildcard TupRunit), TupRunit)
+genSingleIds (TupRsingle ty) = (Exists (A.LeftHandSideSingle ty),) . TupRsingle <$> genSingleId ty
 genSingleIds (TupRpair t1 t2) = do
-    (GenLHS lhs1, ids1) <- genSingleIds t1
-    (GenLHS lhs2, ids2) <- genSingleIds t2
-    return (GenLHS (A.LeftHandSidePair lhs1 lhs2), TupRpair ids1 ids2)
+    (Exists lhs1, ids1) <- genSingleIds t1
+    (Exists lhs2, ids2) <- genSingleIds t2
+    return (Exists (A.LeftHandSidePair lhs1 lhs2), TupRpair ids1 ids2)
 
 
 -- TODO: make this a data definition, not a tuple
@@ -231,7 +233,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Reshape ty she e -> Reshape ty (sinkExpAenv varWeaken she) (go argWeaken varWeaken e)
         Aget ty tidx ex -> Aget ty tidx (go argWeaken varWeaken ex)
         Alet lhs rhs ex
-          | GenLHS lhs' <- generaliseLHS lhs ->
+          | A.Exists lhs' <- rebuildLHS lhs ->
               Alet lhs' (go argWeaken varWeaken rhs)
                   (go (A.weakenWithLHS lhs' A..> argWeaken) (A.sinkWithLHS lhs lhs' varWeaken) ex)
         Avar (A.Var ty idx) -> Avar (A.Var ty (varWeaken A.>:> idx))
@@ -471,7 +473,7 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
               in case (alabValFinds labelenv thenlabs
                       ,alabValFinds labelenv elselabs) of
                   (Just thenvars, Just elsevars) -> do
-                      (GenLHS lhs, labs) <- genSingleIds restype
+                      (Exists lhs, labs) <- genSingleIds restype
                       Alet lhs (Acond restype (resolveAlabs (Context labelenv bindmap) condexpr)
                                               (avars thenvars) (avars elsevars))
                            <$> primal' nodemap restlabels
@@ -700,7 +702,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     Acond restype (resolveAlabs (Context labelenv' bindmap) condexp)
                                                   (arraysSum restype pvars []) (avars adjvars)]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds restype
+          (Exists lhs, labs) <- genSingleIds restype
           Alet lhs adjoint
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -716,7 +718,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                                 (Avar adjvar) (Avar lambdaTmpVar)]
                                 contribmap
           -- technically don't need the tuple machinery here, but for consistency
-          (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
+          (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
           Alet lhs adjoint
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -772,7 +774,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                                 in Generate argtypeS (Shape (Left pvar))
                                                             (Right (Lam lhs' (Body (Index (Left adjvar) (evars shvars)))))]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
+          (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
           Alet lhs adjoint
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -787,7 +789,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                         Reduce argtypeS (reduceSpecFromReplicate shtype)
                                                (plusLam eltty) (Avar adjvar)]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
+          (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
           Alet lhs adjoint
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -801,7 +803,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     \(TupRsingle adjvar) (TupRsingle pvar :@ TLNil) _ _ ->
                                         Reshape (ArrayR shtype' eltty) (Shape (Left pvar)) (Avar adjvar)]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
+          (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
           Alet lhs adjoint
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -822,7 +824,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                                               (mkJust (evars (varsgenArg A.weakenId))))
                                                 (Avar adjvar)]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds (TupRsingle restype)
+          (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
           Alet lhs adjoint
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -835,7 +837,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     \adjvars (argvars :@ TLNil) _ _ ->
                                         oneHotTup (labelType arglab) path argvars (avars adjvars)]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds restype
+          (Exists lhs, labs) <- genSingleIds restype
           Alet lhs adjoint
               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -849,7 +851,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 ,Contribution arglab2 TLNil TLNil $ \(TupRpair _ adjvars2) _ _ _ ->
                                     avars adjvars2]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds restype
+          (Exists lhs, labs) <- genSingleIds restype
           Alet lhs adjoint
               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
@@ -868,7 +870,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 [Contribution arglab TLNil TLNil $ \adjvars _ _ _ ->
                                     avars adjvars]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds (labelType arglab)
+          (Exists lhs, labs) <- genSingleIds (labelType arglab)
           Alet lhs adjoint
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))

@@ -8,6 +8,7 @@ module Data.Array.Accelerate.Trafo.AD (
 ) where
 
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
 -- import Data.Array.Accelerate.Pretty.NoTrafo ()
@@ -20,6 +21,7 @@ import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
 
 -- import Debug.Trace
 
@@ -37,7 +39,7 @@ convertExp (Index var dim) = Index var (convertExp dim)
 convertExp (ShapeSize shr e) = ShapeSize shr (convertExp e)
 convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   | SingleScalarType (NumSingleType (FloatingNumType TypeFloat)) <- sty
-  , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
+  , Exists lhs' <- rebuildLHS lhs =
       case AD.eCheckClosedInLHS lhs' (AD.translateExp body) of
           Just transBody
             | AD.ReverseADResE lhs'' body' <- AD.reverseAD lhs' (transBody `withAlabType` ())
@@ -84,7 +86,7 @@ convertAcc (OpenAcc (Replicate rep slice a)) = OpenAcc (Replicate rep (convertEx
 convertAcc (OpenAcc (Generate rep sz f)) = OpenAcc (Generate rep (convertExp sz) (convertFun f))
 convertAcc (OpenAcc (GradientA _ sty (Alam lhs (Abody body)) arg))
   | ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))) <- sty
-  , AD.GenLHS lhs' <- AD.generaliseLHS lhs =
+  , Exists lhs' <- rebuildLHS lhs =
       case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
           Just transBody
             | AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' transBody

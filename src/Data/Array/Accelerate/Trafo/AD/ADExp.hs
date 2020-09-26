@@ -33,6 +33,7 @@ import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Environment as A
 import qualified Data.Array.Accelerate.AST.Idx as A
 import qualified Data.Array.Accelerate.AST.LeftHandSide as A
+import Data.Array.Accelerate.AST.LeftHandSide (Exists(..))
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Error (HasCallStack, internalError)
 import Data.Array.Accelerate.Type
@@ -45,6 +46,7 @@ import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
@@ -57,13 +59,13 @@ genId = genId'
 genSingleId :: ScalarType t -> IdGen (EDLabel Int t)
 genSingleId = genId'
 
-genSingleIds :: TypeR t -> IdGen (GenLHS ScalarType env t, TupR (EDLabel Int) t)
-genSingleIds TupRunit = return (GenLHS (A.LeftHandSideWildcard TupRunit), TupRunit)
-genSingleIds (TupRsingle ty) = (GenLHS (A.LeftHandSideSingle ty),) . TupRsingle <$> genSingleId ty
+genSingleIds :: TypeR t -> IdGen (Exists (A.LeftHandSide ScalarType t env), TupR (EDLabel Int) t)
+genSingleIds TupRunit = return (Exists (A.LeftHandSideWildcard TupRunit), TupRunit)
+genSingleIds (TupRsingle ty) = (Exists (A.LeftHandSideSingle ty),) . TupRsingle <$> genSingleId ty
 genSingleIds (TupRpair t1 t2) = do
-    (GenLHS lhs1, ids1) <- genSingleIds t1
-    (GenLHS lhs2, ids2) <- genSingleIds t2
-    return (GenLHS (A.LeftHandSidePair lhs1 lhs2), TupRpair ids1 ids2)
+    (Exists lhs1, ids1) <- genSingleIds t1
+    (Exists lhs2, ids2) <- genSingleIds t2
+    return (Exists (A.LeftHandSidePair lhs1 lhs2), TupRpair ids1 ids2)
 
 
 -- TODO: make this a data definition, not a tuple
@@ -405,7 +407,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         ShapeSize sht e -> ShapeSize sht (go argWeaken varWeaken e)
         Get ty tidx ex -> Get ty tidx (go argWeaken varWeaken ex)
         Let lhs rhs ex
-          | GenLHS lhs' <- generaliseLHS lhs ->
+          | A.Exists lhs' <- rebuildLHS lhs ->
               Let lhs' (go argWeaken varWeaken rhs)
                   (go (A.weakenWithLHS lhs' A..> argWeaken) (A.sinkWithLHS lhs lhs' varWeaken) ex)
         Var (A.Var ty idx) -> Var (A.Var ty (varWeaken A.>:> idx))
@@ -577,7 +579,7 @@ primal' nodemap lbl (Context labelenv bindmap)
               let arglabs = bindmap' `dmapFind` fmapLabel P arglab
               case elabValFinds labelenv' arglabs of
                   Just vars -> do
-                      (GenLHS lhs, labs) <- genSingleIds restype
+                      (Exists lhs, labs) <- genSingleIds restype
                       return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
                                             (f1 . Let lhs (PrimApp restype oper (evars vars)))
                   Nothing ->
@@ -602,14 +604,14 @@ primal' nodemap lbl (Context labelenv bindmap)
                    ,elabValFinds labelenv' thenlabs
                    ,elabValFinds labelenv' elselabs) of
                   (Just condvars, Just thenvars, Just elsevars) -> do
-                      (GenLHS lhs, labs) <- genSingleIds restype
+                      (Exists lhs, labs) <- genSingleIds restype
                       return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
                                             (f1 . f2 . f3 . Let lhs (Cond restype (evars condvars) (evars thenvars) (evars elsevars)))
                   _ ->
                       error "primal: Cond arguments did not compute arguments"
 
           Shape ref -> do
-              (GenLHS lhs, labs) <- genSingleIds (labelType lbl)
+              (Exists lhs, labs) <- genSingleIds (labelType lbl)
               return $ PrimalResult (Context (lpushLabTup labelenv lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap))
                                     (Let lhs (Shape ref))
 
@@ -618,7 +620,7 @@ primal' nodemap lbl (Context labelenv bindmap)
               let arglabs = bindmap' `dmapFind` fmapLabel P arglab
               case elabValFinds labelenv' arglabs of
                   Just vars -> do
-                      (GenLHS lhs, labs) <- genSingleIds (TupRsingle scalarType)
+                      (Exists lhs, labs) <- genSingleIds (TupRsingle scalarType)
                       return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
                                             (f1 . Let lhs (ShapeSize sht (evars vars)))
                   _ -> error "primal: ShapeSize arguments did not compute arguments"
@@ -859,7 +861,7 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                                 ,Contribution elselab (condlab :@ TLNil) $ \adjvars (TupRsingle condvar :@ TLNil) ->
                                     Cond restype (Var condvar) (zeroForType restype) (evars adjvars)]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds restype
+          (Exists lhs, labs) <- genSingleIds restype
           return $ DualResult (Context (lpushLabTup labelenv lhs labs)
                                        (DMap.insert (fmapLabel D lbl) labs bindmap))
                               contribmap'
@@ -871,7 +873,7 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                                 [Contribution arglab TLNil $ \adjvars _ ->
                                     oneHotTup (labelType arglab) path (evars adjvars)]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds restype
+          (Exists lhs, labs) <- genSingleIds restype
           return $ DualResult (Context (lpushLabTup labelenv lhs labs)
                                        (DMap.insert (fmapLabel D lbl) labs bindmap))
                               contribmap'
@@ -885,7 +887,7 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                                 ,Contribution arglab2 TLNil $ \(TupRpair _ adjvars2) _ ->
                                     evars adjvars2]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds restype
+          (Exists lhs, labs) <- genSingleIds restype
           return $ DualResult (Context (lpushLabTup labelenv lhs labs)
                                        (DMap.insert (fmapLabel D lbl) labs bindmap))
                               contribmap'
@@ -903,7 +905,7 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                                 [Contribution arglab TLNil $ \adjvars _ ->
                                     evars adjvars]
                                 contribmap
-          (GenLHS lhs, labs) <- genSingleIds (labelType arglab)
+          (Exists lhs, labs) <- genSingleIds (labelType arglab)
           return $ DualResult (Context (lpushLabTup labelenv lhs labs)
                                        (DMap.insert (fmapLabel D lbl) labs bindmap))
                               contribmap'

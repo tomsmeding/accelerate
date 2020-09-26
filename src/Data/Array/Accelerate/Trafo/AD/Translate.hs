@@ -105,7 +105,7 @@ untranslateLHSboundExp :: A.ELeftHandSide a () env
                        -> D.OpenExp env aenv lab alab args t
                        -> UntranslateResultE a env1 aenv t
 untranslateLHSboundExp toplhs topexpr
-  | D.GenLHS toplhs' <- D.generaliseLHS toplhs =
+  | A.Exists toplhs' <- A.rebuildLHS toplhs =
       UntranslateResultE toplhs' (go topexpr (pvalPushLHS toplhs' PTEmpty))
   where
     go :: D.OpenExp env aenv lab alab args t -> PartialVal ScalarType topenv env2 -> A.OpenExp env2 aenv t
@@ -114,7 +114,7 @@ untranslateLHSboundExp toplhs topexpr
         D.PrimApp _ f e -> A.PrimApp f (go e pv)
         D.Var var -> A.Evar (fromJust (checkLocal matchTypeR var pv))
         D.Let lhs def body
-          | D.GenLHS lhs' <- D.generaliseLHS lhs
+          | A.Exists lhs' <- A.rebuildLHS lhs
           -> A.Let lhs' (go def pv) (go body (pvalPushLHS lhs' pv))
         D.Nil -> A.Nil
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
@@ -134,7 +134,7 @@ untranslateLHSboundExpA :: forall a env env1 lab alab args t aenv topaenv aenv2.
                         -> PartialVal ArrayR topaenv aenv2
                         -> UntranslateResultE a env1 aenv2 t
 untranslateLHSboundExpA toplhs topexpr arrpv
-  | D.GenLHS toplhs' <- D.generaliseLHS toplhs =
+  | A.Exists toplhs' <- A.rebuildLHS toplhs =
       UntranslateResultE toplhs' (go topexpr (pvalPushLHS toplhs' PTEmpty))
   where
     go :: D.OpenExp env' aenv lab alab args t' -> PartialVal ScalarType topenv env2 -> A.OpenExp env2 aenv2 t'
@@ -143,7 +143,7 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.PrimApp _ f e -> A.PrimApp f (go e pv)
         D.Var var -> A.Evar (fromJust (checkLocal matchTypeR var pv))
         D.Let lhs def body
-          | D.GenLHS lhs' <- D.generaliseLHS lhs
+          | A.Exists lhs' <- A.rebuildLHS lhs
           -> A.Let lhs' (go def pv) (go body (pvalPushLHS lhs' pv))
         D.Nil -> A.Nil
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
@@ -223,7 +223,7 @@ untranslateLHSboundAcc :: A.ALeftHandSide a () aenv
                        -> D.OpenAcc aenv lab alab args t
                        -> UntranslateResultA a aenv1 t
 untranslateLHSboundAcc toplhs topexpr
-  | D.GenLHS toplhs' <- D.generaliseLHS toplhs =
+  | A.Exists toplhs' <- A.rebuildLHS toplhs =
       UntranslateResultA toplhs' (go topexpr (pvalPushLHS toplhs' PTEmpty))
   where
     go :: D.OpenAcc aenv lab args alab t -> PartialVal ArrayR topenv aenv2 -> A.OpenAcc aenv2 t
@@ -231,7 +231,7 @@ untranslateLHSboundAcc toplhs topexpr
         D.Aconst ty con -> A.Use ty con
         D.Avar var -> A.Avar (fromJust (checkLocal matchArraysR var pv))
         D.Alet lhs def body
-          | D.GenLHS lhs' <- D.generaliseLHS lhs
+          | A.Exists lhs' <- A.rebuildLHS lhs
           -> A.Alet lhs' (go def pv) (go body (pvalPushLHS lhs' pv))
         D.Anil -> A.Anil
         D.Apair _ e1 e2 -> A.Apair (go e1 pv) (go e2 pv)
