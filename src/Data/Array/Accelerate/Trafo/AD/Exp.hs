@@ -151,8 +151,7 @@ showsExp se d (Shape (Left (A.Var _ idx))) =
         showString "shape " .
         (case drop (idxToInt idx) (seAenv se) of
             descr : _ -> showString descr
-            [] -> error $ "Avar out of aenv range in showsExp: " ++
-                          show (idxToInt idx) ++ " in " ++ show (seAenv se))
+            [] -> showString ("tA_UP" ++ show (1 + idxToInt idx)))
 showsExp se d (Shape (Right lab)) =
     showParen (d > 10) $
         showString "shape " .
@@ -161,8 +160,7 @@ showsExp se d (Index (Left (A.Var _ idx)) e) =
     showParen (d > 10) $
         (case drop (idxToInt idx) (seAenv se) of
             descr : _ -> showString descr
-            [] -> error $ "Avar out of aenv range in showsExp: " ++
-                          show (idxToInt idx) ++ " in " ++ show (seAenv se))
+            [] -> showString ("tA_UP" ++ show (1 + idxToInt idx)))
         . showString " ! " . showsExp se 11 e
 showsExp se d (Index (Right lab) e) =
     showParen (d > 10) $
@@ -192,8 +190,7 @@ showsExp _ d (Arg ty idx) = showParen (d > 0) $
 showsExp se _ (Var (A.Var _ idx)) =
     case drop (idxToInt idx) (seEnv se) of
         descr : _ -> showString descr
-        [] -> error $ "Var out of env range in showsExp: " ++
-                      show (idxToInt idx) ++ " in " ++ show (seEnv se)
+        [] -> showString ("tE_UP" ++ show (1 + idxToInt idx))
 showsExp se d (Label lab) = showParen (d > 0) $
     showString ('L' : seLabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
