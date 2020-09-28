@@ -27,8 +27,6 @@ import Data.Dependent.Sum
 import Data.Type.Equality
 import Data.GADT.Compare (GCompare)
 
-import Debug.Trace
-
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Environment as A
 import qualified Data.Array.Accelerate.AST.Idx as A
@@ -43,6 +41,7 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Additive
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Common
+import Data.Array.Accelerate.Trafo.AD.Debug
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
