@@ -19,6 +19,7 @@ import Data.Array.Accelerate.Representation.Type
 import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
+import qualified Data.Array.Accelerate.Trafo.AD.Simplify as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
 import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
@@ -43,7 +44,7 @@ convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
       case AD.eCheckClosedInLHS lhs' (AD.translateExp body) of
           Just transBody
             | AD.ReverseADResE lhs'' body' <- AD.reverseAD lhs' (transBody `withAlabType` ())
-            , AD.UntranslateResultE lhs''' body'' <- AD.untranslateLHSboundExp lhs'' body' ->
+            , AD.UntranslateResultE lhs''' body'' <- AD.untranslateLHSboundExp lhs'' (AD.simplifyExp body') ->
                 Let lhs''' arg body''
           Nothing ->
               error "Body of gradientE not a closed expression"
@@ -90,7 +91,7 @@ convertAcc (OpenAcc (GradientA _ sty (Alam lhs (Abody body)) arg))
       case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
           Just transBody
             | AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' transBody
-            , AD.UntranslateResultA lhs''' body'' <- AD.untranslateLHSboundAcc lhs'' body' ->
+            , AD.UntranslateResultA lhs''' body'' <- AD.untranslateLHSboundAcc lhs'' (AD.simplifyAcc body') ->
                 OpenAcc (Alet lhs''' arg body'')
           Nothing ->
               error "Body of gradientA not a closed expression"

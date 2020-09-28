@@ -267,8 +267,7 @@ showsAcc _ d (Aarg ty idx) = showParen (d > 0) $
 showsAcc se _ (Avar (A.Var _ idx)) =
     case drop (idxToInt idx) (seAenv se) of
         descr : _ -> showString descr
-        [] -> error $ "Var out of env range in showsAcc: " ++
-                      show (idxToInt idx) ++ " in " ++ show (seEnv se)
+        [] -> showString ("tA_UP" ++ show (1 + idxToInt idx))
 showsAcc se d (Alabel lab) = showParen (d > 0) $
     showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 

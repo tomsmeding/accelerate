@@ -426,6 +426,7 @@ library
         Data.Array.Accelerate.Trafo.AD.Exp
         Data.Array.Accelerate.Trafo.AD.Orphans
         Data.Array.Accelerate.Trafo.AD.Pretty
+        Data.Array.Accelerate.Trafo.AD.Simplify
         Data.Array.Accelerate.Trafo.AD.Sink
         Data.Array.Accelerate.Trafo.AD.Translate
         Data.Array.Accelerate.Trafo.AD.TupleZip
