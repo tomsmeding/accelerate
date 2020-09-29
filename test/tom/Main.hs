@@ -7,12 +7,23 @@ module Main where
 import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Interpreter as I
 import Data.Array.Accelerate (Z(..), (:.)(..), All(..))
+import System.CPUTime
 
 import qualified ADHelp as AD
 import qualified Logistic
 import qualified Neural
 import qualified Optimise
 import qualified Playground.Neural
+
+
+questionableBenchmark :: (Show a, Show b) => (a -> IO b) -> a -> IO (b, Double)
+questionableBenchmark f x = do
+  length (show x) `seq` return ()
+  tm1 <- getCPUTime
+  res <- f x
+  length (show res) `seq` return ()
+  tm2 <- getCPUTime
+  return (res, fromInteger (tm2 - tm1) / 1e12)
 
 
 logistic :: IO ()
@@ -67,7 +78,12 @@ neural2 = do
                 Neural.InputLayer
       input1 = A.use (A.fromList (Z :. 4 :. 3) [0,0,1, 0,1,1, 1,0,1, 1,1,1])
       output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
-  print . I.run $ Neural.forward (Neural.learnLoop initNet input1 output1) input1
+
+  let compiled = Neural.forward (Neural.learnLoop initNet input1 output1) input1
+  questionableBenchmark (return . I.run) compiled >>= print
+  print compiled
+  -- print . I.run $ Neural.forward (Neural.learnLoop initNet input1 output1) input1
+
   -- print . I.run $ Neural.liftNetwork $ Neural.learnLoop initNet input1 output1
 
 indexing :: IO ()
