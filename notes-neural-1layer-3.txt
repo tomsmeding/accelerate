@@ -1,0 +1,59 @@
+-- Gradient computation from AD transformation, BEFORE fusion
+
+let
+  a0 = use (Matrix (Z :. 1 :. 3)    [ 7.9, 3.9, -7.5])
+  a1 = use
+         (Matrix (Z :. 4 :. 3)
+           [ 0.0, 0.0, 1.0,
+             0.0, 1.0, 1.0,
+             1.0, 0.0, 1.0,
+             1.0, 1.0, 1.0])
+  a2 = backpermute (let T2 x0 x1 = shape a1 in T2 x1 x0) (\(T2 x0 x1) -> T2 x1 x0) a1
+  a3 = zipWith
+         (\x0 x1 -> let x2 = x0 * x1 in (x2, T3 x0 x1 x2))
+         (replicate (T3 () (let T2 x0 x1 = shape a2 in x1) ()) a0)
+         (replicate
+            (T3 (let T2 x0 x1 = shape a0 in x0) () ())
+            (backpermute (let T2 x0 x1 = shape a2 in T2 x1 x0) (\(T2 x0 x1) -> T2 x1 x0) a2))
+  a4 = map (\(x0, _) -> x0) a3
+  a5 = map
+         (\x0 -> let x1 = -x0 x2 = exp x1 x3 = 1.0 + x2 x4 = 1.0 / x3 in (x4, T6 1.0 x0 x1 x2 x3 x4))
+         (fold (\x0 x1 -> x0 + x1) 0.0 a4)
+  a6 = map (\(x0, _) -> x0) a5
+  a7 = zipWith
+         (\x0 x1 -> let x2 = x0 - x1 in (x2, T3 x0 x1 x2))
+         (use (Matrix (Z :. 4 :. 1)    [ 0.0,     1.0,     1.0,     0.0]))
+         (backpermute (let T2 x0 x1 = shape a6 in T2 x1 x0) (\(T2 x0 x1) -> T2 x1 x0) a6)
+  a8 = map (\x0 -> let x1 = x0 * x0 in (x1, T2 x0 x1)) (map (\(x0, _) -> x0) a7)
+  a9 = map (\(x0, _) -> x0) a8
+  a10 = reshape (shapeSize (shape a9)) a9
+  a11 = use (Scalar Z [1.0])
+  a12 = zipWith
+          (\x0 (T6 x1 x2 x3 x4 x5 x6) -> let x7 = x0 * ((-x1) / (x5 * x5)) in -x7 * x4)
+          (permute
+             (\x0 x1 -> x0 + x1)
+             (generate (shape a6) (\_ -> 0.0))
+             (\(T2 x0 x1) -> (1, (T2 x1 x0)))
+             (map
+                (\(_, x0) -> x0)
+                (zipWith
+                   (\x0 (T3 x1 x2 x3) -> (0.0 + x0, -x0 + 0.0))
+                   (zipWith
+                      (\x0 (T2 x1 x2) -> x0 * x1 + x0 * x1)
+                      (reshape (shape a9) (generate (shape a10) (\(T1 _) -> a11 ! ())))
+                      (map (\(_, T2 x0 x1) -> T2 x0 x1) a8))
+                   (map (\(_, T3 x0 x1 x2) -> T3 x0 x1 x2) a7))))
+          (map (\(_, T6 x0 x1 x2 x3 x4 x5) -> T6 x0 x1 x2 x3 x4 x5) a5)
+  a13 = zipWith
+          (\x0 (T3 x1 x2 x3) -> (0.0 + x0 * x2, x0 * x1 + 0.0))
+          (generate (shape a4) (\(T3 x0 x1 _) -> a12 ! (T2 x0 x1)))
+          (map (\(_, T3 x0 x1 x2) -> T3 x0 x1 x2) a3)
+  a14 = map (\(x0, _) -> x0) a13
+in
+fold1
+  (\x0 x1 -> x0 + x1)
+  (reshape
+     (let T3 x0 x1 x2 = let T3 x0 x1 x2 = shape a14 in T3 x0 x2 x1 in T3 x0 x1 x2)
+     (backpermute (let T3 x0 x1 x2 = shape a14 in T3 x0 x2 x1) (\(T3 x0 x1 x2) -> T3 x0 x2 x1) a14))
+
+-- vim: set ft=haskell:
