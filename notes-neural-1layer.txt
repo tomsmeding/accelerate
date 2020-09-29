@@ -1,0 +1,53 @@
+-- User input code (single-layer neural network)
+
+gradientA
+  (\a0 ->
+     let mat1 = use
+                  (Matrix (Z :. 4 :. 3)
+                    [ 0.0, 0.0, 1.0,
+                      0.0, 1.0, 1.0,
+                      1.0, 0.0, 1.0,
+                      1.0, 1.0, 1.0])
+         r1 = replicate (T3 () (let T2 x0 _ = shape mat1 in x0) ()) a0
+         r2 = replicate
+                 (T3 (let T2 x0 _ = shape a0 in x0) () ())
+                 mat1
+         z1 = zipWith (*) r1 r2  :: Array (Z :. 1 :. 4 :. 3)
+         s1 = fold (+) 0.0 z1  :: Array (Z :. 1 :. 4)
+         res1 = map (\x0 -> 1.0 / (1.0 + exp (-x0))) s1
+         t1 = transpose res1
+         mat2 = use (Matrix (Z :. 4 :. 1)    [ 0.0,     1.0,     1.0,     0.0])
+         z2 = zipWith (-) mat2 t1
+         res2 = map (\x -> x * x) z2
+         ans = fold1 (+) (reshape (shapeSize (shape res2)) res2)
+     in ans)
+  (use (Matrix (Z :. 1 :. 3)    [ 7.9, 3.9, -7.5]))
+
+-- Hand-written dual computation; uses shape res2, s1, shape z1, r1, r2
+
+let dans = use (Scalar Z [1])
+    dres2 = replicate (shape res2) (dres ! Z)
+    dz2 = map (2*) dres2
+    dt1 = map negate dz2
+    dres1 = transpose dt1
+    ds1 = zipWith (\x0 adj ->
+                      let s = 1.0 / (1.0 + exp (-x0))
+                      in adj * s * (1.0 - s))
+                  s1 dres1
+    dz1 = replicate (let T3 _ _ n = shape z1 in T3 () () n) ds1
+    dr2 = zipWith (*) dz1 r1
+    dr1 = zipWith (*) dz1 r2
+    --    reduce (Z :. [keep] :. [red] :. [keep]) (+) dr1
+    da0 = fold (+) 0.0 (backpermute (let T3 n1 n2 n3 = shape dr1 in T3 n1 n3 n2)
+                                    (\(T3 n1 n2 n3) -> T3 n1 n3 n2)
+                                    dr1)
+in da0
+
+-- NOTES
+-- - Computing the primal result of a node and using it twice (once in the
+--   primal computation, once in the dual) breaks fusion of that node. In
+--   particular, storing a node breaks fusion. This not only means extra
+--   execution time, but also excessive memory usage due to materialisation of
+--   intermediate arrays.
+
+-- vim: set ft=haskell:

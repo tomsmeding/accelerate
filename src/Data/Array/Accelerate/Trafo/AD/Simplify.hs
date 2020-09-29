@@ -1,7 +1,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
-module Data.Array.Accelerate.Trafo.AD.Simplify where
+module Data.Array.Accelerate.Trafo.AD.Simplify (
+  simplifyAcc, simplifyExp
+) where
 
 import Control.Arrow (second)
 
@@ -13,6 +15,8 @@ import Data.Array.Accelerate.Analysis.Match ((:~:)(Refl), matchArrayR, matchScal
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
 import Data.Array.Accelerate.Trafo.AD.Acc
+import Data.Array.Accelerate.Trafo.AD.Debug
+import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Sink
 
@@ -20,11 +24,15 @@ import Data.Array.Accelerate.Trafo.AD.Sink
 -- TODO: This Simplify module is quadratic in the program size.
 
 
-simplifyAcc :: OpenAcc aenv lab alab args t -> OpenAcc aenv lab alab args t
-simplifyAcc = snd . flip goAcc SNil
+simplifyAcc :: (Show lab, Show alab) => OpenAcc aenv lab alab args t -> OpenAcc aenv lab alab args t
+simplifyAcc a = let res = snd (goAcc a SNil)
+                in trace ("simplify result:\n" ++ prettyPrint res) res
+-- simplifyAcc = snd . flip goAcc SNil
+-- simplifyAcc = id
 
 simplifyExp :: OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
 simplifyExp = snd . flip goExp (SNil, SNil)
+-- simplifyExp = id
 
 goAcc :: OpenAcc aenv lab alab args t -> Stats aenv -> (Stats aenv, OpenAcc aenv lab alab args t)
 goAcc = \case

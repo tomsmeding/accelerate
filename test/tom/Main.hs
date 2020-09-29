@@ -12,6 +12,7 @@ import qualified ADHelp as AD
 import qualified Logistic
 import qualified Neural
 import qualified Optimise
+import qualified Playground.Neural
 
 
 logistic :: IO ()
@@ -45,13 +46,17 @@ neural = do
       output1 = A.use (A.fromList (Z :. 4 :. 1) [0, 1, 1, 0])
       lossfunc wanted got = A.fold1All (+) (A.map (\x -> x*x) (A.zipWith (-) wanted got))
 
-  print $ I.run $ Neural.forward network1 input1
+  -- print $ I.run $ Neural.forward network1 input1
 
   -- print $ I.run1 (A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)))
   --                (network1_l1, network1_l2)
 
-  AD.aCompareAD (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1))
-             (network1_l1, network1_l2)
+  -- print $ A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)) (A.T2 network1_l1' network1_l2')
+
+  -- AD.aCompareAD (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1))
+  --               (network1_l1, network1_l2)
+
+  print $ A.gradientA (\l1 -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 Neural.InputLayer) input1)) network1_l1'
 
 neural2 :: IO ()
 neural2 = do
@@ -219,4 +224,5 @@ main = do
   -- adtuple3
   -- arrad
   -- neural
-  neural2
+  -- neural2
+  Playground.Neural.main
