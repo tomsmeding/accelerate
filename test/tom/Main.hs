@@ -10,6 +10,7 @@ import Data.Array.Accelerate (Z(..), (:.)(..), All(..))
 import System.CPUTime
 
 import qualified ADHelp as AD
+import qualified LSTM
 import qualified Logistic
 import qualified Neural
 import qualified Optimise
@@ -85,6 +86,23 @@ neural2 = do
   -- print . I.run $ Neural.forward (Neural.learnLoop initNet input1 output1) input1
 
   -- print . I.run $ Neural.liftNetwork $ Neural.learnLoop initNet input1 output1
+
+lstm :: IO ()
+lstm = do
+  let combinations [] = [[]]
+      combinations (l : ls) = concatMap (\x -> map (x :) (combinations ls)) l
+      trainSet = [(input, map (fromIntegral . fromEnum)output)
+                 | input <- combinations (replicate 5 [0,1])
+                 , let output = map (>= 2) (scanl1 (+) input)]
+      trainInput = A.fromList @_ @Float (Z :. (32 :: Int) :. (5 :: Int) :. (1 :: Int)) (concatMap fst trainSet)
+      trainOutput = A.fromList @_ @Float (Z :. (32 :: Int) :. (5 :: Int) :. (1 :: Int)) (concatMap snd trainSet)
+      networkSpec = LSTM.SLSTM 1 (LSTM.SInput 1)
+      zerostate = LSTM.zeroNetState networkSpec
+  initnet <- LSTM.randomNetwork networkSpec
+  let program = LSTM.liftNetwork (LSTM.learnLoop 5 (LSTM.useNetwork initnet) (A.use zerostate) (A.use trainInput) (A.use trainOutput))
+  print program
+  let resnet = I.run program
+  print (LSTM.unliftNetwork' initnet resnet)
 
 indexing :: IO ()
 indexing = do
