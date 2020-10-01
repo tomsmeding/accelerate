@@ -101,8 +101,8 @@ lstm = do
   initnet <- LSTM.randomNetwork networkSpec
   let program = LSTM.liftNetwork (LSTM.learnLoop 5 (LSTM.useNetwork initnet) (A.use zerostate) (A.use trainInput) (A.use trainOutput))
   print program
-  let resnet = I.run program
-  print (LSTM.unliftNetwork' initnet resnet)
+  -- let resnet = I.run program
+  -- print (LSTM.unliftNetwork' initnet resnet)
 
 indexing :: IO ()
 indexing = do
@@ -259,4 +259,5 @@ main = do
   -- arrad
   -- neural
   -- neural2
-  Playground.Neural.main
+  -- Playground.Neural.main
+  lstm

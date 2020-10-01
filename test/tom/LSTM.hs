@@ -7,6 +7,7 @@
 module LSTM where
 
 import Data.Functor.Identity
+import Data.List (mapAccumL)
 import System.Random
 
 import qualified Data.Array.Accelerate as A
@@ -153,18 +154,18 @@ runLSTMCell cell (A.T2 c_prev h_prev) input =
 learnSingle :: (A.Arrays a, A.Arrays state) => Int -> Network A.Acc a state -> A.Acc state -> A.Acc (A.Matrix Float) -> A.Acc (A.Matrix Float) -> Network A.Acc a state
 learnSingle seqLen net initState input expectedOutput =
     let learnRate = 0.05
-        A.I2 _ inputWidth = A.shape input
         A.T4 contribution' _ _ _ =
           A.gradientA (\(A.T4 lnet input' state' expectedOutput') ->
                           let net' = unliftNetwork net lnet
-                              (_, errors) = foldl (\(s, accum) (item, expectedOut) ->
-                                                       let A.T2 out s' = forward net' s item
-                                                       in (s', A.zipWith (+) accum (A.map (\x -> x*x) (A.zipWith (-) out expectedOut))))
-                                                  (state', A.generate (Z_ ::. inputWidth) (\_ -> A.constant 0))
-                                                  [(A.slice input' (Z_ ::. A.constant i ::. liftAll)
-                                                   ,A.slice expectedOutput' (Z_ ::. A.constant i ::. liftAll))
-                                                  | i <- [0 .. seqLen-1]]
-                          in A.sum errors)
+                              (_, errors) = mapAccumL
+                                  (\s (item, expectedOut) ->
+                                       let A.T2 out s' = forward net' s item
+                                       in (s', A.map (\x -> x*x) (A.zipWith (-) out expectedOut)))
+                                  state'
+                                  [(A.slice input' (Z_ ::. A.constant i ::. liftAll)
+                                   ,A.slice expectedOutput' (Z_ ::. A.constant i ::. liftAll))
+                                  | i <- [0 .. seqLen-1]]
+                          in A.sum (foldl1 (A.zipWith (+)) errors))
                       (A.T4 (liftNetwork net) input initState expectedOutput)
         contribution = unliftNetwork net contribution'
         updatedNet = networkZip (A.zipWith (\x dx -> x - learnRate * dx)) net contribution
