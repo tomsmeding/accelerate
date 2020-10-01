@@ -824,6 +824,23 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               contribmap'
                               (Let (A.LeftHandSideSingle restypeS) adjoint)
 
+      PrimApp _ (A.PrimTanh restypeF) (Label arglab) -> do
+          let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
+              restypeN = FloatingNumType restypeF
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                -- Note: derivative of tanh(x) is 1 - tanh(x)^2, so use the primal value
+                                [Contribution arglab (lbl :@ TLNil) $ \(TupRsingle adjvar) (TupRsingle primvar :@ TLNil) ->
+                                    smartMul restypeN (Var adjvar)
+                                                      (smartSub restypeN (zeroForType' 1 restypeF)
+                                                                         (smartMul restypeN (Var primvar) (Var primvar)))]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
       -- Argument is an integral type, which takes no contributions
       PrimApp _ (A.PrimToFloating _ restypeF) _ -> do
           let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
@@ -920,6 +937,9 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
 
     smartRecip :: FloatingType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
     smartRecip ty a = PrimApp (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType ty)))) (A.PrimRecip ty) a
+
+    smartSub :: NumType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
+    smartSub ty a b = PrimApp (TupRsingle (SingleScalarType (NumSingleType ty))) (A.PrimSub ty) (smartPair a b)
 
     smartMul :: NumType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
     smartMul ty a b = PrimApp (TupRsingle (SingleScalarType (NumSingleType ty))) (A.PrimMul ty) (smartPair a b)
