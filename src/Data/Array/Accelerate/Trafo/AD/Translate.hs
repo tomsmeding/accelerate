@@ -55,6 +55,8 @@ translateAcc (A.OpenAcc expr) = case expr of
         D.Fold (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
     A.Replicate slt sle e ->
         D.Replicate (A.arrayR expr) slt (translateExp sle) (translateAcc e)
+    A.Slice slt e sle ->
+        D.Slice (A.arrayR expr) slt (translateAcc e) (translateExp sle)
     A.Reshape _ sle e ->
         D.Reshape (A.arrayR expr) (translateExp sle) (translateAcc e)
     A.Backpermute shr dim f e ->
@@ -248,6 +250,7 @@ untranslateLHSboundAcc toplhs topexpr
                    (go e pv)
         D.Generate ty e (Right f) -> A.Generate ty (untranslateClosedExpA e pv) (untranslateClosedFunA f pv)
         D.Replicate _ slt sle e -> A.Replicate slt (untranslateClosedExpA sle pv) (go e pv)
+        D.Slice _ slt e sle -> A.Slice slt (go e pv) (untranslateClosedExpA sle pv)
         D.Reduce _ spec combfun e
           | ReduceConvert shtype sortedSpec shlhs fullToSorted sortedToFull <- reduceConvert spec
           , TupRsingle argtype@(ArrayR shtype' _) <- D.atypeOf e
