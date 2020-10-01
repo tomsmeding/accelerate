@@ -660,9 +660,12 @@ dual :: Exploded (PDExp Int) Int args (Array () Float)
      -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args t)
 dual (endlab, nodemap, _) labelorder context cont =
     let -- TODO: Can I use those scalarType shortcut methods to easily produce more type witnesses elsewhere?
+        oneArr = Generate (ArrayR ShapeRz (TupRsingle scalarType))
+                          Nil
+                          (Right (Lam (A.LeftHandSideWildcard TupRunit)
+                                      (Body (Const scalarType 1.0))))
         contribmap = DMap.singleton (fmapLabel D endlab)
-                                    (AdjList (const [let typ = ArrayR ShapeRz (TupRsingle scalarType)
-                                                     in Aconst typ (fromList typ () [1.0])]))
+                                    (AdjList (const [oneArr]))
     in trace ("\nacc labelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
        dual' nodemap labelorder context contribmap cont
 

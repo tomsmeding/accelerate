@@ -99,7 +99,7 @@ afterAD =
       a8 = map (\x0 -> let x1 = x0 * x0 in T2 x1 (T2 x0 x1)) (map (\(T2 x0 _) -> x0) a7)
       a9 = map (\(T2 x0 _) -> x0) a8
       a10 = reshape (Z_ ::. shapeSize (shape a9)) a9
-      a11 = use (fromList Z [1.0])
+      a11 = generate Z_ (\_ -> 1.0)
       a12 = zipWith
               (\x0 (T6 x1 _ _ x4 x5 _) -> let x7 = x0 * ((-x1) / (x5 * x5)) in -x7 * x4)
               (permute (+)
@@ -166,7 +166,7 @@ afterADunshared =
       a8 = map (\x0 -> let x1 = x0 * x0 in T2 x1 (T2 x0 x1)) (map (\(T2 x0 _) -> x0) a7)
       -- a9 = map (\(T2 x0 _) -> x0) a8
       -- a10 = reshape (Z_ ::. shapeSize (shape a8) {- shape-prop from a9 -}) a9
-      a11 = generate Z_ (\_ -> 1.0)  {- was: use (fromList Z [1.0]) -}
+      a11 = generate Z_ (\_ -> 1.0)
       a12 = zipWith
               (\x0 (T6 x1 _ _ x4 x5 _) -> let x7 = x0 * ((-x1) / (x5 * x5)) in -x7 * x4)
               (permute (+)
