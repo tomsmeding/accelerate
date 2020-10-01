@@ -56,6 +56,7 @@ sinkAcc k (Permute ty comb def pf e) = Permute ty (sinkFunAenv k comb) (sinkAcc 
 sinkAcc k (Sum ty e) = Sum ty (sinkAcc k e)
 sinkAcc k (Generate ty e f) = Generate ty (sinkExpAenv k e) (sinkFunAenv k <$> f)
 sinkAcc k (Replicate ty slt sle e) = Replicate ty slt (sinkExpAenv k sle) (sinkAcc k e)
+sinkAcc k (Slice ty slt e sle) = Slice ty slt (sinkAcc k e) (sinkExpAenv k sle)
 sinkAcc k (Reduce ty slt f e) = Reduce ty slt (sinkFunAenv k f) (sinkAcc k e)
 sinkAcc k (Reshape ty sle e) = Reshape ty (sinkExpAenv k sle) (sinkAcc k e)
 sinkAcc k (Aget ty ti e) = Aget ty ti (sinkAcc k e)
@@ -159,6 +160,7 @@ aCheckClosedInTagval tv expr = case expr of
     Sum ty e -> Sum ty <$> aCheckClosedInTagval tv e
     Generate ty e f -> Generate ty <$> eCheckAClosedInTagval tv e <*> traverse (efCheckAClosedInTagval tv) f
     Replicate ty slt sle e -> Replicate ty slt <$> eCheckAClosedInTagval tv sle <*> aCheckClosedInTagval tv e
+    Slice ty slt e sle -> Slice ty slt <$> aCheckClosedInTagval tv e <*> eCheckAClosedInTagval tv sle
     Reduce ty slt f e -> Reduce ty slt <$> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e
     Reshape ty sle e -> Reshape ty <$> eCheckAClosedInTagval tv sle <*> aCheckClosedInTagval tv e
     Aget ty ti e -> Aget ty ti <$> aCheckClosedInTagval tv e

@@ -233,6 +233,8 @@ isInfixOp (A.PrimLtEq _) = True
 isInfixOp (A.PrimGt _) = True
 isInfixOp (A.PrimGtEq _) = True
 isInfixOp (A.PrimIDiv _) = True
+isInfixOp (A.PrimEq _) = True
+isInfixOp A.PrimLAnd = True
 isInfixOp _ = False
 
 precedence :: A.PrimFun sig -> Int
@@ -243,10 +245,12 @@ precedence (A.PrimFDiv _) = 7
 precedence (A.PrimNeg _) = 7  -- ?
 precedence (A.PrimRecip _) = 10
 precedence (A.PrimLog _) = 10
+precedence (A.PrimEq _) = 4
 precedence (A.PrimLt _) = 4
 precedence (A.PrimLtEq _) = 4
 precedence (A.PrimGt _) = 4
 precedence (A.PrimGtEq _) = 4
+precedence A.PrimLAnd = 3
 precedence _ = 10  -- ?
 
 data Fixity = Prefix | Infix
@@ -258,10 +262,12 @@ prettyPrimFun Infix (A.PrimSub _) = "-"
 prettyPrimFun Infix (A.PrimMul _) = "*"
 prettyPrimFun Infix (A.PrimFDiv _) = "/"
 prettyPrimFun Infix (A.PrimNeg _) = "-"
+prettyPrimFun Infix (A.PrimEq _) = "=="
 prettyPrimFun Infix (A.PrimLt _) = "<"
 prettyPrimFun Infix (A.PrimLtEq _) = "<="
 prettyPrimFun Infix (A.PrimGt _) = ">"
 prettyPrimFun Infix (A.PrimGtEq _) = ">="
+prettyPrimFun Infix A.PrimLAnd = "&&!"
 prettyPrimFun Infix (A.PrimIDiv _) = "`div`"
 prettyPrimFun Prefix (A.PrimRecip _) = "recip"
 prettyPrimFun Prefix (A.PrimLog _) = "log"
@@ -432,3 +438,10 @@ mkJust ex
       let sndty = TupRpair TupRunit (etypeOf ex)
       in Pair (TupRpair (TupRsingle scalarType) sndty) (Const scalarType tag) (Pair sndty Nil ex)
   | otherwise = error "Maybe does not have a Just constructor?"
+
+mkBool :: Bool -> OpenExp env aenv lab alab args A.PrimBool
+mkBool b
+  | [tag] <- [tag | (name, tag) <- A.tags @Bool, name == constrName] =
+      Const scalarType tag
+  | otherwise = error $ "Bool does not have a " ++ constrName ++ " constructor?"
+  where constrName = if b then "True" else "False"

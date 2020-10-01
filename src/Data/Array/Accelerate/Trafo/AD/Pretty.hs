@@ -223,6 +223,11 @@ layoutAcc se d (Replicate _ _ she e) =
         lprefix "replicate "
             (lseq' [layoutExp (se { seEnv = [] }) 11 she
                    ,layoutAcc se 11 e])
+layoutAcc se d (Slice _ _ e she) =
+    parenthesise (d > 10) $
+        lprefix "slice "
+            (lseq' [layoutAcc se 11 e
+                   ,layoutExp (se { seEnv = [] }) 11 she])
 layoutAcc se d (Reduce _ slt f e) =
     parenthesise (d > 10) $
         lprefix "reduce "

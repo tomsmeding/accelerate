@@ -88,6 +88,12 @@ data OpenAcc aenv lab alab args t where
               -> OpenAcc aenv lab alab args (Array sl e)
               -> OpenAcc aenv lab alab args (Array sh e)
 
+    Slice   :: ArrayR (Array sl e)
+            -> SliceIndex slix sl co sh
+            -> OpenAcc aenv lab alab args (Array sh e)
+            -> Exp aenv lab alab () slix
+            -> OpenAcc aenv lab alab args (Array sl e)
+
     -- Has no equivalent in the real AST. Is converted using backpermute, reshape, fold.
     -- Folds the RSpecReduce-dimensions away using the binary operation.
     -- Like 'add' is the dual of 'dup', Reduce is the dual of Replicate.
@@ -237,6 +243,11 @@ showsAcc se d (Replicate _ _ e a) =
         showString "replicate " .
             showsExp (se { seEnv = [] }) 11 e . showString " " .
             showsAcc se 11 a
+showsAcc se d (Slice _ _ a e) =
+    showParen (d > 10) $
+        showString "slice " .
+            showsAcc se 11 a . showString " " .
+            showsExp (se { seEnv = [] }) 11 e
 showsAcc se d (Reduce _ _ f a) =
     showParen (d > 10) $
         showString "reduce " .
@@ -305,6 +316,7 @@ atypeOf (Fold ty _ _ _) = TupRsingle ty
 atypeOf (Backpermute ty _ _ _) = TupRsingle ty
 atypeOf (Permute ty _ _ _ _) = TupRsingle ty
 atypeOf (Replicate ty _ _ _) = TupRsingle ty
+atypeOf (Slice ty _ _ _) = TupRsingle ty
 atypeOf (Reduce ty _ _ _) = TupRsingle ty
 atypeOf (Reshape ty _ _) = TupRsingle ty
 atypeOf (Sum ty _) = TupRsingle ty

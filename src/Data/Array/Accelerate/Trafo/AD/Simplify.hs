@@ -82,6 +82,7 @@ goAcc = \case
                                  !**! goAcc a
     Sum ty a -> Sum ty !$! goAcc a
     Replicate ty slt she a -> Replicate ty slt !$! goExp' she !**! goAcc a
+    Slice ty slt a she -> Slice ty slt !$! goAcc a !**! goExp' she
     Reduce ty spec f a -> Reduce ty spec !$! simplifyFun f !**! goAcc a
     Reshape ty she a -> Reshape ty !$! goExp' she !**! goAcc a
     Backpermute ty she f a -> Backpermute ty !$! goExp' she !**! simplifyFun f !**! goAcc a
@@ -196,6 +197,7 @@ inlineA f = \case
     Fold ty lam me0 a -> Fold ty (inlineALam f lam) (inlineAE f <$> me0) (inlineA f a)
     Sum ty a -> Sum ty (inlineA f a)
     Replicate ty slt she a -> Replicate ty slt (inlineAE f she) (inlineA f a)
+    Slice ty slt a she -> Slice ty slt (inlineA f a) (inlineAE f she)
     Reduce ty spec f' a -> Reduce ty spec (inlineAEF f f') (inlineA f a)
     Reshape ty she a -> Reshape ty (inlineAE f she) (inlineA f a)
     Backpermute ty she f' a -> Backpermute ty (inlineAE f she) (inlineAEF f f') (inlineA f a)

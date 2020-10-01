@@ -48,7 +48,7 @@ import Data.Array.Accelerate.Trafo.AD.Debug
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
-import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weakenVars)
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
@@ -102,10 +102,12 @@ generaliseArgs (ZipWith ty f e1 e2) = ZipWith ty f (generaliseArgs e1) (generali
 generaliseArgs (Fold ty f me0 a) = Fold ty f me0 (generaliseArgs a)
 generaliseArgs (Backpermute ty dim f e) = Backpermute ty dim f (generaliseArgs e)
 generaliseArgs (Replicate ty sht she e) = Replicate ty sht she (generaliseArgs e)
+generaliseArgs (Slice ty sht e she) = Slice ty sht (generaliseArgs e) she
 generaliseArgs (Reduce sht she f e) = Reduce sht she f (generaliseArgs e)
 generaliseArgs (Reshape ty she e) = Reshape ty she (generaliseArgs e)
 generaliseArgs (Sum ty a) = Sum ty (generaliseArgs a)
 generaliseArgs (Generate ty she f) = Generate ty she f
+generaliseArgs (Permute ty cf e1 pf e2) = Permute ty cf (generaliseArgs e1) pf (generaliseArgs e2)
 generaliseArgs (Aget ty path ex) = Aget ty path (generaliseArgs ex)
 generaliseArgs (Alet lhs rhs ex) = Alet lhs (generaliseArgs rhs) (generaliseArgs ex)
 generaliseArgs (Avar v) = Avar v
@@ -228,6 +230,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Sum ty e -> Sum ty (go argWeaken varWeaken e)
         Generate ty she f -> Generate ty (sinkExpAenv varWeaken she) (sinkFunAenv varWeaken <$> f)
         Replicate ty slt sle e -> Replicate ty slt (sinkExpAenv varWeaken sle) (go argWeaken varWeaken e)
+        Slice ty slt e sle -> Slice ty slt (go argWeaken varWeaken e) (sinkExpAenv varWeaken sle)
         Reduce ty slt f e -> Reduce ty slt (sinkFunAenv varWeaken f) (go argWeaken varWeaken e)
         Reshape ty she e -> Reshape ty (sinkExpAenv varWeaken she) (go argWeaken varWeaken e)
         Aget ty tidx ex -> Aget ty tidx (go argWeaken varWeaken ex)
@@ -323,18 +326,26 @@ explode' labelenv = \case
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
     Generate _ _ _ -> error "explode: TODO Generate"
-    ex@(Replicate ty slt she a) -> do
+    Replicate ty slt she a -> do
         let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
         (lab1, mp1, argmp1) <- explode' labelenv a
-        lab <- genId (atypeOf ex)
+        lab <- genId (TupRsingle ty)
         let pruned = Replicate ty slt she' (Alabel lab1)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
-    ex@(Reshape ty she a) -> do
+    Slice ty slt a she -> do
         let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
         (lab1, mp1, argmp1) <- explode' labelenv a
-        lab <- genId (atypeOf ex)
+        lab <- genId (TupRsingle ty)
+        let pruned = Slice ty slt (Alabel lab1) she'
+        let itemmp = DMap.singleton lab pruned
+            mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
+        return (lab, mp, argmp1)
+    Reshape ty she a -> do
+        let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
+        (lab1, mp1, argmp1) <- explode' labelenv a
+        lab <- genId (TupRsingle ty)
         let pruned = Reshape ty she' (Alabel lab1)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
@@ -574,6 +585,20 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                    _ ->
                       error "primal: Replicate arguments did not compute arguments"
 
+          Slice restype shtype (Alabel arglab) shexp ->
+              let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
+              in case alabValFind labelenv arglabS of
+                   Just argidx -> do
+                      lab <- genSingleId restype
+                      Alet (A.LeftHandSideSingle restype)
+                           (Slice restype shtype (Avar (A.Var argtype argidx)) (resolveAlabs (Context labelenv bindmap) shexp))
+                           <$> primal' nodemap restlabels
+                                       (Context (LPush labelenv lab)
+                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
+                                       cont
+                   _ ->
+                      error "primal: Slice arguments did not compute arguments"
+
           Reshape restype shexp (Alabel arglab) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
@@ -635,9 +660,6 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
           _ ->
               error "primal: Unexpected node shape in Exploded"
   where
-    smartPair :: OpenAcc aenv lab alab args a -> OpenAcc aenv lab alab args b -> OpenAcc aenv lab alab args (a, b)
-    smartPair a b = Apair (TupRpair (atypeOf a) (atypeOf b)) a b
-
     lookupLambdaLabs :: DMap (DLabel (TupR ArrayR) (PDAcc Int)) (TupR (ADLabel Int))  -- bindmap
                      -> TupR (ADLabel Int) t  -- free variable labels from SplitLambdaAD
                      -> TupR (ADLabel Int) t  -- resolved labels pointing into the current labelenv
@@ -790,6 +812,22 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                     \(TupRsingle adjvar) _ _ _ ->
                                         Reduce argtypeS (reduceSpecFromReplicate shtype)
                                                (plusLam eltty) (Avar adjvar)]
+                                contribmap
+          (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
+          Alet lhs adjoint
+               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
+                         contribmap' cont
+
+      Slice restype shtype (Alabel arglab) slexpr -> do
+          let TupRsingle argtypeS = labelType arglab
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab (arglab :@ TLNil) TLNil $
+                                    \(TupRsingle adjvar) (TupRsingle argpvar :@ TLNil) _ labelenv' ->
+                                        let slexpr' = resolveAlabs (Context labelenv' bindmap) slexpr
+                                        in Generate argtypeS (Shape (Left argpvar))
+                                                    (Right (sliceDualLambda shtype adjvar slexpr'))]
                                 contribmap
           (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
           Alet lhs adjoint
@@ -1032,6 +1070,45 @@ reduceSpecFromReplicate SliceNil = RSpecNil
 reduceSpecFromReplicate (SliceAll slix) = RSpecKeep (reduceSpecFromReplicate slix)
 reduceSpecFromReplicate (SliceFixed slix) = RSpecReduce (reduceSpecFromReplicate slix)
 
+-- The dual of Slice is a Generate that picks the adjoint for the entries
+-- sliced, and zero for the entries cut away. This is the lambda for that
+-- Generate.
+sliceDualLambda :: SliceIndex slix sl co sh
+                -> A.Var ArrayR aenv (Array sl e)
+                -> Exp aenv lab alab () slix
+                -> Fun aenv lab alab (sh -> e)
+sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
+  | LetBoundExpE indexlhs indexvars' <- elhsCopy (shapeType (sliceDomainR slix))
+  , LetBoundExpE slicelhs slicevars <- elhsCopy (sliceIndexTypeR slix)
+  , let indexvars = weakenVars (A.weakenWithLHS slicelhs) indexvars'
+  = Lam indexlhs . Body $
+      Let slicelhs (sinkExp (A.weakenWithLHS indexlhs) slexpr) $
+          Cond eltty
+               (genCond slix indexvars slicevars)
+               (Index (Left adjvar) (evars (indexSlice slix indexvars)))
+               (zeroForType eltty)
+  where
+    indexSlice :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env sl
+    indexSlice SliceNil _ = TupRunit
+    indexSlice (SliceAll slix') (TupRpair vars var) = TupRpair (indexSlice slix' vars) var
+    indexSlice (SliceFixed slix') (TupRpair vars _) = indexSlice slix' vars
+    indexSlice _ _ = error "impossible GADTs"
+
+    genCond :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env slix -> OpenExp env aenv lab alab args A.PrimBool
+    genCond SliceNil TupRunit TupRunit = mkBool True
+    genCond (SliceAll slix') (TupRpair idxvs _) (TupRpair slvs _) = genCond slix' idxvs slvs
+    genCond (SliceFixed slix') (TupRpair idxvs (TupRsingle idxv)) (TupRpair slvs (TupRsingle slv)) =
+        PrimApp (TupRsingle scalarType) A.PrimLAnd
+            (smartPairE (PrimApp (TupRsingle scalarType) (A.PrimEq singleType)
+                             (smartPairE (Var idxv) (Var slv)))
+                        (genCond slix' idxvs slvs))
+    genCond _ _ _ = error "impossible GADTs"
+
+sliceIndexTypeR :: SliceIndex slix sl co dim -> TypeR slix
+sliceIndexTypeR SliceNil        = TupRunit
+sliceIndexTypeR (SliceAll sl)   = TupRpair (sliceIndexTypeR sl) TupRunit
+sliceIndexTypeR (SliceFixed sl) = TupRpair (sliceIndexTypeR sl) (TupRsingle scalarType)
+
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
 accLabelParents :: OpenAcc aenv lab alab args t -> [AnyLabelT alab]
 accLabelParents = \case
@@ -1045,6 +1122,7 @@ accLabelParents = \case
     Fold _ lam me0 e -> lamLabels lam ++ maybe [] expLabels me0 ++ fromLabel e
     Sum _ e -> fromLabel e
     Replicate _ _ she e -> expLabels she ++ fromLabel e
+    Slice _ _ e she -> fromLabel e ++ expLabels she
     Reshape _ she e -> expLabels she ++ fromLabel e
     Backpermute _ she f e -> expLabels she ++ funLabels f ++ fromLabel e
     Aget _ _ e -> fromLabel e
@@ -1119,3 +1197,9 @@ smartSnd ex
   | TupRpair _ t2 <- atypeOf ex
   = Aget t2 (TIRight TIHere) ex
 smartSnd _ = error "smartSnd: impossible GADTs"
+
+smartPair :: OpenAcc aenv lab alab args a -> OpenAcc aenv lab alab args b -> OpenAcc aenv lab alab args (a, b)
+smartPair a b = Apair (TupRpair (atypeOf a) (atypeOf b)) a b
+
+smartPairE :: OpenExp env aenv lab alab args a -> OpenExp env aenv lab alab args b -> OpenExp env aenv lab alab args (a, b)
+smartPairE a b = Pair (TupRpair (etypeOf a) (etypeOf b)) a b
