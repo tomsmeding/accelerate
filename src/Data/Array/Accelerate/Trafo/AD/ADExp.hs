@@ -98,7 +98,8 @@ generaliseArgs (PrimApp ty op ex) = PrimApp ty op (generaliseArgs ex)
 generaliseArgs (Pair ty e1 e2) = Pair ty (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs Nil = Nil
 generaliseArgs (Cond ty e1 e2 e3) = Cond ty (generaliseArgs e1) (generaliseArgs e2) (generaliseArgs e3)
-generaliseArgs (Shape avar) = Shape avar
+generaliseArgs (Shape ref) = Shape ref
+generaliseArgs (Index ref e) = Index ref (generaliseArgs e)
 generaliseArgs (ShapeSize sht e) = ShapeSize sht (generaliseArgs e)
 generaliseArgs (Get ty path ex) = Get ty path (generaliseArgs ex)
 generaliseArgs (Let lhs rhs ex) = Let lhs (generaliseArgs rhs) (generaliseArgs ex)
@@ -262,6 +263,7 @@ labeliseExp labelenv ex = case ex of
     Arg ty idx -> return (Arg ty idx)
     Var var -> return (Var var)
     Label lab -> return (Label lab)
+    Index _ _ -> error "Index not supported in labeliseExp"
 
 data TuplifyAvars lab aenv =
     forall aenv' t.
@@ -389,6 +391,7 @@ inlineAvarLabels' f = \case
     Var v -> Var v
     Arg ty idx -> Arg ty idx
     Label l -> Label l
+    Index _ _ -> error "Index not supported in inlineAvarLabels'"
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
@@ -402,7 +405,8 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Pair ty e1 e2 -> Pair ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
         Nil -> Nil
         Cond ty e1 e2 e3 -> Cond ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
-        Shape avar -> Shape avar
+        Shape ref -> Shape ref
+        Index ref e -> Index ref (go argWeaken varWeaken e)
         ShapeSize sht e -> ShapeSize sht (go argWeaken varWeaken e)
         Get ty tidx ex -> Get ty tidx (go argWeaken varWeaken ex)
         Let lhs rhs ex
@@ -483,6 +487,7 @@ explode' env = \case
         return (lab, DMap.singleton lab (Arg ty idx), DMap.singleton idx lab)
     Get _ _ _ -> error "explode: Unexpected Get"
     Label _ -> error "explode: Unexpected Label"
+    Index _ _ -> error "explode: Index not supported"
   where
     lpushLHS_Get :: A.ELeftHandSide t env env' -> TupR (EDLabel Int) t -> ELabVal Int env -> Exp aenv Int alab args t -> (ELabVal Int env', DMap (EDLabelT Int) (Exp aenv Int alab args))
     lpushLHS_Get lhs labs labelenv rhs = case (lhs, labs) of
@@ -1050,6 +1055,7 @@ expLabelParents = \case
     Label lab -> [AnyLabel lab]
     Let _ _ _ -> unimplemented "Let"
     Var _ -> unimplemented "Var"
+    Index _ _ -> unimplemented "Index"
   where
     unimplemented name =
         error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")

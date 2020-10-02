@@ -1,4 +1,4 @@
-module Playground.Neural (main) where
+module Playground.Neural where
 
 -- import qualified Prelude as P
 import Prelude (IO, print)

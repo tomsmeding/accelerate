@@ -114,26 +114,6 @@ generaliseArgs (Avar v) = Avar v
 generaliseArgs (Aarg _ _) = error "generaliseArgs: Arg found"
 generaliseArgs (Alabel labs) = Alabel labs
 
--- Assumes the expression does not contain references to the array environment; TODO: this is a false assumption in general, but makes the input language easier for now
-doesNotContainArrayVars :: HasCallStack => OpenExp env aenv lab alab args t -> OpenExp env aenv' lab alab args t
-doesNotContainArrayVars (Const ty x) = Const ty x
-doesNotContainArrayVars (PrimApp ty op ex) = PrimApp ty op (doesNotContainArrayVars ex)
-doesNotContainArrayVars (Pair ty e1 e2) = Pair ty (doesNotContainArrayVars e1) (doesNotContainArrayVars e2)
-doesNotContainArrayVars Nil = Nil
-doesNotContainArrayVars (Cond ty e1 e2 e3) = Cond ty (doesNotContainArrayVars e1) (doesNotContainArrayVars e2) (doesNotContainArrayVars e3)
-doesNotContainArrayVars (Shape _) = error "doesNotContainArrayVars: Shape found"
-doesNotContainArrayVars (ShapeSize sht e) = ShapeSize sht (doesNotContainArrayVars e)
-doesNotContainArrayVars (Get ty path ex) = Get ty path (doesNotContainArrayVars ex)
-doesNotContainArrayVars (Let lhs rhs ex) = Let lhs (doesNotContainArrayVars rhs) (doesNotContainArrayVars ex)
-doesNotContainArrayVars (Var v) = Var v
-doesNotContainArrayVars (Arg ty idx) = Arg ty idx
-doesNotContainArrayVars (Label lab) = Label lab
-
--- Assumes the expression does not contain references to the array environment; TODO: this is a false assumption in general, but makes the input language easier for now
-doesNotContainArrayVarsF :: HasCallStack => OpenFun env aenv lab alab t -> OpenFun env aenv' lab alab t
-doesNotContainArrayVarsF (Lam lhs fun) = Lam lhs (doesNotContainArrayVarsF fun)
-doesNotContainArrayVarsF (Body e) = Body (doesNotContainArrayVars e)
-
 -- Assumes the expression does not contain Label
 generaliseLabFun :: HasCallStack => OpenFun env aenv lab alab t -> OpenFun env aenv lab' alab t
 generaliseLabFun (Lam lhs fun) = Lam lhs (generaliseLabFun fun)
@@ -366,6 +346,7 @@ explode' labelenv = \case
     Aget _ _ _ -> error "explode: Unexpected Aget"
     Alabel _ -> error "explode: Unexpected Alabel"
     Reduce _ _ _ _ -> error "explode: Unexpected Reduce, should only be created in dual"
+    Permute _ _ _ _ _ -> error "explode: Unexpected Permute, can't do AD on Permute yet"
   where
     lpushLHS_Get :: A.ALeftHandSide t aenv aenv' -> TupR (ADLabel Int) t -> ALabVal Int aenv -> Acc lab Int args t -> (ALabVal Int aenv', DMap (ADLabelT Int) (Acc lab Int args))
     lpushLHS_Get lhs labs labelenv' rhs = case (lhs, labs) of
@@ -1131,6 +1112,7 @@ accLabelParents = \case
     Alet _ _ _ -> unimplemented "Alet"
     Avar _ -> unimplemented "Avar"
     Reduce _ _ _ _ -> error "Unexpected Reduce in accLabelParents (should only be created in dual)"
+    Permute _ _ _ _ _ -> error "Unexpected Permute in accLabelParents"
   where
     unimplemented name =
         error ("accLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
