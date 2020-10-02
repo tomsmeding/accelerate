@@ -107,6 +107,7 @@ eCheckClosedInTagval tv expr = case expr of
     Nil -> Just Nil
     Cond ty c t e -> Cond ty <$> eCheckClosedInTagval tv c <*> eCheckClosedInTagval tv t <*> eCheckClosedInTagval tv e
     Shape avar -> Just (Shape avar)
+    Index avar e -> Index avar <$> eCheckClosedInTagval tv e
     ShapeSize sht e -> ShapeSize sht <$> eCheckClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckClosedInTagval tv e
     Let lhs rhs e
@@ -123,7 +124,9 @@ eCheckAClosedInTagval tv expr = case expr of
     Pair ty e1 e2 -> Pair ty <$> eCheckAClosedInTagval tv e1 <*> eCheckAClosedInTagval tv e2
     Nil -> Just Nil
     Shape (Left var) -> Shape . Left <$> aCheckLocal var tv
-    Shape (Right _) -> error "Exp with label in arrayvar position is not closed, todo?"
+    Shape (Right _) -> error "Exp with label in arrayvar position (Shape) is not closed, todo?"
+    Index (Left var) e -> Index <$> (Left <$> aCheckLocal var tv) <*> eCheckAClosedInTagval tv e
+    Index (Right _) _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
     ShapeSize sht e -> ShapeSize sht <$> eCheckAClosedInTagval tv e
     Cond ty c t e -> Cond ty <$> eCheckAClosedInTagval tv c <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckAClosedInTagval tv e

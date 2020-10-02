@@ -90,7 +90,7 @@ aCompareAD facc x =
   let res1 = I.run1 (A.gradientA facc) x
       pollxs = [2.0 ** (-ex) | ex <- [2..7]]
       res2 = [ahfindiff pollx facc x | pollx <- pollxs]
-      res2' = fdfmap (\ys -> lagrangeInterp (zip pollxs ys) 0) res2
+      -- res2' = fdfmap (\ys -> lagrangeInterp (zip pollxs ys) 0) res2
       zipList = zipWith (\a b -> [a, b])
       res2'' = fdfmap (\ys -> let [_, b] = olsRegression (zipList pollxs (repeat 1)) ys
                               in b)

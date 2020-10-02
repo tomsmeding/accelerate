@@ -122,7 +122,9 @@ untranslateLHSboundExp toplhs topexpr
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
         D.Shape (Left avar) -> A.Shape avar
-        D.Shape (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate labeAn in array var position"
+        D.Shape (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label in array var position"
+        D.Index (Left avar) e -> A.Index avar (go e pv)
+        D.Index (Right _) _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label in array var position"
         D.ShapeSize sht e -> A.ShapeSize sht (go e pv)
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
@@ -182,22 +184,6 @@ untranslateClosedExpA _ _ = error "unreachable"
 
 data UntranslateFunResultE a env aenv t =
     forall env'. UntranslateFunResultE (A.ELeftHandSide a env env') (A.OpenFun env' aenv t)
-
-untranslateClosedFun :: forall lab alab t aenv. D.OpenFun () aenv lab alab t -> A.OpenFun () aenv t
-untranslateClosedFun topfun
-  | UntranslateFunResultE A.LeftHandSideUnit fun' <- go A.LeftHandSideUnit topfun
-  = fun'
-  where
-    go :: A.ELeftHandSide a () env -> D.OpenFun env aenv lab alab t' -> UntranslateFunResultE a () aenv t'
-    go lhs (D.Lam bindings fun)
-      | UntranslateFunResultE (A.LeftHandSidePair lhs' bindings') res
-          <- go (A.LeftHandSidePair lhs bindings) fun
-      = UntranslateFunResultE lhs' (A.Lam bindings' res)
-    go lhs (D.Body body)
-      | UntranslateResultE lhs' res <- untranslateLHSboundExp lhs body
-      = UntranslateFunResultE lhs' (A.Body res)
-    go _ _ = error "unreachable"
-untranslateClosedFun _ = error "unreachable"
 
 untranslateClosedFunA :: forall lab alab t topaenv aenv aenv2.
                          D.OpenFun () aenv lab alab t
@@ -271,6 +257,12 @@ untranslateLHSboundAcc toplhs topexpr
           -> A.Alet lhs (go e pv) body
         D.Aarg _ _ -> internalError "AD.untranslateLHSboundAcc: Unexpected Arg in untranslate!"
         D.Alabel _ -> internalError "AD.untranslateLHSboundAcc: Unexpected Label in untranslate!"
+        D.Map _ _ _ -> error "Unexpected Map shape in untranslate"
+        D.ZipWith _ _ _ _ -> error "Unexpected ZipWith shape in untranslate"
+        D.Fold _ _ _ _ -> error "Unexpected Fold shape in untranslate"
+        D.Sum _ _ -> error "Unexpected Sum shape in untranslate"
+        D.Generate _ _ _ -> error "Unexpected Generate shape in untranslate"
+        D.Reduce _ _ _ _ -> error "Unexpected Reduce shape in untranslate"
 
     fromPairedBinop :: D.OpenFun env aenv lab alab ((t1, t2) -> t3) -> D.OpenFun env aenv lab alab (t1 -> t2 -> t3)
     fromPairedBinop (D.Lam (A.LeftHandSidePair lhs1 lhs2) (D.Body ex)) = D.Lam lhs1 (D.Lam lhs2 (D.Body ex))
