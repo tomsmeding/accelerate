@@ -57,7 +57,7 @@ class (A.Arrays a, Show a) => AFinDiff a where
 instance A.Shape sh => AFinDiff (A.Array sh Float) where
   ahfindiff h f x =
     A.fromList (A.arrayShape x)
-        [(the' (I.run (f adds')) - the' (I.run (f subs'))) / (2 * h)
+        [(the' (I.run (A.zipWith (-) (f adds') (f subs')))) / (2 * h)
         | elempairs <- mutations (\x1 -> (x1 + h, x1 - h))
                                  (\x1 -> (x1, x1))
                                  (A.toList x)
@@ -78,6 +78,27 @@ instance (AFinDiff a, AFinDiff b) => AFinDiff (a, b) where
 
   fdfmap f xs = (fdfmap f (map fst xs), fdfmap f (map snd xs))
 
+data AFinDiffRes a = AFinDiffRes [Float] [a]
+
+afindiffPerform :: AFinDiff a => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> AFinDiffRes a
+afindiffPerform facc x =
+  let pollxs = [2.0 ** (-ex) | ex <- [2..7]]
+      result = [ahfindiff pollx facc x | pollx <- pollxs]
+  in length (show result) `seq` AFinDiffRes pollxs result
+
+afdrSamples :: AFinDiff a => AFinDiffRes a -> [(Float, a)]
+afdrSamples (AFinDiffRes pollxs samples) = zip pollxs samples
+
+afdrRichardson :: AFinDiff a => AFinDiffRes a -> a
+afdrRichardson (AFinDiffRes pollxs samples) = fdfmap (\ys -> lagrangeInterp (zip pollxs ys) 0) samples
+
+afdrOLS :: AFinDiff a => AFinDiffRes a -> a
+afdrOLS (AFinDiffRes pollxs samples) =
+  let zipList = zipWith (\a b -> [a, b])
+  in fdfmap (\ys -> let [_, b] = olsRegression (zipList pollxs (repeat 1)) ys
+                    in b)
+            samples
+
 -- f applied at pointwise mutations, g at all other entries
 mutations :: (a -> b) -> (a -> b) -> [a] -> [[b]]
 mutations f g = go id
@@ -88,25 +109,20 @@ mutations f g = go id
 aCompareAD :: AFinDiff a => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> IO ()
 aCompareAD facc x =
   let res1 = I.run1 (A.gradientA facc) x
-      pollxs = [2.0 ** (-ex) | ex <- [2..7]]
-      res2 = [ahfindiff pollx facc x | pollx <- pollxs]
-      -- res2' = fdfmap (\ys -> lagrangeInterp (zip pollxs ys) 0) res2
-      zipList = zipWith (\a b -> [a, b])
-      res2'' = fdfmap (\ys -> let [_, b] = olsRegression (zipList pollxs (repeat 1)) ys
-                              in b)
-                      res2
+      afdr = afindiffPerform facc x
       absdiffs xref xcmp = fdfmap (\[xr, xc] -> abs (xc - xr)) [xref, xcmp]
   in do
-      length (show res1) `seq` return ()
-      length (show res2) `seq` return ()
+      afdr `seq` return ()
       putStrLn ("\x1B[1mAccelerate AD: " ++ show res1 ++ "\x1B[0m")
       -- putStrLn "\x1B[1mFinite differencing:"
-      -- mapM_ putStrLn $ zipWith (curry show) pollxs res2
+      -- mapM_ putStrLn $ map show (afdrSamples afdr)
       -- putStr "\x1B[0m"
-      -- putStrLn ("\x1B[1mFinite differencing + Richardson: " ++ show res2' ++ "\x1B[0m")
-      -- putStrLn ("\x1B[1mFinite differencing + Richardson [abs.diff.]: " ++ show (absdiffs res1 res2') ++ "\x1B[0m")
-      -- putStrLn ("\x1B[1mFinite differencing + OLS: " ++ show res2'' ++ "\x1B[0m")
-      putStrLn ("\x1B[1mFinite differencing + OLS [abs.diff.]: " ++ show (absdiffs res1 res2'') ++ "\x1B[0m")
+      let resRich = afdrRichardson afdr
+      -- putStrLn ("\x1B[1mFinite differencing + Richardson: " ++ show resRich ++ "\x1B[0m")
+      putStrLn ("\x1B[1mFinite differencing + Richardson [abs.diff.]: " ++ show (absdiffs res1 resRich) ++ "\x1B[0m")
+      let resOLS = afdrOLS afdr
+      -- putStrLn ("\x1B[1mFinite differencing + OLS: " ++ show resOLS ++ "\x1B[0m")
+      putStrLn ("\x1B[1mFinite differencing + OLS [abs.diff.]: " ++ show (absdiffs res1 resOLS) ++ "\x1B[0m")
 
 lagrangeInterp :: Fractional a => [(a, a)] -> a -> a
 lagrangeInterp points evalx =
