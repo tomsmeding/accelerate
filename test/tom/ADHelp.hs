@@ -141,3 +141,26 @@ olsRegression xmat yvec =
                              in [[d/discr, -b/discr], [-c/discr, a/discr]]
       matinv _ = error "olsRegression not implemented for more than 2 parameters"
   in matinv (xmat' `matmul` xmat) `matvec` (xmat' `matvec` yvec)
+
+
+class A.Shape sh => InnerDim sh where
+  -- Copies dimension tail of SECOND argument
+  onInnerDim :: (A.Exp Int -> A.Exp Int -> A.Exp Int) -> A.Exp sh -> A.Exp sh -> A.Exp sh
+
+instance InnerDim Z where
+  onInnerDim _ _ _ = A.constant Z
+
+instance A.Shape sh => InnerDim (sh A.:. Int) where
+  onInnerDim f (_ A.::. i) (sh' A.::. j) = sh' A.::. f i j
+
+innerReverse :: (A.Elt a, InnerDim sh) => A.Acc (A.Array sh a) -> A.Acc (A.Array sh a)
+innerReverse a = A.backpermute (A.shape a) (onInnerDim (\len i -> len - 1 - i) (A.shape a)) a
+
+afoldl :: (InnerDim sh, A.Elt a) => (A.Exp a -> A.Exp a -> A.Exp a) -> A.Exp a -> A.Acc (A.Array (sh A.:. Int) a) -> A.Acc (A.Array sh a)
+afoldl f x0 a = innerReverse (A.fold f x0 (innerReverse a))
+
+data T a = T (T a) (T a) | L a
+  deriving (Eq)
+instance Show a => Show (T a) where
+  show (L a) = show a
+  show (T t u) = show (t, u)
