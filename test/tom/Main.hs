@@ -11,6 +11,7 @@ import Data.Array.Accelerate (Z(..), (:.)(..), All(..))
 import System.CPUTime
 
 import qualified ADHelp as AD
+import qualified ConvNet
 import qualified LSTM
 import qualified Logistic
 import qualified Neural
@@ -117,6 +118,23 @@ lstm = do
               return state'')
            zerostate
            (zip input output)
+
+convnet :: IO ()
+convnet = do
+  let networkSpec = ConvNet.SConv2dG (ConvNet.Geometry 1 2 1) ConvNet.ConvShrink $
+                    ConvNet.SInput (ConvNet.Geometry 6 6 3)
+      circle = [0,0,1,1,0,0
+               ,0,1,0,0,1,0
+               ,1,0,0,0,0,1
+               ,1,0,0,0,0,1
+               ,0,1,0,0,1,0
+               ,0,0,1,1,0,0]
+  initnet <- ConvNet.randomNetwork networkSpec
+  print initnet
+  print . I.run $
+      A.reshape (A.lift (A.Z A.:. (5 :: Int) A.:. (6 :: Int))) $
+      ConvNet.forward (ConvNet.useNetwork initnet)
+                      (A.use (A.fromList (Z :. (3 :: Int) :. (6 :: Int) :. (6 :: Int)) (concat (replicate 3 circle))))
 
 indexing :: IO ()
 indexing = do
@@ -274,4 +292,5 @@ main = do
   -- neural
   -- neural2
   -- Playground.Neural.main
-  lstm
+  -- lstm
+  convnet
