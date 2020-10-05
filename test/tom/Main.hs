@@ -4,6 +4,7 @@
 {-# LANGUAGE ViewPatterns #-}
 module Main where
 
+import Control.Monad
 import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Interpreter as I
 import Data.Array.Accelerate (Z(..), (:.)(..), All(..))
@@ -89,20 +90,33 @@ neural2 = do
 
 lstm :: IO ()
 lstm = do
+  let seqlen = 3 :: Int
   let combinations [] = [[]]
       combinations (l : ls) = concatMap (\x -> map (x :) (combinations ls)) l
-      trainSet = [(input, map (fromIntegral . fromEnum)output)
-                 | input <- combinations (replicate 5 [0,1])
+      trainSet = [(input, map (fromIntegral . fromEnum) output)
+                 | input <- combinations (replicate seqlen [0,1])
                  , let output = map (>= 2) (scanl1 (+) input)]
-      trainInput = A.fromList @_ @Float (Z :. (32 :: Int) :. (5 :: Int) :. (1 :: Int)) (concatMap fst trainSet)
-      trainOutput = A.fromList @_ @Float (Z :. (32 :: Int) :. (5 :: Int) :. (1 :: Int)) (concatMap snd trainSet)
-      networkSpec = LSTM.SLSTM 1 (LSTM.SInput 1)
+      trainInput = A.fromList @_ @Float (Z :. (2 ^ seqlen :: Int) :. seqlen :. (1 :: Int)) (concatMap fst trainSet)
+      trainOutput = A.fromList @_ @Float (Z :. (2 ^ seqlen :: Int) :. seqlen :. (1 :: Int)) (concatMap snd trainSet)
+      networkSpec = LSTM.SDense 1 (LSTM.SLSTM 2 (LSTM.SInput 1))
       zerostate = LSTM.zeroNetState networkSpec
   initnet <- LSTM.randomNetwork networkSpec
-  let program = LSTM.liftNetwork (LSTM.learnLoop 5 (LSTM.useNetwork initnet) (A.use zerostate) (A.use trainInput) (A.use trainOutput))
-  print program
-  -- let resnet = I.run program
-  -- print (LSTM.unliftNetwork' initnet resnet)
+  let program = LSTM.liftNetwork (LSTM.learnLoop seqlen (LSTM.useNetwork initnet) (A.use zerostate) (A.use trainInput) (A.use trainOutput))
+  -- print program
+  let resnet = I.run program
+      resnet' = LSTM.unliftNetwork' initnet resnet
+  print resnet'
+  forM_ trainSet $ \(input, output) -> do
+    putStrLn ("==== INPUT: " ++ show input ++ "  OUTPUT: " ++ show output)
+    foldM_ (\state' (inputItem, wantedOut) -> do
+              let (out, state'') =
+                    I.run1 (LSTM.forward (LSTM.useNetwork resnet') (A.use state'))
+                           (A.fromList (Z :. (1 :: Int)) [inputItem])
+              putStrLn ("  " ++ show inputItem ++ " -> " ++ show out ++
+                          " (wanted=" ++ show wantedOut ++ ")")
+              return state'')
+           zerostate
+           (zip input output)
 
 indexing :: IO ()
 indexing = do
