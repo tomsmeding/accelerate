@@ -82,7 +82,9 @@ convertAcc (OpenAcc (Permute f a1 fi a2)) = OpenAcc (Permute (convertFun f) (con
 convertAcc (OpenAcc (Backpermute rep e f a)) = OpenAcc (Backpermute rep (convertExp e) (convertFun f) (convertAcc a))
 convertAcc (OpenAcc (Awhile cond f a)) = OpenAcc (Awhile (convertAfun cond) (convertAfun f) (convertAcc a))
 convertAcc (OpenAcc (Replicate rep slice a)) = OpenAcc (Replicate rep (convertExp slice) (convertAcc a))
+convertAcc (OpenAcc (Slice slix a e)) = OpenAcc (Slice slix (convertAcc a) (convertExp e))
 convertAcc (OpenAcc (Generate rep sz f)) = OpenAcc (Generate rep (convertExp sz) (convertFun f))
+convertAcc (OpenAcc (Stencil rep ty f bnd a)) = OpenAcc (Stencil rep ty (convertFun f) (convertBoundary bnd) (convertAcc a))
 convertAcc (OpenAcc (GradientA _ sty (Alam lhs (Abody body)) arg))
   | ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))) <- sty
   , Exists lhs' <- rebuildLHS lhs =
@@ -105,3 +107,10 @@ convertFun (Body e) = Body (convertExp e)
 convertAfun :: PreOpenAfun OpenAcc aenv t -> PreOpenAfun OpenAcc aenv t
 convertAfun (Alam lhs f) = Alam lhs (convertAfun f)
 convertAfun (Abody a) = Abody (convertAcc a)
+
+convertBoundary :: Boundary aenv (Array sh a) -> Boundary aenv (Array sh a)
+convertBoundary bnd@Clamp = bnd
+convertBoundary bnd@Mirror = bnd
+convertBoundary bnd@Wrap = bnd
+convertBoundary bnd@(Constant _) = bnd
+convertBoundary (Function f) = Function (convertFun f)
