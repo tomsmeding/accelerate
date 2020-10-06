@@ -122,7 +122,7 @@ lstm = do
 convnet :: IO ()
 convnet = do
   let networkSpec = ConvNet.SConv2dG (ConvNet.Geometry 1 2 1) ConvNet.ConvShrink $
-                    ConvNet.SInput (ConvNet.Geometry 6 6 3)
+                    ConvNet.SInput (ConvNet.Geometry 3 6 6)
       circle = [0,0,1,1,0,0
                ,0,1,0,0,1,0
                ,1,0,0,0,0,1
@@ -135,6 +135,14 @@ convnet = do
       A.reshape (A.lift (A.Z A.:. (5 :: Int) A.:. (6 :: Int))) $
       ConvNet.forward (ConvNet.useNetwork initnet)
                       (A.use (A.fromList (Z :. (3 :: Int) :. (6 :: Int) :. (6 :: Int)) (concat (replicate 3 circle))))
+
+  let networkSpec2 = ConvNet.SConv2dS3x3 ConvNet.ConvShrink $
+                     ConvNet.SInput (ConvNet.Geometry 1 6 6)
+  initnet2 <- ConvNet.randomNetwork networkSpec2
+  print . I.run $
+      A.reshape (A.lift (A.Z A.:. (4 :: Int) A.:. (4 :: Int))) $
+      ConvNet.forward (ConvNet.useNetwork initnet2)
+                      (A.use (A.fromList (Z :. (1 :: Int) :. (6 :: Int) :. (6 :: Int)) circle))
 
 indexing :: IO ()
 indexing = do
