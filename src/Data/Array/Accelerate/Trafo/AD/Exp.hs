@@ -287,6 +287,7 @@ prettyPrimFun Prefix (A.PrimExpFloating _) = "exp"
 prettyPrimFun Prefix (A.PrimTanh _) = "tanh"
 prettyPrimFun Prefix (A.PrimToFloating _ _) = "toFloating"
 prettyPrimFun Prefix (A.PrimRound _ _) = "round"
+prettyPrimFun Prefix (A.PrimMax _) = "max"
 prettyPrimFun Prefix op = '(' : prettyPrimFun Infix op ++ ")"
 prettyPrimFun fixity op =
     error ("prettyPrimFun: not defined for " ++ show fixity ++ " " ++ showPrimFun op)
