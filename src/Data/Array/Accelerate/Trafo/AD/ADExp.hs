@@ -788,6 +788,23 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               contribmap'
                               (Let (A.LeftHandSideSingle restypeS) adjoint)
 
+      PrimApp _ (A.PrimMax restypeSg) (Label arglab) -> do
+          let restypeS = SingleScalarType restypeSg
+              restypeT = TupRsingle restypeS
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab (arglab :@ TLNil) $ \(TupRsingle adjvar) (TupRpair (TupRsingle argvar1) (TupRsingle argvar2) :@ TLNil) ->
+                                    Cond (TupRpair restypeT restypeT)
+                                         (smartGt restypeSg (Var argvar1) (Var argvar2))
+                                         (smartPair (Var adjvar) (zeroForType restypeSg))
+                                         (smartPair (zeroForType restypeSg) (Var adjvar))]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
       PrimApp _ (A.PrimNeg restypeN) (Label arglab) -> do
           let restypeS = SingleScalarType (NumSingleType restypeN)
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
@@ -952,6 +969,9 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
 
     smartFDiv :: FloatingType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
     smartFDiv ty a b = PrimApp (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType ty)))) (A.PrimFDiv ty) (smartPair a b)
+
+    smartGt :: SingleType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args A.PrimBool
+    smartGt ty a b = PrimApp (TupRsingle scalarType) (A.PrimGt ty) (smartPair a b)
 
 -- TODO: make a new abstraction after the refactor, possibly inspired by this function, which was the abstraction pre-refactor
 -- dualStoreAdjoint
