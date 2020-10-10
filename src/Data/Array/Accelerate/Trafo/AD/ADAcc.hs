@@ -114,16 +114,6 @@ generaliseArgs (Avar v) = Avar v
 generaliseArgs (Aarg _ _) = error "generaliseArgs: Arg found"
 generaliseArgs (Alabel labs) = Alabel labs
 
--- Assumes the expression does not contain Label
-generaliseLabFun :: HasCallStack => OpenFun env aenv lab alab t -> OpenFun env aenv lab' alab t
-generaliseLabFun (Lam lhs fun) = Lam lhs (generaliseLabFun fun)
-generaliseLabFun (Body ex) = Body (generaliseLab ex)
-
--- Assumes the expression does not contain labelised array variable references
-generaliseLabFunA :: HasCallStack => OpenFun env aenv lab alab t -> OpenFun env aenv lab alab' t
-generaliseLabFunA (Lam lhs fun) = Lam lhs (generaliseLabFunA fun)
-generaliseLabFunA (Body ex) = Body (generaliseLabA ex)
-
 data ReverseADResA t = forall aenv. ReverseADResA (A.ALeftHandSide t () aenv) (OpenAcc aenv (PDExp Int) (PDAcc Int) () t)
 
 -- TODO: see the argument as one (1) tuple-typed variable of which the adjoint is requested. This should simplify this code a lot.

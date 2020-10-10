@@ -180,7 +180,7 @@ splitLambdaAD :: forall f aenv t t' sh unused unused2. Functor f
               -> (forall ty. TypeR ty -> f (DLabel ArrayR Int (Array sh ty)))
               -> Fun aenv unused unused2 (t -> t')
               -> f (SplitLambdaAD t t' (PDExp Int) Int sh)
-splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
+splitLambdaAD alabelenv tmplabGen origfun@(Lam paramlhs (Body expr))
   | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- etypeOf expr  -- Float result type assertion
   , TupRsingle exprtypeS <- etypeOf expr
   , ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
@@ -229,7 +229,8 @@ splitLambdaAD alabelenv tmplabGen (Lam paramlhs (Body expr))
             _ ->
                 error "Final primal value not computed"
   | otherwise =
-      internalError "Non-Float-producing lambdas under gradientA currently unsupported"
+      internalError $ "Non-Float-producing lambdas under gradientA currently unsupported\nIn lambda: " ++
+                          show (generaliseLabFunA (generaliseLabFun origfun) :: Fun aenv () () (t -> t'))
 splitLambdaAD _ _ _ =
     internalError "splitLambdaAD passed function with more than 1 argument"
 

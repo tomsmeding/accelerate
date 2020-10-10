@@ -194,6 +194,15 @@ showsExp se _ (Var (A.Var _ idx)) =
 showsExp se d (Label lab) = showParen (d > 0) $
     showString ('L' : seLabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
+showsFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab t -> ShowS
+showsFun se d (Body expr) = showsExp se d expr
+showsFun se d (Lam lhs fun) =
+    let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
+        env' = descrs ++ seEnv se
+    in showParen (d > 0) $
+        showString "\\" . showString descr .
+          showString " -> " . showsFun (se { seSeed = seed', seEnv = env' }) 0 fun
+
 -- instance Show (OpenExp env Int t) where
 --     showsPrec = showsExp subscript 0 []
 
@@ -202,6 +211,9 @@ instance (Show lab, Show alab) => Show (OpenExp env aenv lab alab args t) where
 
 instance (Show lab, Show alab) => GShow (OpenExp env aenv lab alab args) where
     gshowsPrec = showsPrec
+
+instance (Show lab, Show alab) => Show (OpenFun env aenv lab alab t) where
+    showsPrec = showsFun (ShowEnv show show 0 [] [])
 
 -- Auxiliary functions
 -- -------------------
@@ -344,6 +356,16 @@ generaliseLabA (Let lhs rhs ex) = Let lhs (generaliseLabA rhs) (generaliseLabA e
 generaliseLabA (Var v) = Var v
 generaliseLabA (Arg ty idx) = Arg ty idx
 generaliseLabA (Label lab) = Label lab
+
+-- Assumes the expression does not contain Label
+generaliseLabFun :: OpenFun env aenv lab alab t -> OpenFun env aenv lab' alab t
+generaliseLabFun (Lam lhs fun) = Lam lhs (generaliseLabFun fun)
+generaliseLabFun (Body ex) = Body (generaliseLab ex)
+
+-- Assumes the expression does not contain labelised array variable references
+generaliseLabFunA :: OpenFun env aenv lab alab t -> OpenFun env aenv lab alab' t
+generaliseLabFunA (Lam lhs fun) = Lam lhs (generaliseLabFunA fun)
+generaliseLabFunA (Body ex) = Body (generaliseLabA ex)
 
 fmapAlabExp :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
             -> OpenExp env aenv lab alab args t
