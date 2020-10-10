@@ -874,6 +874,16 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               contribmap
                               (Let (A.LeftHandSideSingle restypeS) adjoint)
 
+      -- Argument is an integral type, which takes no contributions
+      PrimApp _ (A.PrimFromIntegral _ restypeN) _ -> do
+          let restypeS = SingleScalarType (NumSingleType restypeN)
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
       -- Result is an integral type, which produces no contributions (because
       -- its adjoint is always zero). Therefore, we also have no contributions
       -- to our parents.
