@@ -305,7 +305,14 @@ explode' labelenv = \case
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
-    Generate _ _ _ -> error "explode: TODO Generate"
+    Generate ty@(ArrayR sht _) she (Right f) -> do
+        f' <- splitLambdaAD labelenv (genSingleId . ArrayR sht) (generaliseLabFun f)
+        let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
+        lab <- genId (TupRsingle ty)
+        let pruned = Generate ty she' (Left f')
+        let itemmp = DMap.singleton lab pruned
+        return (lab, itemmp, DMap.empty)
+    Generate _ _ (Left _) -> error "explode: Unexpected Generate SplitLambdaAD"
     Replicate ty slt she a -> do
         let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
         (lab1, mp1, argmp1) <- explode' labelenv a
@@ -552,6 +559,29 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                   _ ->
                       error "primal: Sum arguments did not compute arguments"
 
+          -- TODO: The temporary array for this Generate is not even used at the moment because it doesn't have a dual (because we don't have array indexing yet).
+          Generate restype@(ArrayR resshape reselty) shexp (Left (SplitLambdaAD lambdaPrimal _ lambdaLabs (lambdaTmpType, lambdaTmpLab))) ->
+              let lambdaLabs' = lookupLambdaLabs bindmap lambdaLabs
+              in case alabValFinds labelenv lambdaLabs' of
+                  Just lambdaVars -> do
+                      lab <- genSingleId restype
+                      let pairEltType = TupRpair reselty lambdaTmpType
+                          pairArrType = ArrayR resshape pairEltType
+                          tmpArrType = ArrayR resshape lambdaTmpType
+                      Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
+                           (Alet (A.LeftHandSideSingle pairArrType)
+                                 (Generate pairArrType (resolveAlabs (Context labelenv bindmap) shexp)
+                                                       (Right (fmapAlabFun (fmapLabel P) (lambdaPrimal lambdaVars))))
+                                 (smartPair
+                                      (Map restype (Right (expFstLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))
+                                      (Map tmpArrType (Right (expSndLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))))
+                           <$> primal' nodemap restlabels
+                                       (Context (LPush (LPush labelenv lab) lambdaTmpLab)
+                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
+                                       cont
+                  _ ->
+                      error $ "primal: Map arguments did not compute arguments"
+
           Replicate restype shtype shexp (Alabel arglab) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
@@ -784,6 +814,12 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
                          contribmap' cont
+
+      -- TODO: Since we don't support array indexing yet, Generate nodes have
+      -- no array arguments they can contribute anything to. Thus, we ignore
+      -- them in the dual pass.
+      Generate _ _ _ ->
+          dual' nodemap restlabels (Context labelenv bindmap) contribmap cont
 
       Replicate restype@(ArrayR _ eltty) shtype _ (Alabel arglab) -> do
           let TupRsingle argtypeS = labelType arglab

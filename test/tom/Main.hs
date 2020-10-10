@@ -279,9 +279,13 @@ arrad = do
   --               (A.T2 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
   --                     (A.use (A.fromList (Z :. (6 :: Int)) [7, 8, 9, 10, 11, 12])))
 
+  -- print . I.run $
+  --     A.gradientA (\arr -> (A.sum . A.flatten) (A.map (\x -> x * x) (A.replicate (A.lift (Z :. (3 :: Int) :. All :. (2 :: Int) :. All)) arr)))
+  --                 (A.use (A.fromList (Z :. 3 :. 4) [1 :: Float .. 12]))
+
   print . I.run $
-      A.gradientA (\arr -> (A.sum . A.flatten) (A.map (\x -> x * x) (A.replicate (A.lift (Z :. (3 :: Int) :. All :. (2 :: Int) :. All)) arr)))
-                  (A.use (A.fromList (Z :. 3 :. 4) [1 :: Float .. 12]))
+      A.gradientA (\arr -> A.sum $ A.zipWith (*) arr (A.generate (A.shape arr) (\(A.I1 i) -> A.cond (i A.< 5) 0 1)))
+                  (A.use (A.fromList (Z :. 10) [1 :: Float .. 10]))
 
 main :: IO ()
 main = do
@@ -296,9 +300,9 @@ main = do
   -- adtuple1
   -- adtuple2
   -- adtuple3
-  -- arrad
+  arrad
   -- neural
   -- neural2
   -- Playground.Neural.main
   -- lstm
-  convnet
+  -- convnet

@@ -53,6 +53,8 @@ translateAcc (A.OpenAcc expr) = case expr of
           D.Sum (A.arrayR expr) (translateAcc e)
     A.Fold f me0 e ->
         D.Fold (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
+    A.Generate ty she f ->
+        D.Generate ty (translateExp she) (Right $ translateFun f)
     A.Replicate slt sle e ->
         D.Replicate (A.arrayR expr) slt (translateExp sle) (translateAcc e)
     A.Slice slt e sle ->
