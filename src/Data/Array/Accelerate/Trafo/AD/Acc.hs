@@ -282,15 +282,6 @@ showsAcc se _ (Avar (A.Var _ idx)) =
 showsAcc se d (Alabel lab) = showParen (d > 0) $
     showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
-showsFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab t -> ShowS
-showsFun se d (Body expr) = showsExp se d expr
-showsFun se d (Lam lhs fun) =
-    let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
-        env' = descrs ++ seEnv se
-    in showParen (d > 0) $
-        showString "\\" . showString descr .
-          showString " -> " . showsFun (se { seSeed = seed', seEnv = env' }) 0 fun
-
 showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab sh t1 t2 -> ShowS
 showsLambda se d (Right fun) = showsFun se d fun
 showsLambda _ _ (Left _) = showString "{splitlambda}"
