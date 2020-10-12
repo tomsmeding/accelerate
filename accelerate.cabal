@@ -624,7 +624,7 @@ test-suite tom-test
   hs-source-dirs:       test/tom
   main-is:              Main.hs
   other-modules:        ADHelp, Logistic, Optimise, Neural, LSTM, ConvNet,
-                        Playground.Neural, Neural.Help
+                        Playground.Neural, Playground.Fusion, Neural.Help
 
   build-depends:
           base                          >= 4.10
