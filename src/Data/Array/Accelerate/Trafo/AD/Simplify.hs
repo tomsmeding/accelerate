@@ -13,8 +13,10 @@ import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Analysis.Match ((:~:)(Refl), matchArrayR, matchScalarType)
 import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
 import Data.Array.Accelerate.Trafo.AD.Acc
+import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Debug
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Exp
@@ -137,6 +139,17 @@ goExp = \case
                                  e'
                     else Let lhs rhs' e')
 
+    -- Get elimination
+    Get ty ti e ->
+      \s -> case (ti, goExp e s) of
+              (TILeft ti', (s', Pair _ e1 _)) -> (s', elimEmptyTI ty ti' e1)
+              (TIRight ti', (s', Pair _ _ e2)) -> (s', elimEmptyTI ty ti' e2)
+              (_, (s', e')) -> (s', Get ty ti e')
+      where
+        elimEmptyTI :: TypeR t' -> TupleIdx t t' -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t'
+        elimEmptyTI _ TIHere e' = e'
+        elimEmptyTI ty' ti' e' = Get ty' ti' e'
+
     Const ty x -> returnS $ Const ty x
     PrimApp ty op e -> PrimApp ty op !$! goExp e
     Pair ty e1 e2 -> Pair ty !$! goExp e1 !**! goExp e2
@@ -145,7 +158,6 @@ goExp = \case
     Shape ref -> Shape !$! goVarOrLab ref
     Index ref e -> Index !$! goVarOrLab ref !**! goExp e
     ShapeSize sht e -> ShapeSize sht !$! goExp e
-    Get ty ti e -> Get ty ti !$! goExp e
     Let lhs rhs e ->
       \s -> let ((s1a, s1e), rhs') = goExp rhs s
                 (s2, e') = goExp e (s1a, spushLHS0 s1e lhs)
