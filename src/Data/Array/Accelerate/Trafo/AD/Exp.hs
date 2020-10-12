@@ -151,7 +151,7 @@ showsExp se d (Shape (Left (A.Var _ idx))) =
         showString "shape " .
         (case drop (idxToInt idx) (seAenv se) of
             descr : _ -> showString descr
-            [] -> showString ("tA_UP" ++ show (1 + idxToInt idx)))
+            [] -> showString ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))))
 showsExp se d (Shape (Right lab)) =
     showParen (d > 10) $
         showString "shape " .
@@ -160,7 +160,7 @@ showsExp se d (Index (Left (A.Var _ idx)) e) =
     showParen (d > 10) $
         (case drop (idxToInt idx) (seAenv se) of
             descr : _ -> showString descr
-            [] -> showString ("tA_UP" ++ show (1 + idxToInt idx)))
+            [] -> showString ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))))
         . showString " ! " . showsExp se 11 e
 showsExp se d (Index (Right lab) e) =
     showParen (d > 10) $
@@ -190,7 +190,7 @@ showsExp _ d (Arg ty idx) = showParen (d > 0) $
 showsExp se _ (Var (A.Var _ idx)) =
     case drop (idxToInt idx) (seEnv se) of
         descr : _ -> showString descr
-        [] -> showString ("tE_UP" ++ show (1 + idxToInt idx))
+        [] -> showString ("tE_UP" ++ show (1 + idxToInt idx - length (seEnv se)))
 showsExp se d (Label lab) = showParen (d > 0) $
     showString ('L' : seLabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 

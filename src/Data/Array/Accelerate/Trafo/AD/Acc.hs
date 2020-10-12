@@ -278,7 +278,7 @@ showsAcc _ d (Aarg ty idx) = showParen (d > 0) $
 showsAcc se _ (Avar (A.Var _ idx)) =
     case drop (idxToInt idx) (seAenv se) of
         descr : _ -> showString descr
-        [] -> showString ("tA_UP" ++ show (1 + idxToInt idx))
+        [] -> showString ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
 showsAcc se d (Alabel lab) = showParen (d > 0) $
     showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
