@@ -287,6 +287,21 @@ arrad = do
       A.gradientA (\arr -> A.sum $ A.zipWith (*) arr (A.generate (A.shape arr) (\(A.I1 i) -> A.cond (i A.< 5) 0 1)))
                   (A.use (A.fromList (Z :. 10) [1 :: Float .. 10]))
 
+adfold :: IO ()
+adfold = do
+  -- print $
+  --     A.gradientA (\arr -> A.maximum arr)
+  --                 (A.use (A.fromList (Z :. 10) [1 :: Float .. 10]))
+  let input = A.fromList (Z :. 8) [1 :: Float .. 8]
+
+  AD.aCompareAD (\arr -> A.maximum arr) input
+  AD.aCompareAD (\arr -> A.product arr) input
+
+  print $
+      A.gradientA (\arr -> let p = A.product arr
+                         in A.zipWith (+) (A.map (*2) p) (A.map (*3) p))
+                  (A.use input)
+
 main :: IO ()
 main = do
   -- logistic
@@ -300,7 +315,8 @@ main = do
   -- adtuple1
   -- adtuple2
   -- adtuple3
-  arrad
+  -- arrad
+  adfold
   -- neural
   -- neural2
   -- Playground.Neural.main

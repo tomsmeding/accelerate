@@ -68,7 +68,7 @@ data OpenAcc aenv lab alab args t where
             -> OpenAcc aenv lab alab args (Array sh t3)
 
     Fold    :: ArrayR (Array sh e)
-            -> ExpLambda1 aenv lab alab sh (e, e) e
+            -> Fun aenv lab alab ((e, e) -> e)
             -> Maybe (Exp aenv lab alab () e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array sh e)
@@ -76,6 +76,20 @@ data OpenAcc aenv lab alab args t where
     Sum     :: ArrayR (Array sh e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array sh e)
+
+    Scan    :: ArrayR (Array (sh, Int) e)
+            -> A.Direction
+            -> Fun aenv lab alab ((e, e) -> e)
+            -> Maybe (Exp aenv lab alab () e)
+            -> OpenAcc aenv lab alab args (Array (sh, Int) e)
+            -> OpenAcc aenv lab alab args (Array (sh, Int) e)
+
+    Scan'   :: ArraysR (Array (sh, Int) e, Array sh e)
+            -> A.Direction
+            -> Fun aenv lab alab ((e, e) -> e)
+            -> Exp aenv lab alab () e
+            -> OpenAcc aenv lab alab args (Array (sh, Int) e)
+            -> OpenAcc aenv lab alab args (Array (sh, Int) e, Array sh e)
 
     Generate :: ArrayR (Array sh e)
              -> Exp aenv lab alab () sh
@@ -213,8 +227,20 @@ showsAcc se d (ZipWith _ f e1 e2) =
 showsAcc se d (Fold _ f me0 e) =
     showParen (d > 10) $
         showString (maybe "fold1 " (const "fold ") me0) .
-            showsLambda (se { seEnv = [] }) 11 f . showString " " .
+            showsFun (se { seEnv = [] }) 11 f . showString " " .
             maybe id (\e0 -> showsExp (se { seEnv = [] }) 11 e0 . showString " ") me0 .
+            showsAcc se 11 e
+showsAcc se d (Scan _ dir f me0 e) =
+    showParen (d > 10) $
+        showString ("scan" ++ (case dir of A.LeftToRight -> "l" ; A.RightToLeft -> "r") ++ maybe "1" (const "") me0 ++ " ") .
+            showsFun (se { seEnv = [] }) 11 f . showString " " .
+            maybe id (\e0 -> showsExp (se { seEnv = [] }) 11 e0 . showString " ") me0 .
+            showsAcc se 11 e
+showsAcc se d (Scan' _ dir f e0 e) =
+    showParen (d > 10) $
+        showString ("scan" ++ (case dir of A.LeftToRight -> "l" ; A.RightToLeft -> "r") ++ "' ") .
+            showsFun (se { seEnv = [] }) 11 f . showString " " .
+            showsExp (se { seEnv = [] }) 11 e0 . showString " " .
             showsAcc se 11 e
 showsAcc se d (Backpermute _ dim f e) =
     showParen (d > 10) $
@@ -304,6 +330,8 @@ atypeOf (Map ty _ _) = TupRsingle ty
 atypeOf (ZipWith ty _ _ _) = TupRsingle ty
 atypeOf (Generate ty _ _) = TupRsingle ty
 atypeOf (Fold ty _ _ _) = TupRsingle ty
+atypeOf (Scan ty _ _ _ _) = TupRsingle ty
+atypeOf (Scan' ty _ _ _ _) = ty
 atypeOf (Backpermute ty _ _ _) = TupRsingle ty
 atypeOf (Permute ty _ _ _ _) = TupRsingle ty
 atypeOf (Replicate ty _ _ _) = TupRsingle ty

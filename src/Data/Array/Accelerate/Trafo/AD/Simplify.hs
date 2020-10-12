@@ -78,10 +78,15 @@ goAcc = \case
     Map ty lam a -> Map ty !$! simplifyLam1 lam !**! goAcc a
     ZipWith ty lam a1 a2 -> ZipWith ty !$! simplifyLam1 lam !**! goAcc a1 !**! goAcc a2
     Generate ty e lam -> Generate ty !$! goExp' e !**! simplifyLam1 lam
-    Fold ty lam me0 a -> Fold ty !$! simplifyLam1 lam
-                                 !**! (case me0 of Just e0 -> Just !$! goExp' e0
-                                                   Nothing -> returnS Nothing)
-                                 !**! goAcc a
+    Fold ty f me0 a -> Fold ty !$! simplifyFun f
+                               !**! (case me0 of Just e0 -> Just !$! goExp' e0
+                                                 Nothing -> returnS Nothing)
+                               !**! goAcc a
+    Scan ty dir f me0 a -> Scan ty dir !$! simplifyFun f
+                                       !**! (case me0 of Just e0 -> Just !$! goExp' e0
+                                                         Nothing -> returnS Nothing)
+                                       !**! goAcc a
+    Scan' ty dir f e0 a -> Scan' ty dir !$! simplifyFun f !**! goExp' e0 !**! goAcc a
     Sum ty a -> Sum ty !$! goAcc a
     Replicate ty slt she a -> Replicate ty slt !$! goExp' she !**! goAcc a
     Slice ty slt a she -> Slice ty slt !$! goAcc a !**! goExp' she
@@ -206,7 +211,9 @@ inlineA f = \case
     Map ty lam a -> Map ty (inlineALam f lam) (inlineA f a)
     ZipWith ty lam a1 a2 -> ZipWith ty (inlineALam f lam) (inlineA f a1) (inlineA f a2)
     Generate ty e lam -> Generate ty (inlineAE f e) (inlineALam f lam)
-    Fold ty lam me0 a -> Fold ty (inlineALam f lam) (inlineAE f <$> me0) (inlineA f a)
+    Fold ty fun me0 a -> Fold ty (inlineAEF f fun) (inlineAE f <$> me0) (inlineA f a)
+    Scan ty dir fun me0 a -> Scan ty dir (inlineAEF f fun) (inlineAE f <$> me0) (inlineA f a)
+    Scan' ty dir fun e0 a -> Scan' ty dir (inlineAEF f fun) (inlineAE f e0) (inlineA f a)
     Sum ty a -> Sum ty (inlineA f a)
     Replicate ty slt she a -> Replicate ty slt (inlineAE f she) (inlineA f a)
     Slice ty slt a she -> Slice ty slt (inlineA f a) (inlineAE f she)

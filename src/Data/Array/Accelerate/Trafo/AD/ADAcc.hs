@@ -42,13 +42,14 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Additive
 import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD, labeliseExp, labeliseFun, inlineAvarLabels')
+import qualified Data.Array.Accelerate.Trafo.AD.ADExp as ADExp
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Debug
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
-import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weakenVars)
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weakenVars, weaken)
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
@@ -100,6 +101,8 @@ generaliseArgs (Acond ty e1 e2 e3) = Acond ty e1 (generaliseArgs e2) (generalise
 generaliseArgs (Map ty f e) = Map ty f (generaliseArgs e)
 generaliseArgs (ZipWith ty f e1 e2) = ZipWith ty f (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs (Fold ty f me0 a) = Fold ty f me0 (generaliseArgs a)
+generaliseArgs (Scan ty dir f me0 a) = Scan ty dir f me0 (generaliseArgs a)
+generaliseArgs (Scan' ty dir f e0 a) = Scan' ty dir f e0 (generaliseArgs a)
 generaliseArgs (Backpermute ty dim f e) = Backpermute ty dim f (generaliseArgs e)
 generaliseArgs (Replicate ty sht she e) = Replicate ty sht she (generaliseArgs e)
 generaliseArgs (Slice ty sht e she) = Slice ty sht (generaliseArgs e) she
@@ -163,6 +166,9 @@ reverseADA paramlhs expr
           ex2 = varsToArgs vars2
       in Apair (TupRpair (atypeOf ex1) (atypeOf ex2)) ex1 ex2
 
+    -- TODO: produceGradient should take the ArrayVars value from BEFORE
+    -- varsToArgs, not after. That eliminates the error case if the argument is
+    -- not Nil/Pair/Arg.
     produceGradient :: DMap (Idx args) (ADLabelT Int)
                     -> AContext Int aenv
                     -> OpenAcc () unused1 unused2 args t
@@ -194,7 +200,9 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Acond ty e1 e2 e3 -> Acond ty (sinkExpAenv varWeaken e1) (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
         Map ty f e -> Map ty (sinkFunAenv varWeaken <$> f) (go argWeaken varWeaken e)
         ZipWith ty f e1 e2 -> ZipWith ty (sinkFunAenv varWeaken <$> f) (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
-        Fold ty f me0 e -> Fold ty (sinkFunAenv varWeaken <$> f) (sinkExpAenv varWeaken <$> me0) (go argWeaken varWeaken e)
+        Fold ty f me0 e -> Fold ty (sinkFunAenv varWeaken f) (sinkExpAenv varWeaken <$> me0) (go argWeaken varWeaken e)
+        Scan ty dir f me0 e -> Scan ty dir (sinkFunAenv varWeaken f) (sinkExpAenv varWeaken <$> me0) (go argWeaken varWeaken e)
+        Scan' ty dir f e0 e -> Scan' ty dir (sinkFunAenv varWeaken f) (sinkExpAenv varWeaken e0) (go argWeaken varWeaken e)
         Backpermute ty dim f e -> Backpermute ty (sinkExpAenv varWeaken dim) (sinkFunAenv varWeaken f) (go argWeaken varWeaken e)
         Permute ty cf def pf e -> Permute ty (sinkFunAenv varWeaken cf) (go argWeaken varWeaken def) (sinkFunAenv varWeaken pf) (go argWeaken varWeaken e)
         Sum ty e -> Sum ty (go argWeaken varWeaken e)
@@ -269,16 +277,18 @@ explode' labelenv = \case
             argmp = DMap.unionsWithKey (error "explode: Overlapping arg's") [argmp1, argmp2]
         return (lab, mp, argmp)
     ZipWith _ (Left _) _ _ -> error "explode: Unexpected ZipWith SplitLambdaAD"
-    Fold ty@(ArrayR sht _) (Right e) me0 a -> do
-        e' <- splitLambdaAD labelenv (genSingleId . ArrayR sht) (generaliseLabFun e)
-        let me0' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab <$> me0
+    Fold ty e me0 a -> do
+        -- TODO: This does NOT split the lambda in Fold. This is because
+        -- currently, we do recompute-all for the Fold lambda, not store-all,
+        -- since where do we even store the temporaries?
+        let e' = snd . labeliseFun labelenv . generaliseLabFunA . generaliseLabFun $ e
+            me0' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab <$> me0
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
-        let pruned = Fold ty (Left e') me0' (Alabel lab1)
+        let pruned = Fold ty e' me0' (Alabel lab1)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
-    Fold _ (Left _) _ _ -> error "explode: Unexpected Fold SplitLambdaAD"
     Backpermute ty dim f a -> do
         let f' = snd . labeliseFun labelenv . generaliseLabFunA . generaliseLabFun $ f
             dim' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ dim
@@ -344,6 +354,8 @@ explode' labelenv = \case
     Alabel _ -> error "explode: Unexpected Alabel"
     Reduce _ _ _ _ -> error "explode: Unexpected Reduce, should only be created in dual"
     Permute _ _ _ _ _ -> error "explode: Unexpected Permute, can't do AD on Permute yet"
+    Scan _ _ _ _ _ -> error "explode: Unexpected Scan, can't do AD on Scan yet"
+    Scan' _ _ _ _ _ -> error "explode: Unexpected Scan', can't do AD on Scan' yet"
   where
     lpushLHS_Get :: A.ALeftHandSide t aenv aenv' -> TupR (ADLabel Int) t -> ALabVal Int aenv -> Acc lab Int args t -> (ALabVal Int aenv', DMap (ADLabelT Int) (Acc lab Int args))
     lpushLHS_Get lhs labs labelenv' rhs = case (lhs, labs) of
@@ -484,7 +496,7 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                            (Alet (A.LeftHandSideSingle pairArrType)
                                  (Map pairArrType (Right (fmapAlabFun (fmapLabel P) (lambdaPrimal lambdaVars)))
                                                   (Avar (A.Var argtypeS argidx)))
-                                 (smartPair
+                                 (smartPairA
                                       (Map restype (Right (expFstLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))
                                       (Map tmpArrType (Right (expSndLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))))
                            <$> primal' nodemap restlabels
@@ -509,7 +521,7 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                                  (ZipWith pairArrType (Right (fmapAlabFun (fmapLabel P) (lambdaPrimal lambdaVars)))
                                                       (Avar (A.Var (labelType arglab1S) argidx1))
                                                       (Avar (A.Var (labelType arglab2S) argidx2)))
-                                 (smartPair
+                                 (smartPairA
                                       (Map restype (Right (expFstLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))
                                       (Map tmpArrType (Right (expSndLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))))
                            <$> primal' nodemap restlabels
@@ -519,13 +531,13 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                   _ ->
                       error "primal: ZipWith arguments did not compute arguments"
 
-          Fold restype (Left lambda) e0expr (Alabel arglab) ->
+          Fold restype combfun e0expr (Alabel arglab) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
                   Just argidx -> do
                       lab <- genSingleId restype
                       Alet (A.LeftHandSideSingle restype)
-                           (Fold restype (Left (fmapAlabSplitLambdaAD (fmapLabel P) lambda))
+                           (Fold restype (resolveAlabsFun (Context labelenv bindmap) combfun)
                                          (resolveAlabs (Context labelenv bindmap) <$> e0expr)
                                          (Avar (A.Var argtype argidx)))
                            <$> primal' nodemap restlabels
@@ -562,7 +574,7 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                            (Alet (A.LeftHandSideSingle pairArrType)
                                  (Generate pairArrType (resolveAlabs (Context labelenv bindmap) shexp)
                                                        (Right (fmapAlabFun (fmapLabel P) (lambdaPrimal lambdaVars))))
-                                 (smartPair
+                                 (smartPairA
                                       (Map restype (Right (expFstLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))
                                       (Map tmpArrType (Right (expSndLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))))
                            <$> primal' nodemap restlabels
@@ -805,6 +817,112 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
                          contribmap' cont
 
+      -- TODO: This does not contribute any derivative to the initial expression, since we don't support array indexing yet.
+      Fold restype@(ArrayR resshape _) origf@(Lam lambdalhs (Body lambdabody)) (Just initexp) (Alabel arglab)
+        | TupRsingle (SingleScalarType (NumSingleType elttypeN@(FloatingNumType TypeFloat))) <- etypeOf lambdabody
+        , ReplicateOneMore onemoreSlix onemoreExpf <- replicateOneMore resshape -> do
+          let argtype = labelType arglab
+              TupRsingle argtypeS = argtype
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+          templab <- genSingleId argtypeS
+          let contribmap' = updateContribmap lbl
+                                [Contribution arglab TLNil (TupRsingle templab :@ TLNil) $
+                                    \(TupRsingle adjvar) _ (TupRsingle tempvar :@ TLNil) _ ->
+                                        -- zipWith (*) (replicate (shape a) adjoint) (usual_derivative)
+                                        smartZipWith (timesLam elttypeN)
+                                            (Replicate argtypeS onemoreSlix (onemoreExpf (Shape (Left tempvar))) (Avar adjvar))
+                                            (Avar tempvar)]
+                                contribmap
+          -- technically don't need the tuple machinery here, but for consistency
+          (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
+          -- Compute the derivative here once, so that it only needs to be
+          -- combined with the local adjoint on every use, instead of having to
+          -- recompute this whole thing.
+          let labelenv' = lpushLabTup labelenv lhs labs
+          case alabValFinds labelenv' (bindmap `dmapFind` fmapLabel P arglab) of
+            Just (TupRsingle argvar) ->
+                Alet lhs adjoint
+                . Alet (A.LeftHandSideSingle (labelType templab))
+                       (case ADExp.reverseAD lambdalhs (resolveAlabs (Context labelenv' bindmap) lambdabody) of
+                          ADExp.ReverseADResE lambdalhs' dualbody ->
+                              -- let sc = init (scanl f x0 a)
+                              -- in zipWith (*) (zipWith D₂f sc a)
+                              --                (tail (scanr (*) 1 (zipWith D₁f sc a)))
+                              let d1f = Lam lambdalhs' (Body (Get (etypeOf lambdabody) (TILeft TIHere) dualbody))
+                                  d2f = Lam lambdalhs' (Body (Get (etypeOf lambdabody) (TIRight TIHere) dualbody))
+                                  weaken1 = A.weakenSucc' A.weakenId
+                                  argvar' = weaken weaken1 argvar
+                                  (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
+                                  initScan ty dir f e0 a =  -- init (scanl) / tail (scanr)
+                                      let scan'type = let ArrayR (ShapeRsnoc shtype) elttype = ty
+                                                      in TupRpair (TupRsingle ty) (TupRsingle (ArrayR shtype elttype))
+                                      in Aget (TupRsingle ty) (TILeft TIHere) (Scan' scan'type dir f e0 a)
+                              in Alet (A.LeftHandSideSingle argtypeS)
+                                      (initScan argtypeS A.LeftToRight
+                                          (resolveAlabsFun (Context labelenv' bindmap) origf)
+                                          (resolveAlabs (Context labelenv' bindmap) initexp)
+                                          (Avar argvar))
+                                      (smartZipWith (timesLam elttypeN)
+                                          (smartZipWith d2f' (Avar (A.Var argtypeS ZeroIdx)) (Avar argvar'))
+                                          (initScan argtypeS A.RightToLeft (timesLam elttypeN)
+                                              (zeroForType' 1 elttypeN)
+                                              (smartZipWith d1f' (Avar (A.Var argtypeS ZeroIdx)) (Avar argvar')))))
+                <$> dual' nodemap restlabels (Context (LPush labelenv' templab)
+                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
+                          contribmap' cont
+            _ -> error $ "dual Fold: argument primal was not computed"
+
+      Fold restype@(ArrayR resshape _) origf@(Lam lambdalhs (Body lambdabody)) Nothing (Alabel arglab)
+        | TupRsingle (SingleScalarType (NumSingleType elttypeN@(FloatingNumType TypeFloat))) <- etypeOf lambdabody
+        , ReplicateOneMore onemoreSlix onemoreExpf <- replicateOneMore resshape -> do
+          let argtype = labelType arglab
+              TupRsingle argtypeS = argtype
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+          templab <- genSingleId argtypeS
+          let contribmap' = updateContribmap lbl
+                                [Contribution arglab TLNil (TupRsingle templab :@ TLNil) $
+                                    \(TupRsingle adjvar) _ (TupRsingle tempvar :@ TLNil) _ ->
+                                        -- zipWith (*) (replicate (shape a) adjoint) (usual_derivative)
+                                        smartZipWith (timesLam elttypeN)
+                                            (Replicate argtypeS onemoreSlix (onemoreExpf (Shape (Left tempvar))) (Avar adjvar))
+                                            (Avar tempvar)]
+                                contribmap
+          -- technically don't need the tuple machinery here, but for consistency
+          (Exists lhs, labs) <- genSingleIds (TupRsingle restype)
+          -- Compute the derivative here once, so that it only needs to be
+          -- combined with the local adjoint on every use, instead of having to
+          -- recompute this whole thing.
+          let labelenv' = lpushLabTup labelenv lhs labs
+          case alabValFinds labelenv' (bindmap `dmapFind` fmapLabel P arglab) of
+            Just (TupRsingle argvar) ->
+                Alet lhs adjoint
+                . Alet (A.LeftHandSideSingle (labelType templab))
+                       (case ADExp.reverseAD lambdalhs (resolveAlabs (Context labelenv' bindmap) lambdabody) of
+                          ADExp.ReverseADResE lambdalhs' dualbody ->
+                              -- let sc = init (scanl1 f a)
+                              -- in zipWith (*) ([1] ++ zipWith D₂f sc (tail l))
+                              --                (scanr (*) 1 (zipWith D₁f sc (tail l)))
+                              let d1f = Lam lambdalhs' (Body (Get (etypeOf lambdabody) (TILeft TIHere) dualbody))
+                                  d2f = Lam lambdalhs' (Body (Get (etypeOf lambdabody) (TIRight TIHere) dualbody))
+                                  weaken1 = A.weakenSucc' A.weakenId
+                                  argvar' = weaken weaken1 argvar
+                                  (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
+                              in Alet (A.LeftHandSideSingle argtypeS)
+                                      (smartInit (Scan argtypeS A.LeftToRight
+                                          (resolveAlabsFun (Context labelenv' bindmap) origf)
+                                          Nothing
+                                          (Avar argvar)))
+                                      (smartZipWith (timesLam elttypeN)
+                                          (smartCons (zeroForType' 1 elttypeN)
+                                              (smartZipWith d2f' (Avar (A.Var argtypeS ZeroIdx)) (smartTail (Avar argvar'))))
+                                          (Scan argtypeS A.RightToLeft (timesLam elttypeN)
+                                              (Just (zeroForType' 1 elttypeN))
+                                              (smartZipWith d1f' (Avar (A.Var argtypeS ZeroIdx)) (smartTail (Avar argvar'))))))
+                <$> dual' nodemap restlabels (Context (LPush labelenv' templab)
+                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
+                          contribmap' cont
+            _ -> error $ "dual Fold: argument primal was not computed"
+
       -- TODO: Since we don't support array indexing yet, Generate nodes have
       -- no array arguments they can contribute anything to. Thus, we ignore
       -- them in the dual pass.
@@ -924,6 +1042,77 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                          contribmap' cont
 
       expr -> trace ("\n!! " ++ show expr) undefined
+  where
+    smartZipWith :: Fun aenv lab alab ((e1, e2) -> e)
+                 -> OpenAcc aenv lab alab args (Array sh e1)
+                 -> OpenAcc aenv lab alab args (Array sh e2)
+                 -> OpenAcc aenv lab alab args (Array sh e)
+    smartZipWith f@(Lam _ (Body body)) a1 a2 =
+        let TupRsingle (ArrayR shtype _) = atypeOf a1
+        in ZipWith (ArrayR shtype (etypeOf body)) (Right f) a1 a2
+    smartZipWith _ _ _ = error "impossible GADTs"
+
+    smartInnerPermute :: (forall env aenv'. OpenExp env aenv' lab alab () Int
+                                         -> OpenExp env aenv' lab alab () Int)  -- ^ new inner dimension size
+                      -> (forall env aenv'. OpenExp env aenv' lab alab () Int
+                                         -> OpenExp env aenv' lab alab () Int)  -- ^ inner index transformer
+                      -> OpenAcc aenv lab alab args (Array (sh, Int) t)
+                      -> OpenAcc aenv lab alab args (Array (sh, Int) t)
+    smartInnerPermute sizeExpr indexExpr a
+      | TupRsingle ty@(ArrayR shtype _) <- atypeOf a
+      , TupRpair tailsht _ <- shapeType shtype
+      , LetBoundExpE shlhs shvars <- elhsCopy tailsht =
+          Alet (A.LeftHandSideSingle ty) a
+               (Backpermute ty
+                   (Let (A.LeftHandSidePair shlhs (A.LeftHandSideSingle scalarType))
+                        (Shape (Left (A.Var ty ZeroIdx)))
+                        (smartPair
+                            (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                            (sizeExpr (Var (A.Var scalarType ZeroIdx)))))
+                   (Lam (A.LeftHandSidePair shlhs (A.LeftHandSideSingle scalarType))
+                        (Body (smartPair
+                                  (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                                  (indexExpr (Var (A.Var scalarType ZeroIdx))))))
+                   (Avar (A.Var ty ZeroIdx)))
+    smartInnerPermute _ _ _ = error "impossible GADTs"
+
+    smartTail :: OpenAcc aenv lab alab args (Array (sh, Int) t) -> OpenAcc aenv lab alab args (Array (sh, Int) t)
+    smartTail = smartInnerPermute (\sz -> smartSub numType sz (Const scalarType 1))
+                                  (\idx -> smartAdd numType idx (Const scalarType 1))
+
+    smartInit :: OpenAcc aenv lab alab args (Array (sh, Int) t) -> OpenAcc aenv lab alab args (Array (sh, Int) t)
+    smartInit = smartInnerPermute (\sz -> smartSub numType sz (Const scalarType 1))
+                                  (\idx -> idx)
+
+    smartCons :: (forall env aenv'. OpenExp env aenv' lab alab () t)
+              -> OpenAcc aenv lab alab args (Array (sh, Int) t)
+              -> OpenAcc aenv lab alab args (Array (sh, Int) t)
+    smartCons prefix a
+      | TupRsingle ty@(ArrayR shtype elttype) <- atypeOf a
+      , TupRpair tailsht _ <- shapeType shtype
+      , LetBoundExpE shlhs shvars <- elhsCopy tailsht =
+          Alet (A.LeftHandSideSingle ty) a
+               (Generate ty
+                   (Let (A.LeftHandSidePair shlhs (A.LeftHandSideSingle scalarType))
+                        (Shape (Left (A.Var ty ZeroIdx)))
+                        (smartPair
+                            (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                            (smartAdd numType (Var (A.Var scalarType ZeroIdx)) (Const scalarType 1))))
+                   (Right (Lam (A.LeftHandSidePair shlhs (A.LeftHandSideSingle scalarType))
+                               (Body (Cond elttype
+                                           (smartGt singleType (Var (A.Var scalarType ZeroIdx)) (Const scalarType 0))
+                                           (Index (Left (A.Var ty ZeroIdx))
+                                                  (smartPair
+                                                      (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                                                      (smartSub numType (Var (A.Var scalarType ZeroIdx)) (Const scalarType 1))))
+                                           prefix)))))
+    smartCons _ _ = error "impossible GADTs"
+
+    timesLam :: NumType t -> Fun aenv lab alab ((t, t) -> t)
+    timesLam ty =
+        let sty = SingleScalarType (NumSingleType ty)
+        in Lam (A.LeftHandSidePair (A.LeftHandSideSingle sty) (A.LeftHandSideSingle sty))
+               (Body (smartMul ty (Var (A.Var sty (SuccIdx ZeroIdx))) (Var (A.Var sty ZeroIdx))))
 
 -- Utility functions
 -- -----------------
@@ -1077,6 +1266,36 @@ reduceSpecFromReplicate SliceNil = RSpecNil
 reduceSpecFromReplicate (SliceAll slix) = RSpecKeep (reduceSpecFromReplicate slix)
 reduceSpecFromReplicate (SliceFixed slix) = RSpecReduce (reduceSpecFromReplicate slix)
 
+data ReplicateOneMore sh =
+    forall slix.
+        ReplicateOneMore (SliceIndex slix sh ((), Int) (sh, Int))
+                         (forall env aenv lab alab args. OpenExp env aenv lab alab args (sh, Int)
+                                                      -> OpenExp env aenv lab alab args slix)
+
+-- Produces a SliceIndex that can be passed to Replicate, and a function that
+-- produces the slix expression parameter to Replicate, given an expression for
+-- the desired full shape.
+replicateOneMore :: ShapeR sh -> ReplicateOneMore sh
+replicateOneMore sh
+  | SliceCopy slix e <- sliceCopy sh
+  = ReplicateOneMore (SliceFixed slix)
+                     (\she -> Let (A.LeftHandSidePair (A.LeftHandSideWildcard (shapeType (sliceShapeR slix)))
+                                                      (A.LeftHandSideSingle scalarType))
+                                  she
+                                  (smartPair e (Var (A.Var scalarType ZeroIdx))))
+
+data SliceCopy sh =
+    forall slix.
+        SliceCopy (SliceIndex slix sh () sh)
+                  (forall env aenv lab alab args. OpenExp env aenv lab alab args slix)
+
+sliceCopy :: ShapeR sh -> SliceCopy sh
+sliceCopy ShapeRz = SliceCopy SliceNil Nil
+sliceCopy (ShapeRsnoc sh)
+  | SliceCopy slix e <- sliceCopy sh
+  = SliceCopy (SliceAll slix) (smartPair e Nil)
+
+
 -- The dual of Slice is a Generate that picks the adjoint for the entries
 -- sliced, and zero for the entries cut away. This is the lambda for that
 -- Generate.
@@ -1106,8 +1325,8 @@ sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
     genCond (SliceAll slix') (TupRpair idxvs _) (TupRpair slvs _) = genCond slix' idxvs slvs
     genCond (SliceFixed slix') (TupRpair idxvs (TupRsingle idxv)) (TupRpair slvs (TupRsingle slv)) =
         PrimApp (TupRsingle scalarType) A.PrimLAnd
-            (smartPairE (PrimApp (TupRsingle scalarType) (A.PrimEq singleType)
-                             (smartPairE (Var idxv) (Var slv)))
+            (smartPair (PrimApp (TupRsingle scalarType) (A.PrimEq singleType)
+                             (smartPair (Var idxv) (Var slv)))
                         (genCond slix' idxvs slvs))
     genCond _ _ _ = error "impossible GADTs"
 
@@ -1126,7 +1345,9 @@ accLabelParents = \case
     Map _ lam e -> fromLabel e ++ lamLabels lam
     ZipWith _ lam e1 e2 -> fromLabel e1 ++ fromLabel e2 ++ lamLabels lam
     Generate _ e lam -> expLabels e ++ lamLabels lam
-    Fold _ lam me0 e -> lamLabels lam ++ maybe [] expLabels me0 ++ fromLabel e
+    Fold _ f me0 e -> funLabels f ++ maybe [] expLabels me0 ++ fromLabel e
+    Scan _ _ f me0 e -> funLabels f ++ maybe [] expLabels me0 ++ fromLabel e
+    Scan' _ _ f e0 e -> funLabels f ++ expLabels e0 ++ fromLabel e
     Sum _ e -> fromLabel e
     Replicate _ _ she e -> expLabels she ++ fromLabel e
     Slice _ _ e she -> fromLabel e ++ expLabels she
@@ -1206,8 +1427,5 @@ smartSnd ex
   = Aget t2 (TIRight TIHere) ex
 smartSnd _ = error "smartSnd: impossible GADTs"
 
-smartPair :: OpenAcc aenv lab alab args a -> OpenAcc aenv lab alab args b -> OpenAcc aenv lab alab args (a, b)
-smartPair a b = Apair (TupRpair (atypeOf a) (atypeOf b)) a b
-
-smartPairE :: OpenExp env aenv lab alab args a -> OpenExp env aenv lab alab args b -> OpenExp env aenv lab alab args (a, b)
-smartPairE a b = Pair (TupRpair (etypeOf a) (etypeOf b)) a b
+smartPairA :: OpenAcc aenv lab alab args a -> OpenAcc aenv lab alab args b -> OpenAcc aenv lab alab args (a, b)
+smartPairA a b = Apair (TupRpair (atypeOf a) (atypeOf b)) a b
