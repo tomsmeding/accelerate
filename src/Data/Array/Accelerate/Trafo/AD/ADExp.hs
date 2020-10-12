@@ -157,6 +157,9 @@ varsToArgs (TupRpair vars1 vars2) =
       ex2 = varsToArgs vars2
   in Pair (TupRpair (etypeOf ex1) (etypeOf ex2)) ex1 ex2
 
+-- TODO: produceGradient should take the ExpVars value from BEFORE varsToArgs,
+-- not after. That eliminates the error case if the argument is not
+-- Nil/Pair/Arg.
 produceGradient :: DMap (Idx args) (EDLabelT Int)
                 -> EContext Int env
                 -> OpenExp () aenv unused unused2 args t
@@ -961,27 +964,6 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               (Let lhs adjoint)
 
       expr -> trace ("\n!! " ++ show expr) undefined
-  where
-    smartPair :: OpenExp env aenv lab alab args a -> OpenExp env aenv lab alab args b -> OpenExp env aenv lab alab args (a, b)
-    smartPair a b = Pair (TupRpair (etypeOf a) (etypeOf b)) a b
-
-    smartNeg :: NumType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
-    smartNeg ty a = PrimApp (TupRsingle (SingleScalarType (NumSingleType ty))) (A.PrimNeg ty) a
-
-    smartRecip :: FloatingType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
-    smartRecip ty a = PrimApp (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType ty)))) (A.PrimRecip ty) a
-
-    smartSub :: NumType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
-    smartSub ty a b = PrimApp (TupRsingle (SingleScalarType (NumSingleType ty))) (A.PrimSub ty) (smartPair a b)
-
-    smartMul :: NumType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
-    smartMul ty a b = PrimApp (TupRsingle (SingleScalarType (NumSingleType ty))) (A.PrimMul ty) (smartPair a b)
-
-    smartFDiv :: FloatingType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
-    smartFDiv ty a b = PrimApp (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType ty)))) (A.PrimFDiv ty) (smartPair a b)
-
-    smartGt :: SingleType t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args A.PrimBool
-    smartGt ty a b = PrimApp (TupRsingle scalarType) (A.PrimGt ty) (smartPair a b)
 
 -- TODO: make a new abstraction after the refactor, possibly inspired by this function, which was the abstraction pre-refactor
 -- dualStoreAdjoint

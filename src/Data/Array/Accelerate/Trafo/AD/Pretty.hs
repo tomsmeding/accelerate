@@ -1,6 +1,7 @@
 {-# LANGUAGE GADTs #-}
 module Data.Array.Accelerate.Trafo.AD.Pretty (prettyPrint) where
 
+import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Trafo.AD.Acc
@@ -194,9 +195,21 @@ layoutAcc se d (ZipWith _ f e1 e2) =
 layoutAcc se d (Fold _ f me0 e) =
     parenthesise (d > 10) $
         lprefix (maybe "fold1 " (const "fold ") me0)
-            (lseq' $ concat [[layoutLambda (se { seEnv = [] }) 11 f]
+            (lseq' $ concat [[layoutFun (se { seEnv = [] }) 11 f]
                             ,maybe [] (\e0 -> [layoutExp (se { seEnv = [] }) 11 e0]) me0
                             ,[layoutAcc se 11 e]])
+layoutAcc se d (Scan _ dir f me0 e) =
+    parenthesise (d > 10) $
+        lprefix ("scan" ++ (case dir of A.LeftToRight -> "l" ; A.RightToLeft -> "r") ++ maybe "1" (const "") me0 ++ " ")
+            (lseq' $ concat [[layoutFun (se { seEnv = [] }) 11 f]
+                            ,maybe [] (\e0 -> [layoutExp (se { seEnv = [] }) 11 e0]) me0
+                            ,[layoutAcc se 11 e]])
+layoutAcc se d (Scan' _ dir f e0 e) =
+    parenthesise (d > 10) $
+        lprefix ("scan" ++ (case dir of A.LeftToRight -> "l" ; A.RightToLeft -> "r") ++ "' ")
+            (lseq' [layoutFun (se { seEnv = [] }) 11 f
+                   ,layoutExp (se { seEnv = [] }) 11 e0
+                   ,layoutAcc se 11 e])
 layoutAcc se d (Backpermute _ dim f e) =
     parenthesise (d > 10) $
         lprefix "backpermute "

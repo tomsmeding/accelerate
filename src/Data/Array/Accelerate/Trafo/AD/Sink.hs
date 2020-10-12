@@ -50,7 +50,9 @@ sinkAcc _ Anil = Anil
 sinkAcc k (Acond ty c t e) = Acond ty (sinkExpAenv k c) (sinkAcc k t) (sinkAcc k e)
 sinkAcc k (Map ty f e) = Map ty (sinkFunAenv k <$> f) (sinkAcc k e)
 sinkAcc k (ZipWith ty f e1 e2) = ZipWith ty (sinkFunAenv k <$> f) (sinkAcc k e1) (sinkAcc k e2)
-sinkAcc k (Fold ty f me0 e) = Fold ty (sinkFunAenv k <$> f) (sinkExpAenv k <$> me0) (sinkAcc k e)
+sinkAcc k (Fold ty f me0 e) = Fold ty (sinkFunAenv k f) (sinkExpAenv k <$> me0) (sinkAcc k e)
+sinkAcc k (Scan ty dir f me0 e) = Scan ty dir (sinkFunAenv k f) (sinkExpAenv k <$> me0) (sinkAcc k e)
+sinkAcc k (Scan' ty dir f e0 e) = Scan' ty dir (sinkFunAenv k f) (sinkExpAenv k e0) (sinkAcc k e)
 sinkAcc k (Backpermute ty dim f e) = Backpermute ty (sinkExpAenv k dim) (sinkFunAenv k f) (sinkAcc k e)
 sinkAcc k (Permute ty comb def pf e) = Permute ty (sinkFunAenv k comb) (sinkAcc k def) (sinkFunAenv k pf) (sinkAcc k e)
 sinkAcc k (Sum ty e) = Sum ty (sinkAcc k e)
@@ -157,7 +159,9 @@ aCheckClosedInTagval tv expr = case expr of
     Acond ty c t e -> Acond ty <$> eCheckAClosedInTagval tv c <*> aCheckClosedInTagval tv t <*> aCheckClosedInTagval tv e
     Map ty f e -> Map ty <$> traverse (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e
     ZipWith ty f e1 e2 -> ZipWith ty <$> traverse (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
-    Fold ty f me0 e -> Fold ty <$> traverse (efCheckAClosedInTagval tv) f <*> traverse (eCheckAClosedInTagval tv) me0 <*> aCheckClosedInTagval tv e
+    Fold ty f me0 e -> Fold ty <$> efCheckAClosedInTagval tv f <*> traverse (eCheckAClosedInTagval tv) me0 <*> aCheckClosedInTagval tv e
+    Scan ty dir f me0 e -> Scan ty dir <$> efCheckAClosedInTagval tv f <*> traverse (eCheckAClosedInTagval tv) me0 <*> aCheckClosedInTagval tv e
+    Scan' ty dir f e0 e -> Scan' ty dir <$> efCheckAClosedInTagval tv f <*> eCheckAClosedInTagval tv e0 <*> aCheckClosedInTagval tv e
     Backpermute ty dim f e -> Backpermute ty <$> eCheckAClosedInTagval tv dim <*> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e
     Permute ty cf def pf e -> Permute ty <$> efCheckAClosedInTagval tv cf <*> aCheckClosedInTagval tv def <*> efCheckAClosedInTagval tv pf <*> aCheckClosedInTagval tv e
     Sum ty e -> Sum ty <$> aCheckClosedInTagval tv e

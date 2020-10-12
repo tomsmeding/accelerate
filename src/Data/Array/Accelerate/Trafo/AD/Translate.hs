@@ -52,7 +52,11 @@ translateAcc (A.OpenAcc expr) = case expr of
       | Nothing <- initval ->
           D.Sum (A.arrayR expr) (translateAcc e)
     A.Fold f me0 e ->
-        D.Fold (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
+        D.Fold (A.arrayR expr) (toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
+    A.Scan dir f me0 e ->
+        D.Scan (A.arrayR expr) dir (toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAcc e)
+    A.Scan' dir f e0 e ->
+        D.Scan' (A.arraysR expr) dir (toPairedBinop $ translateFun f) (translateExp e0) (translateAcc e)
     A.Generate ty she f ->
         D.Generate ty (translateExp she) (Right $ translateFun f)
     A.Replicate slt sle e ->
@@ -228,7 +232,9 @@ untranslateLHSboundAcc toplhs topexpr
         D.Acond _ e1 e2 e3 -> A.Acond (untranslateClosedExpA e1 pv) (go e2 pv) (go e3 pv)
         D.Map (ArrayR _ ty) (Right f) e -> A.Map ty (untranslateClosedFunA f pv) (go e pv)
         D.ZipWith (ArrayR _ ty) (Right f) e1 e2 -> A.ZipWith ty (untranslateClosedFunA (fromPairedBinop f) pv) (go e1 pv) (go e2 pv)
-        D.Fold _ (Right f) me0 e -> A.Fold (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go e pv)
+        D.Fold _ f me0 e -> A.Fold (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go e pv)
+        D.Scan _ dir f me0 e -> A.Scan dir (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go e pv)
+        D.Scan' _ dir f e0 e -> A.Scan' dir (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA e0 pv) (go e pv)
         D.Sum (ArrayR _ (TupRsingle ty@(SingleScalarType (NumSingleType nt)))) e ->
             A.Fold (A.Lam (A.LeftHandSideSingle ty) (A.Lam (A.LeftHandSideSingle ty)
                       (A.Body (A.PrimApp (A.PrimAdd nt)
@@ -261,7 +267,6 @@ untranslateLHSboundAcc toplhs topexpr
         D.Alabel _ -> internalError "AD.untranslateLHSboundAcc: Unexpected Label in untranslate!"
         D.Map _ _ _ -> error "Unexpected Map shape in untranslate"
         D.ZipWith _ _ _ _ -> error "Unexpected ZipWith shape in untranslate"
-        D.Fold _ _ _ _ -> error "Unexpected Fold shape in untranslate"
         D.Sum _ _ -> error "Unexpected Sum shape in untranslate"
         D.Generate _ _ _ -> error "Unexpected Generate shape in untranslate"
         D.Reduce _ _ _ _ -> error "Unexpected Reduce shape in untranslate"
