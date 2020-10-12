@@ -123,7 +123,7 @@ layoutExp se d (Shape (Left (A.Var _ idx))) =
         lprefix "shape "
             (case drop (idxToInt idx) (seAenv se) of
                 descr : _ -> string descr
-                [] -> string ("tA_UP" ++ show (1 + idxToInt idx)))
+                [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))))
 layoutExp se d (Shape (Right lab)) =
     parenthesise (d > 10) $
         string $ "shape (L" ++ seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab) ++ ")"
@@ -131,7 +131,7 @@ layoutExp se d (Index (Left (A.Var _ idx)) e) =
     parenthesise (d > 10) $ lseq'
         [case drop (idxToInt idx) (seAenv se) of
             descr : _ -> string descr
-            [] -> string ("tA_UP" ++ show (1 + idxToInt idx))
+            [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
         ,string "!", layoutExp se 11 e]
 layoutExp se d (Index (Right lab) e) =
     parenthesise (d > 10) $ lseq'
@@ -163,7 +163,7 @@ layoutExp _ d (Arg ty idx) = parenthesise (d > 0) $
 layoutExp se _ (Var (A.Var _ idx)) =
     case drop (idxToInt idx) (seEnv se) of
         descr : _ -> string descr
-        [] -> string ("tE_UP" ++ show (1 + idxToInt idx))
+        [] -> string ("tE_UP" ++ show (1 + idxToInt idx - length (seEnv se)))
 layoutExp se d (Label lab) = parenthesise (d > 0) $
     string ('L' : seLabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
@@ -262,7 +262,7 @@ layoutAcc _ d (Aarg ty idx) = parenthesise (d > 0) $
 layoutAcc se _ (Avar (A.Var _ idx)) =
     case drop (idxToInt idx) (seAenv se) of
         descr : _ -> string descr
-        [] -> string ("tA_UP" ++ show (1 + idxToInt idx))
+        [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
 layoutAcc se d (Alabel lab) = parenthesise (d > 0) $
     string ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
