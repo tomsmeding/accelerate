@@ -297,6 +297,7 @@ reduceConvert :: D.ReduceSpec spec red full -> ReduceConvert red full
 reduceConvert spec
   | let spec' = untypeifySpec spec
         sortedSpec = sort spec'
+        -- These two lines are the core transformation implemented here. Nothing more.
         sortedFullIndices = map snd (sortBy (comparing fst) (zip spec' [0..]))
         fullSortedIndices = invertPermutation sortedFullIndices
   , SomeReduceSpec sortedSpec' tagval <- typeifySpec sortedSpec
@@ -337,11 +338,11 @@ reduceConvert spec
     specSameRed :: D.ReduceSpec spec red full
                 -> D.ReduceSpec spec' red' full'
                 -> Maybe (red :~: red')
-    specSameRed     D.RSpecNil            D.RSpecNil                                         = Just Refl
-    specSameRed    (D.RSpecKeep s1)      (D.RSpecKeep s2)   | Just Refl <- specSameRed s1 s2 = Just Refl
-    specSameRed    (D.RSpecReduce s1)     s2                | Just Refl <- specSameRed s1 s2 = Just Refl
-    specSameRed     s1                   (D.RSpecReduce s2) | Just Refl <- specSameRed s1 s2 = Just Refl
-    specSameRed     _                     _                                                  = Nothing
+    specSameRed  D.RSpecNil         D.RSpecNil                                         = Just Refl
+    specSameRed (D.RSpecKeep s1)   (D.RSpecKeep s2)   | Just Refl <- specSameRed s1 s2 = Just Refl
+    specSameRed (D.RSpecReduce s1)  s2                | Just Refl <- specSameRed s1 s2 = Just Refl
+    specSameRed  s1                (D.RSpecReduce s2) | Just Refl <- specSameRed s1 s2 = Just Refl
+    specSameRed  _                  _                                                  = Nothing
 
     invertPermutation :: [Int] -> [Int]
     invertPermutation l = map snd (sortBy (comparing fst) (zip l [0..]))
