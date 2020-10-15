@@ -28,6 +28,9 @@ module Data.Array.Accelerate.Pretty.NoTrafo (
   PrettyGraph(..), Detail(..),
   graphDelayedAcc, graphDelayedAfun,
 
+  -- ** Poor pretty printing
+  poorShow,
+
 ) where
 
 import Data.Array.Accelerate.AST                                    hiding ( Acc, Exp )
@@ -46,6 +49,10 @@ import System.IO.Unsafe
 import qualified Data.Text.Lazy                                     as T
 import qualified System.Console.ANSI                                as Term
 import qualified System.Console.Terminal.Size                       as Term
+
+import Data.Array.Accelerate.AST.LeftHandSide
+import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.Var
 
 
 -- Note: [Show instances]
@@ -133,3 +140,59 @@ prettyDelayedOpenAcc _       aenv (Delayed _ sh f _)
 extractDelayedOpenAcc :: HasCallStack => DelayedOpenAcc aenv a -> PreOpenAcc DelayedOpenAcc aenv a
 extractDelayedOpenAcc (Manifest pacc) = pacc
 extractDelayedOpenAcc Delayed{}       = internalError "expected manifest array"
+
+
+-- PSE (names in environment) (name generation seed)
+data PoorShowEnv = PSE [String] Int
+
+-- PSR (output name generation seed)
+data PoorShowRet = PSR Int
+
+poorShow :: OpenAcc aenv t -> String
+poorShow = snd . poorShow' (PSE [] 0)
+
+poorShow' :: PoorShowEnv -> OpenAcc aenv t -> (PoorShowRet, String)
+poorShow' env (OpenAcc pacc) = poorShowP env pacc
+
+poorShowP :: PoorShowEnv -> PreOpenAcc OpenAcc aenv t -> (PoorShowRet, String)
+poorShowP env@(PSE envnames seed) = \pacc -> case pacc of
+  Alet lhs bnd body ->
+    let (PSE envnames' seed1, lhsS) = poorShowLHS env lhs
+        (PSR seed2, bndS) = poorShow' (PSE envnames seed1) bnd
+        (PSR seed3, bodyS) = poorShow' (PSE envnames' seed2) body
+    in (PSR seed3, "(let " ++ lhsS ++ " = " ++ bndS ++ " in " ++ bodyS ++ ")")
+
+  Avar (Var _ idx) ->
+    let i = idxToInt idx
+    in case drop i envnames of
+         [] -> (PSR seed, "aUP" ++ show (i - length envnames + 1))
+         n : _ -> (PSR seed, n)
+
+  Use _ _ ->
+    (PSR seed, "(use _)")
+
+  Generate _ _ _ ->
+    (PSR seed, "(generate _ _)")
+
+  Map _ _ a ->
+    let (PSR seed1, aS) = poorShow' env a
+    in (PSR seed1, "(map _ " ++ aS ++ ")")
+
+  ZipWith _ _ a1 a2 ->
+    let (PSR seed1, a1S) = poorShow' env a1
+        (PSR seed2, a2S) = poorShow' (PSE envnames seed1) a2
+    in (PSR seed2, "(zipWith _ " ++ a1S ++ " " ++ a2S ++ ")")
+
+  _ -> (PSR seed, "(" ++ showPreAccOp pacc ++ "??)")
+
+poorShowLHS :: PoorShowEnv -> ALeftHandSide t aenv aenv' -> (PoorShowEnv, String)
+poorShowLHS env@(PSE envnames seed) = \lhs -> case lhs of
+  LeftHandSideWildcard _ -> (env, "_")
+  LeftHandSideSingle _ -> let name = genName seed
+                          in (PSE (name : envnames) (seed + 1), name)
+  LeftHandSidePair lhs1 lhs2 ->
+    let (env1, s1) = poorShowLHS env lhs1
+        (env2, s2) = poorShowLHS env1 lhs2
+    in (env2, "(" ++ s1 ++ ", " ++ s2 ++ ")")
+  where
+    genName i = 'a' : show i
