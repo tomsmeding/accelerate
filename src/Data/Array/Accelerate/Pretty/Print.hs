@@ -23,6 +23,7 @@ module Data.Array.Accelerate.Pretty.Print (
 
   PrettyAcc, ExtractAcc,
   prettyPreOpenAcc,
+  prettyPreOpenAccWithHash,
   prettyPreOpenAfun,
   prettyOpenExp, prettyExp,
   prettyOpenFun, prettyFun,
@@ -62,6 +63,8 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Sugar.Foreign
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST                          as AST
+import qualified Data.Array.Accelerate.Analysis.Hash                as Hash
+import qualified Data.Array.Accelerate.Trafo.Delayed                as Hash
 
 import Data.Char
 import Data.String
@@ -127,6 +130,97 @@ prettyPreOpenAfun prettyAcc aenv0 = next (pretty '\\') aenv0
     next vs aenv (Alam lhs lam) =
       let (aenv', lhs') = prettyALhs True aenv lhs
       in  next (vs <> lhs' <> space) aenv' lam
+
+prettyPreOpenAccWithHash
+    :: forall aenv arrs.
+       Context
+    -> PrettyAcc Hash.DelayedOpenAcc
+    -> ExtractAcc Hash.DelayedOpenAcc
+    -> Val aenv
+    -> PreOpenAcc Hash.DelayedOpenAcc aenv arrs
+    -> Adoc
+prettyPreOpenAccWithHash ctx prettyAcc extractAcc aenv pacc =
+  let hashval = Hash.hashPreOpenAccWith (Hash.defaultHashOptions { Hash.perfect = False })
+                                        Hash.encodeDelayedOpenAcc pacc
+      hn name = fromString (name ++ "_" ++ show hashval)
+  in case pacc of
+    Avar (Var _ idx)        -> prj idx aenv
+    Alet{}                  -> prettyAletWithHash ctx prettyAcc extractAcc aenv pacc
+    Apair{}                 -> prettyAtupleWithHash prettyAcc extractAcc aenv pacc
+    Anil                    -> "()"
+    Apply _ f a             -> apply
+      where
+        op    = Operator ">->" Infix L 1
+        apply = sep [ ppAF f, group (sep [opName op, ppA a]) ]
+
+    Acond p t e             -> flatAlt multi single
+      where
+        p' = ppE p
+        t' = ppA t
+        e' = ppA e
+        --
+        single = parensIf (needsParens ctx (Operator "?|:" Infix N 0))
+               $ sep [ p', "?|", t', pretty ':', e' ]
+        multi  = hang 3
+               $ vsep [ if_ <+> p'
+                      , hang shiftwidth (sep [ then_, t' ])
+                      , hang shiftwidth (sep [ else_, e' ]) ]
+
+    Aforeign _ ff _ a        -> hn "aforeign"       .$ [ pretty (strForeign ff), ppA a ]
+    Awhile p f a             -> hn "awhile"         .$ [ ppAF p, ppAF f, ppA a ]
+    Use repr arr             -> hn "use"            .$ [ prettyArray repr arr ]
+    Unit _ e                 -> hn "unit"           .$ [ ppE e ]
+    Reshape _ sh a           -> hn "reshape"        .$ [ ppE sh, ppA a ]
+    Generate _ sh f          -> hn "generate"       .$ [ ppE sh, ppF f ]
+    Transform _ sh p f a     -> hn "transform"      .$ [ ppE sh, ppF p, ppF f, ppA a ]
+    Replicate _ ix a         -> hn "replicate"      .$ [ ppE ix, ppA a ]
+    Slice _ a ix             -> hn "slice"          .$ [ ppE ix, ppA a ]
+    Map _ f a                -> hn "map"            .$ [ ppF f,  ppA a ]
+    ZipWith _ f a b          -> hn "zipWith"        .$ [ ppF f,  ppA a, ppA b ]
+    Fold f (Just z) a        -> hn "fold"           .$ [ ppF f,  ppE z, ppA a ]
+    Fold f Nothing  a        -> hn "fold1"          .$ [ ppF f,  ppA a ]
+    FoldSeg _ f (Just z) a s -> hn "foldSeg"        .$ [ ppF f,  ppE z, ppA a, ppA s ]
+    FoldSeg _ f Nothing  a s -> hn "fold1Seg"       .$ [ ppF f,  ppA a, ppA s ]
+    Scan d f (Just z) a      -> hn (ppD "scan" d "")  .$ [ ppF f,  ppE z, ppA a ]
+    Scan d f Nothing  a      -> hn (ppD "scan" d "1") .$ [ ppF f,  ppA a ]
+    Scan' d f z a            -> hn (ppD "scan" d "'") .$ [ ppF f,  ppE z, ppA a ]
+    Permute f d p s          -> hn "permute"        .$ [ ppF f,  ppA d, ppF p, ppA s ]
+    Backpermute _ sh f a     -> hn "backpermute"    .$ [ ppE sh, ppF f, ppA a ]
+    Stencil s _ f b a        -> hn "stencil"        .$ [ ppF f,  ppB (stencilEltR s) b, ppA a ]
+    Stencil2 s1 s2 _ f b1 a1 b2 a2
+                             -> hn "stencil2"       .$ [ ppF f,  ppB (stencilEltR s1) b1, ppA a1, ppB (stencilEltR s2) b2, ppA a2 ]
+    GradientA _ _ f a        -> hn "gradientA"      .$ [ ppAF f, ppA a ]
+  where
+    infixr 0 .$
+    f .$ xs
+      = parensIf (needsParens ctx f)
+      $ hang shiftwidth (sep (manifest f : xs))
+
+    ppA :: Hash.DelayedOpenAcc aenv a -> Adoc
+    ppA = prettyAcc app aenv
+
+    ppAF :: PreOpenAfun Hash.DelayedOpenAcc aenv f -> Adoc
+    ppAF = parens . prettyPreOpenAfun prettyAcc aenv
+
+    ppE :: Exp aenv t -> Adoc
+    ppE = prettyOpenExp app Empty aenv
+
+    ppF :: Fun aenv t -> Adoc
+    ppF = parens . prettyOpenFun Empty aenv
+
+    ppB :: forall sh e.
+           TypeR e
+        -> Boundary aenv (Array sh e)
+        -> Adoc
+    ppB _  Clamp        = "clamp"
+    ppB _  Mirror       = "mirror"
+    ppB _  Wrap         = "wrap"
+    ppB tp (Constant e) = prettyConst tp e
+    ppB _  (Function f) = ppF f
+
+    ppD :: String -> AST.Direction -> String -> String
+    ppD f AST.LeftToRight k = f <> "l" <> k
+    ppD f AST.RightToLeft k = f <> "r" <> k
 
 prettyPreOpenAcc
     :: forall acc aenv arrs.
@@ -217,6 +311,49 @@ prettyPreOpenAcc ctx prettyAcc extractAcc aenv pacc =
     ppD f AST.RightToLeft k = fromString (f <> "r" <> k)
 
 
+prettyAletWithHash
+    :: forall aenv arrs.
+       Context
+    -> PrettyAcc Hash.DelayedOpenAcc
+    -> ExtractAcc Hash.DelayedOpenAcc
+    -> Val aenv
+    -> PreOpenAcc Hash.DelayedOpenAcc aenv arrs
+    -> Adoc
+prettyAletWithHash ctx prettyAcc extractAcc aenv0
+  = parensIf (needsParens ctx "let")
+  . align . wrap . collect aenv0
+  where
+    collect :: Val aenv' -> PreOpenAcc Hash.DelayedOpenAcc aenv' a -> ([Adoc], Adoc)
+    collect aenv =
+      \case
+        Alet lhs a1 a2 ->
+          let (aenv', v)      = prettyALhs False aenv lhs
+              a1'             = ppA aenv a1
+              bnd | isAlet a1 = nest shiftwidth (vsep [v <+> equals, a1'])
+                  | otherwise = v <+> align (equals <+> a1')
+              (bnds, body)    = collect aenv' (extractAcc a2)
+          in
+          (bnd:bnds, body)
+        --
+        next       -> ([], prettyPreOpenAccWithHash context0 prettyAcc extractAcc aenv next)
+
+    isAlet :: Hash.DelayedOpenAcc aenv' a -> Bool
+    isAlet (extractAcc -> Alet{}) = True
+    isAlet _                      = False
+
+    ppA :: Val aenv' -> Hash.DelayedOpenAcc aenv' a -> Adoc
+    ppA = prettyAcc context0
+
+    wrap :: ([Adoc], Adoc) -> Adoc
+    wrap ([],   body) = body  -- shouldn't happen!
+    wrap ([b],  body)
+      = sep [ nest shiftwidth (sep [let_, b]), in_, body ]
+    wrap (bnds, body)
+      = vsep [ nest shiftwidth (vsep (let_:bnds))
+             , in_
+             , body
+             ]
+
 prettyAlet
     :: forall acc aenv arrs.
        Context
@@ -259,6 +396,32 @@ prettyAlet ctx prettyAcc extractAcc aenv0
              , in_
              , body
              ]
+
+prettyAtupleWithHash
+    :: forall aenv arrs.
+       PrettyAcc Hash.DelayedOpenAcc
+    -> ExtractAcc Hash.DelayedOpenAcc
+    -> Val aenv
+    -> PreOpenAcc Hash.DelayedOpenAcc aenv arrs
+    -> Adoc
+prettyAtupleWithHash prettyAcc extractAcc aenv0 acc = case collect acc of
+    Nothing  -> align $ ppPair acc
+    Just tup ->
+      case tup of
+        []  -> "()"
+        [t] -> t
+        _   -> align $ "T" <> pretty (length tup) <+> sep tup
+  where
+    ppPair :: PreOpenAcc Hash.DelayedOpenAcc aenv arrs' -> Adoc
+    ppPair (Apair a1 a2) = "(" <> ppPair (extractAcc a1) <> "," <+> prettyAcc context0 aenv0 a2 <> ")"
+    ppPair a             = prettyPreOpenAccWithHash context0 prettyAcc extractAcc aenv0 a
+
+    collect :: PreOpenAcc Hash.DelayedOpenAcc aenv arrs' -> Maybe [Adoc]
+    collect Anil          = Just []
+    collect (Apair a1 a2)
+      | Just tup <- collect $ extractAcc a1
+                          = Just $ tup ++ [prettyAcc app aenv0 a2]
+    collect _             = Nothing
 
 prettyAtuple
     :: forall acc aenv arrs.

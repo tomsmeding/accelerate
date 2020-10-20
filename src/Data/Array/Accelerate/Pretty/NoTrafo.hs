@@ -128,7 +128,7 @@ extractOpenAcc (OpenAcc pacc) = pacc
 
 prettyDelayedOpenAcc :: HasCallStack => PrettyAcc DelayedOpenAcc
 prettyDelayedOpenAcc context aenv (Manifest pacc)
-  = prettyPreOpenAcc context prettyDelayedOpenAcc extractDelayedOpenAcc aenv pacc
+  = prettyPreOpenAccWithHash context prettyDelayedOpenAcc extractDelayedOpenAcc aenv pacc
 prettyDelayedOpenAcc _       aenv (Delayed _ sh f _)
   = parens
   $ nest shiftwidth
