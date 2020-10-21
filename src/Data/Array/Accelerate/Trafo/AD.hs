@@ -37,6 +37,7 @@ convertExp (Cond c e1 e2) = Cond (convertExp c) (convertExp e1) (convertExp e2)
 convertExp (Shape var) = Shape var
 convertExp (Index var dim) = Index var (convertExp dim)
 convertExp (ShapeSize shr e) = ShapeSize shr (convertExp e)
+convertExp (Undef ty) = Undef ty
 convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   | SingleScalarType (NumSingleType (FloatingNumType TypeFloat)) <- sty
   , Exists lhs' <- rebuildLHS lhs =
