@@ -867,6 +867,37 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               contribmap'
                               (Let (A.LeftHandSideSingle restypeS) adjoint)
 
+      PrimApp restype (A.PrimSin restypeF) (Label arglab) -> do
+          let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
+              restypeN = FloatingNumType restypeF
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab TLNil $ \(TupRsingle adjvar) _ ->
+                                    smartMul restypeN (Var adjvar)
+                                                      (PrimApp restype (A.PrimCos restypeF) (zeroForType' 1 restypeF))]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
+      PrimApp restype (A.PrimCos restypeF) (Label arglab) -> do
+          let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
+              restypeN = FloatingNumType restypeF
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab TLNil $ \(TupRsingle adjvar) _ ->
+                                    smartMul restypeN (Var adjvar)
+                                                      (PrimApp restype (A.PrimNeg restypeN)
+                                                          (PrimApp restype (A.PrimSin restypeF) (zeroForType' 1 restypeF)))]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
       -- Argument is an integral type, which takes no contributions
       PrimApp _ (A.PrimToFloating _ restypeF) _ -> do
           let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
