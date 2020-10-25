@@ -33,9 +33,9 @@ type ADLabelT = DLabel ArraysR
 -- Array programs
 -- --------------
 
-type ExpLambda1 aenv lab alab sh t1 t2 =
-    Either (SplitLambdaAD t1 t2 lab alab sh)
-           (Fun aenv lab alab (t1 -> t2))
+type ExpLambda1 aenv lab alab tenv sh t1 t2 =
+    Either (SplitLambdaAD t1 t2 lab alab tenv sh)
+           (Fun aenv lab alab tenv (t1 -> t2))
 
 -- TODO: Check how many reified types can be removed in this AST
 data OpenAcc aenv lab alab args t where
@@ -51,25 +51,25 @@ data OpenAcc aenv lab alab args t where
     Anil    :: OpenAcc aenv lab alab args ()
 
     Acond   :: ArraysR a
-            -> Exp aenv lab alab () A.PrimBool
+            -> Exp aenv lab alab () () A.PrimBool
             -> OpenAcc aenv lab alab args a
             -> OpenAcc aenv lab alab args a
             -> OpenAcc aenv lab alab args a
 
     Map     :: ArrayR (Array sh t2)
-            -> ExpLambda1 aenv lab alab sh t1 t2
+            -> ExpLambda1 aenv lab alab () sh t1 t2
             -> OpenAcc aenv lab alab args (Array sh t1)
             -> OpenAcc aenv lab alab args (Array sh t2)
 
     ZipWith :: ArrayR (Array sh t3)
-            -> ExpLambda1 aenv lab alab sh (t1, t2) t3
+            -> ExpLambda1 aenv lab alab () sh (t1, t2) t3
             -> OpenAcc aenv lab alab args (Array sh t1)
             -> OpenAcc aenv lab alab args (Array sh t2)
             -> OpenAcc aenv lab alab args (Array sh t3)
 
     Fold    :: ArrayR (Array sh e)
-            -> Fun aenv lab alab ((e, e) -> e)
-            -> Maybe (Exp aenv lab alab () e)
+            -> Fun aenv lab alab () ((e, e) -> e)
+            -> Maybe (Exp aenv lab alab () () e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array sh e)
 
@@ -79,33 +79,33 @@ data OpenAcc aenv lab alab args t where
 
     Scan    :: ArrayR (Array (sh, Int) e)
             -> A.Direction
-            -> Fun aenv lab alab ((e, e) -> e)
-            -> Maybe (Exp aenv lab alab () e)
+            -> Fun aenv lab alab () ((e, e) -> e)
+            -> Maybe (Exp aenv lab alab () () e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
 
     Scan'   :: ArraysR (Array (sh, Int) e, Array sh e)
             -> A.Direction
-            -> Fun aenv lab alab ((e, e) -> e)
-            -> Exp aenv lab alab () e
+            -> Fun aenv lab alab () ((e, e) -> e)
+            -> Exp aenv lab alab () () e
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e, Array sh e)
 
     Generate :: ArrayR (Array sh e)
-             -> Exp aenv lab alab () sh
-             -> ExpLambda1 aenv lab alab sh sh e
+             -> Exp aenv lab alab () () sh
+             -> ExpLambda1 aenv lab alab () sh sh e
              -> OpenAcc aenv lab alab args (Array sh e)
 
     Replicate :: ArrayR (Array sh e)
               -> SliceIndex slix sl co sh
-              -> Exp aenv lab alab () slix
+              -> Exp aenv lab alab () () slix
               -> OpenAcc aenv lab alab args (Array sl e)
               -> OpenAcc aenv lab alab args (Array sh e)
 
     Slice   :: ArrayR (Array sl e)
             -> SliceIndex slix sl co sh
             -> OpenAcc aenv lab alab args (Array sh e)
-            -> Exp aenv lab alab () slix
+            -> Exp aenv lab alab () () slix
             -> OpenAcc aenv lab alab args (Array sl e)
 
     -- Has no equivalent in the real AST. Is converted using backpermute, reshape, fold.
@@ -113,18 +113,18 @@ data OpenAcc aenv lab alab args t where
     -- Like 'add' is the dual of 'dup', Reduce is the dual of Replicate.
     Reduce  :: ArrayR (Array redsh e)
             -> ReduceSpec slix redsh fullsh
-            -> Fun aenv lab alab (e -> e -> e)
+            -> Fun aenv lab alab () (e -> e -> e)
             -> OpenAcc aenv lab alab args (Array fullsh e)
             -> OpenAcc aenv lab alab args (Array redsh e)
 
     Reshape :: ArrayR (Array sh e)
-            -> Exp aenv lab alab () sh
+            -> Exp aenv lab alab () () sh
             -> OpenAcc aenv lab alab args (Array sh' e)
             -> OpenAcc aenv lab alab args (Array sh e)
 
     Backpermute :: ArrayR (Array sh' e)
-                -> Exp aenv lab alab () sh'                 -- dimensions of the result
-                -> Fun aenv lab alab (sh' -> sh)            -- permutation function
+                -> Exp aenv lab alab () () sh'                 -- dimensions of the result
+                -> Fun aenv lab alab () (sh' -> sh)            -- permutation function
                 -> OpenAcc aenv lab alab args (Array sh e)  -- source array
                 -> OpenAcc aenv lab alab args (Array sh' e)
 
@@ -132,9 +132,9 @@ data OpenAcc aenv lab alab args t where
     -- don't currently support taking the derivative of a Permute: we only
     -- generate it as the derivative of a Backpermute.
     Permute :: ArrayR (Array sh' e)
-            -> Fun aenv lab alab (e -> e -> e)            -- combination function
+            -> Fun aenv lab alab () (e -> e -> e)            -- combination function
             -> OpenAcc aenv lab alab args (Array sh' e)   -- default values
-            -> Fun aenv lab alab (sh -> A.PrimMaybe sh')  -- permutation function
+            -> Fun aenv lab alab () (sh -> A.PrimMaybe sh')  -- permutation function
             -> OpenAcc aenv lab alab args (Array sh e)    -- source array
             -> OpenAcc aenv lab alab args (Array sh' e)
 
@@ -308,7 +308,7 @@ showsAcc se _ (Avar (A.Var _ idx)) =
 showsAcc se d (Alabel lab) = showParen (d > 0) $
     showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
-showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab sh t1 t2 -> ShowS
+showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv sh t1 t2 -> ShowS
 showsLambda se d (Right fun) = showsFun se d fun
 showsLambda _ _ (Left _) = showString "{splitlambda}"
 

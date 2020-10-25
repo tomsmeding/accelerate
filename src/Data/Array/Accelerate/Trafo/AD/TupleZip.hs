@@ -16,23 +16,23 @@ import Data.Array.Accelerate.Trafo.Var
 
 
 type Combiner m lab alab =
-  forall s env aenv args.
-    ScalarType s -> OpenExp env aenv lab alab args s
-                 -> OpenExp env aenv lab alab args s
-                 -> m (OpenExp env aenv lab alab args s)
+  forall s env aenv args tenv.
+    ScalarType s -> OpenExp env aenv lab alab args tenv s
+                 -> OpenExp env aenv lab alab args tenv s
+                 -> m (OpenExp env aenv lab alab args tenv s)
 
 type Combiner' lab alab =
-  forall s env aenv args.
-    ScalarType s -> OpenExp env aenv lab alab args s
-                 -> OpenExp env aenv lab alab args s
-                 -> OpenExp env aenv lab alab args s
+  forall s env aenv args tenv.
+    ScalarType s -> OpenExp env aenv lab alab args tenv s
+                 -> OpenExp env aenv lab alab args tenv s
+                 -> OpenExp env aenv lab alab args tenv s
 
 varsZip :: Applicative m
         => Combiner m lab alab
         -> TypeR t
         -> A.ExpVars env t
         -> A.ExpVars env t
-        -> m (OpenExp env aenv lab alab args t)
+        -> m (OpenExp env aenv lab alab args tenv t)
 varsZip _ TupRunit TupRunit TupRunit =
   pure Nil
 varsZip combine (TupRsingle ty) (TupRsingle v1) (TupRsingle v2) =
@@ -45,9 +45,9 @@ varsZip _ _ _ _ = error "inconsistency in varsZip"
 tupleZip :: Applicative m
          => TypeR t
          -> Combiner m lab alab
-         -> OpenExp env aenv lab alab args t
-         -> OpenExp env aenv lab alab args t
-         -> m (OpenExp env aenv lab alab args t)
+         -> OpenExp env aenv lab alab args tenv t
+         -> OpenExp env aenv lab alab args tenv t
+         -> m (OpenExp env aenv lab alab args tenv t)
 tupleZip ty combine e1 e2
   | DeclareVars lhs1 _ value1 <- declareVars ty
   , DeclareVars lhs2 _ value2 <- declareVars ty
@@ -56,8 +56,8 @@ tupleZip ty combine e1 e2
 
 tupleZip' :: TypeR t
           -> Combiner' lab alab
-          -> OpenExp env aenv lab alab args t
-          -> OpenExp env aenv lab alab args t
-          -> OpenExp env aenv lab alab args t
+          -> OpenExp env aenv lab alab args tenv t
+          -> OpenExp env aenv lab alab args tenv t
+          -> OpenExp env aenv lab alab args tenv t
 tupleZip' ty combine' e1 e2 =
   runIdentity $ tupleZip ty (\sty sub1 sub2 -> pure (combine' sty sub1 sub2)) e1 e2

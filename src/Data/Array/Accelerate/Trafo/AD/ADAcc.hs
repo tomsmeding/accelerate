@@ -1043,7 +1043,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
 
       expr -> trace ("\n!! " ++ show expr) undefined
   where
-    smartZipWith :: Fun aenv lab alab ((e1, e2) -> e)
+    smartZipWith :: Fun aenv lab alab () ((e1, e2) -> e)
                  -> OpenAcc aenv lab alab args (Array sh e1)
                  -> OpenAcc aenv lab alab args (Array sh e2)
                  -> OpenAcc aenv lab alab args (Array sh e)
@@ -1052,10 +1052,10 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
         in ZipWith (ArrayR shtype (etypeOf body)) (Right f) a1 a2
     smartZipWith _ _ _ = error "impossible GADTs"
 
-    smartInnerPermute :: (forall env aenv'. OpenExp env aenv' lab alab () Int
-                                         -> OpenExp env aenv' lab alab () Int)  -- ^ new inner dimension size
-                      -> (forall env aenv'. OpenExp env aenv' lab alab () Int
-                                         -> OpenExp env aenv' lab alab () Int)  -- ^ inner index transformer
+    smartInnerPermute :: (forall env aenv'. OpenExp env aenv' lab alab () () Int
+                                         -> OpenExp env aenv' lab alab () () Int)  -- ^ new inner dimension size
+                      -> (forall env aenv'. OpenExp env aenv' lab alab () () Int
+                                         -> OpenExp env aenv' lab alab () () Int)  -- ^ inner index transformer
                       -> OpenAcc aenv lab alab args (Array (sh, Int) t)
                       -> OpenAcc aenv lab alab args (Array (sh, Int) t)
     smartInnerPermute sizeExpr indexExpr a
@@ -1084,7 +1084,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
     smartInit = smartInnerPermute (\sz -> smartSub numType sz (Const scalarType 1))
                                   (\idx -> idx)
 
-    smartCons :: (forall env aenv'. OpenExp env aenv' lab alab () t)
+    smartCons :: (forall env aenv'. OpenExp env aenv' lab alab () () t)
               -> OpenAcc aenv lab alab args (Array (sh, Int) t)
               -> OpenAcc aenv lab alab args (Array (sh, Int) t)
     smartCons prefix a
@@ -1108,7 +1108,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                            prefix)))))
     smartCons _ _ = error "impossible GADTs"
 
-    timesLam :: NumType t -> Fun aenv lab alab ((t, t) -> t)
+    timesLam :: NumType t -> Fun aenv lab alab tenv ((t, t) -> t)
     timesLam ty =
         let sty = SingleScalarType (NumSingleType ty)
         in Lam (A.LeftHandSidePair (A.LeftHandSideSingle sty) (A.LeftHandSideSingle sty))
@@ -1208,7 +1208,7 @@ arrayPlus a1 a2
 arrayPlus _ _ = error "unreachable"
 
 arraySum :: ArrayR (Array sh t)
-         -> Exp aenv lab alab () sh
+         -> Exp aenv lab alab () () sh
          -> [OpenAcc aenv lab alab args (Array sh t)]
          -> OpenAcc aenv lab alab args (Array sh t)
 arraySum (ArrayR sht ty) she [] = generateConstantArray ty (zeroForType ty) sht she
@@ -1227,26 +1227,26 @@ arraysSum (TupRpair t1 t2) (TupRpair pvars1 pvars2) l =
           (arraysSum t2 pvars2 (map smartSnd l))
 arraysSum _ _ _ = error "arraysSum: Invalid GADTs"
 
-generateConstantArray :: TypeR t -> Exp aenv lab alab () t
-                      -> ShapeR sh -> Exp aenv lab alab () sh
+generateConstantArray :: TypeR t -> Exp aenv lab alab () () t
+                      -> ShapeR sh -> Exp aenv lab alab () () sh
                       -> OpenAcc aenv lab alab args (Array sh t)
 generateConstantArray ty e sht she =
     Generate (ArrayR sht ty) she
              (Right (Lam (A.LeftHandSideWildcard (shapeType sht)) (Body e)))
 
-expFstLam :: TypeR (t1, t2) -> Fun aenv lab alab ((t1, t2) -> t1)
+expFstLam :: TypeR (t1, t2) -> Fun aenv lab alab tenv ((t1, t2) -> t1)
 expFstLam (TupRpair t1 t2)
   | LetBoundExpE lhs ex <- elhsCopy t1
   = Lam (A.LeftHandSidePair lhs (A.LeftHandSideWildcard t2)) (Body (evars ex))
 expFstLam _ = error "expFstLam: Invalid GADTs"
 
-expSndLam :: TypeR (t1, t2) -> Fun aenv lab alab ((t1, t2) -> t2)
+expSndLam :: TypeR (t1, t2) -> Fun aenv lab alab tenv ((t1, t2) -> t2)
 expSndLam (TupRpair t1 t2)
   | LetBoundExpE lhs ex <- elhsCopy t2
   = Lam (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs) (Body (evars ex))
 expSndLam _ = error "expSndLam: Invalid GADTs"
 
-plusLam :: TypeR t -> Fun aenv lab alab (t -> t -> t)
+plusLam :: TypeR t -> Fun aenv lab alab tenv (t -> t -> t)
 plusLam ty
   | DeclareVars lhs1 _ varsgen1 <- declareVars ty
   , DeclareVars lhs2 weaken2 varsgen2 <- declareVars ty
@@ -1269,8 +1269,9 @@ reduceSpecFromReplicate (SliceFixed slix) = RSpecReduce (reduceSpecFromReplicate
 data ReplicateOneMore sh =
     forall slix.
         ReplicateOneMore (SliceIndex slix sh ((), Int) (sh, Int))
-                         (forall env aenv lab alab args. OpenExp env aenv lab alab args (sh, Int)
-                                                      -> OpenExp env aenv lab alab args slix)
+                         (forall env aenv lab alab args tenv.
+                              OpenExp env aenv lab alab args tenv (sh, Int)
+                           -> OpenExp env aenv lab alab args tenv slix)
 
 -- Produces a SliceIndex that can be passed to Replicate, and a function that
 -- produces the slix expression parameter to Replicate, given an expression for
@@ -1287,7 +1288,7 @@ replicateOneMore sh
 data SliceCopy sh =
     forall slix.
         SliceCopy (SliceIndex slix sh () sh)
-                  (forall env aenv lab alab args. OpenExp env aenv lab alab args slix)
+                  (forall env aenv lab alab args tenv. OpenExp env aenv lab alab args tenv slix)
 
 sliceCopy :: ShapeR sh -> SliceCopy sh
 sliceCopy ShapeRz = SliceCopy SliceNil Nil
@@ -1301,8 +1302,8 @@ sliceCopy (ShapeRsnoc sh)
 -- Generate.
 sliceDualLambda :: SliceIndex slix sl co sh
                 -> A.Var ArrayR aenv (Array sl e)
-                -> Exp aenv lab alab () slix
-                -> Fun aenv lab alab (sh -> e)
+                -> Exp aenv lab alab () tenv slix
+                -> Fun aenv lab alab tenv (sh -> e)
 sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
   | LetBoundExpE indexlhs indexvars' <- elhsCopy (shapeType (sliceDomainR slix))
   , LetBoundExpE slicelhs slicevars <- elhsCopy (sliceIndexTypeR slix)
@@ -1320,7 +1321,7 @@ sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
     indexSlice (SliceFixed slix') (TupRpair vars _) = indexSlice slix' vars
     indexSlice _ _ = error "impossible GADTs"
 
-    genCond :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env slix -> OpenExp env aenv lab alab args A.PrimBool
+    genCond :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env slix -> OpenExp env aenv lab alab args tenv A.PrimBool
     genCond SliceNil TupRunit TupRunit = mkBool True
     genCond (SliceAll slix') (TupRpair idxvs _) (TupRpair slvs _) = genCond slix' idxvs slvs
     genCond (SliceFixed slix') (TupRpair idxvs (TupRsingle idxv)) (TupRpair slvs (TupRsingle slv)) =
@@ -1367,21 +1368,21 @@ accLabelParents = \case
     fromLabel (Alabel lab) = [AnyLabel lab]
     fromLabel _ = error "accLabelParents: Parent is not a label"
 
-    expLabels :: OpenExp env aenv lab alab args t -> [AnyLabel ArraysR alab]
+    expLabels :: OpenExp env aenv lab alab args tenv t -> [AnyLabel ArraysR alab]
     expLabels e = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expALabels e]
 
-    funLabels :: OpenFun env aenv lab alab t -> [AnyLabel ArraysR alab]
+    funLabels :: OpenFun env aenv lab alab tenv t -> [AnyLabel ArraysR alab]
     funLabels (Lam _ f) = funLabels f
     funLabels (Body e) = expLabels e
 
-    lamLabels :: ExpLambda1 aenv lab alab sh t1 t2 -> [AnyLabel ArraysR alab]
+    lamLabels :: ExpLambda1 aenv lab alab tenv sh t1 t2 -> [AnyLabel ArraysR alab]
     lamLabels (Left (SplitLambdaAD _ _ fvtup _)) = [AnyLabel (tupleLabel lab) | Some lab <- enumerateTupR fvtup]
     lamLabels (Right fun) = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expFunALabels fun]
 
 resolveAlabs :: (Ord alab, Show alab)
              => AContext alab aenv
-             -> OpenExp env aenv' lab alab args t
-             -> OpenExp env aenv lab alab' args t
+             -> OpenExp env aenv' lab alab args tenv t
+             -> OpenExp env aenv lab alab' args tenv t
 resolveAlabs (Context labelenv bindmap) =
     inlineAvarLabels' $ \lab ->
         case bindmap `dmapFind` tupleLabel (fmapLabel P lab) of
@@ -1392,8 +1393,8 @@ resolveAlabs (Context labelenv bindmap) =
 
 resolveAlabsFun :: (Ord alab, Show alab)
                 => AContext alab aenv
-                -> OpenFun env aenv' lab alab t
-                -> OpenFun env aenv lab alab' t
+                -> OpenFun env aenv' lab alab tenv t
+                -> OpenFun env aenv lab alab' tenv t
 resolveAlabsFun ctx (Lam lhs fun) = Lam lhs (resolveAlabsFun ctx fun)
 resolveAlabsFun ctx (Body e) = Body (resolveAlabs ctx e)
 

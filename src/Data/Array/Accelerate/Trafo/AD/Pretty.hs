@@ -90,13 +90,13 @@ tuple layouts@(l:ls)
   | Just strs <- mapM fromSingleLine layouts = string ("(" ++ intercalate ", " strs ++ ")")
   | otherwise = insertAtEnd ")" $ lblock (lprefix "(" l : map (lprefix ",") ls)
 
-instance (Show lab, Show alab) => Pretty (OpenExp env aenv lab alab args t) where
+instance (Show lab, Show alab) => Pretty (OpenExp env aenv lab alab args tenv t) where
     buildLayout = layoutExp (ShowEnv show show 0 [] []) 0
 
 instance (Show lab, Show alab) => Pretty (OpenAcc aenv lab alab args t) where
     buildLayout = layoutAcc (ShowEnv show show 0 () []) 0
 
-layoutExp :: EShowEnv lab alab -> Int -> OpenExp env aenv lab alab args t -> Layout
+layoutExp :: EShowEnv lab alab -> Int -> OpenExp env aenv lab alab args tenv t -> Layout
 layoutExp _ _ (Const ty x) = string (showScalar ty x)
 layoutExp se d (PrimApp _ f (Pair _ e1 e2)) | isInfixOp f =
     let prec = precedence f
@@ -165,6 +165,8 @@ layoutExp se _ (Var (A.Var _ idx)) =
     case drop (idxToInt idx) (seEnv se) of
         descr : _ -> string descr
         [] -> string ("tE_UP" ++ show (1 + idxToInt idx - length (seEnv se)))
+layoutExp _ d (FreeVar (A.Var ty idx)) = parenthesise (d > 0) $
+    string ("tFREE" ++ show (1 + idxToInt idx) ++ " :: " ++ show ty)
 layoutExp se d (Label lab) = parenthesise (d > 0) $
     string ('L' : seLabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
@@ -279,7 +281,7 @@ layoutAcc se _ (Avar (A.Var _ idx)) =
 layoutAcc se d (Alabel lab) = parenthesise (d > 0) $
     string ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
-layoutFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab t -> Layout
+layoutFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab tenv t -> Layout
 layoutFun se d (Body expr) = layoutExp se d expr
 layoutFun se d (Lam lhs fun) =
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
@@ -288,7 +290,7 @@ layoutFun se d (Lam lhs fun) =
         LMaybeHanging (string ("\\" ++ descr ++ " ->"))
                       (layoutFun (se { seSeed = seed', seEnv = env' }) 0 fun)
 
-layoutLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab sh t1 t2 -> Layout
+layoutLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv sh t1 t2 -> Layout
 layoutLambda se d (Right fun) = layoutFun se d fun
 layoutLambda _ _ (Left _) = string "{splitlambda}"
 

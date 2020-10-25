@@ -12,13 +12,13 @@ import Data.Array.Accelerate.Trafo.AD.TupleZip
 
 
 class IsAdditive s where
-    zeroForType' :: (forall a. Num a => a) -> s t -> OpenExp env aenv lab alab args t
-    expPlus :: s t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
+    zeroForType' :: (forall a. Num a => a) -> s t -> OpenExp env aenv lab alab args tenv t
+    expPlus :: s t -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv t
 
-    zeroForType :: s t -> OpenExp env aenv lab alab args t
+    zeroForType :: s t -> OpenExp env aenv lab alab args tenv t
     zeroForType = zeroForType' 0
 
-    expSum :: s t -> [OpenExp env aenv lab alab args t] -> OpenExp env aenv lab alab args t
+    expSum :: s t -> [OpenExp env aenv lab alab args tenv t] -> OpenExp env aenv lab alab args tenv t
     expSum ty [] = zeroForType ty
     expSum ty es = foldl1 (expPlus ty) es
 

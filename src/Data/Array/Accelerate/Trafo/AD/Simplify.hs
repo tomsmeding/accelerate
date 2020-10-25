@@ -32,7 +32,7 @@ simplifyAcc a = let res = snd (goAcc a SNil)
 -- simplifyAcc = snd . flip goAcc SNil
 -- simplifyAcc = id
 
-simplifyExp :: OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t
+simplifyExp :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv t
 simplifyExp = snd . flip goExp (SNil, SNil)
 -- simplifyExp = id
 
@@ -104,10 +104,10 @@ goAcc = \case
     Avar var ->
       \s -> (statAddV var 1 s, Avar var)
 
-goExp' :: OpenExp env aenv lab alab args t -> Stats aenv -> (Stats aenv, OpenExp env aenv lab alab args t)
+goExp' :: OpenExp env aenv lab alab args tenv t -> Stats aenv -> (Stats aenv, OpenExp env aenv lab alab args tenv t)
 goExp' e s = let ((s', SNil), e') = goExp e (s, SNil) in (s', e')
 
-goExp :: OpenExp env aenv lab alab args t -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), OpenExp env aenv lab alab args t)
+goExp :: OpenExp env aenv lab alab args tenv t -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), OpenExp env aenv lab alab args tenv t)
 goExp = \case
     -- Let rotation
     Let lhs1 (Let lhs2 rhs2 bd2) bd1
@@ -151,7 +151,7 @@ goExp = \case
               (TIRight ti', (s', Pair _ _ e2)) -> (s', elimEmptyTI ty ti' e2)
               (_, (s', e')) -> (s', Get ty ti e')
       where
-        elimEmptyTI :: TypeR t' -> TupleIdx t t' -> OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args t'
+        elimEmptyTI :: TypeR t' -> TupleIdx t t' -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv t'
         elimEmptyTI _ TIHere e' = e'
         elimEmptyTI ty' ti' e' = Get ty' ti' e'
 
@@ -169,21 +169,22 @@ goExp = \case
             in (second (spopLHS lhs) s2, Let lhs rhs' e')
     Arg ty idx -> returnS $ Arg ty idx
     Var var -> \s -> (second (statAddV var 1) s, Var var)
+    FreeVar var -> returnS $ FreeVar var
     Label lab -> returnS $ Label lab
 
 goVarOrLab :: Either (A.ArrayVar aenv t) (ADLabel lab t) -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), Either (A.ArrayVar aenv t) (ADLabel lab t))
 goVarOrLab (Left var) (sa, se) = ((statAddV var 2 sa, se), Left var)
 goVarOrLab (Right lab) s = (s, Right lab)
 
-simplifyFun :: OpenFun env aenv lab alab t -> Stats aenv -> (Stats aenv, OpenFun env aenv lab alab t)
+simplifyFun :: OpenFun env aenv lab alab tenv t -> Stats aenv -> (Stats aenv, OpenFun env aenv lab alab tenv t)
 simplifyFun (Lam lhs fun) = Lam lhs !$! simplifyFun fun
 simplifyFun (Body ex) = Body !$! goExp' ex
 
-simplifyLam1 :: ExpLambda1 aenv lab alab sh t1 t2 -> Stats aenv -> (Stats aenv, ExpLambda1 aenv lab alab sh t1 t2)
+simplifyLam1 :: ExpLambda1 aenv lab alab tenv sh t1 t2 -> Stats aenv -> (Stats aenv, ExpLambda1 aenv lab alab tenv sh t1 t2)
 simplifyLam1 (Left lam) = returnS (Left lam)
 simplifyLam1 (Right fun) = \s -> Right <$> simplifyFun fun s
 
-noCostCopy :: OpenExp env aenv lab alab args t -> Bool
+noCostCopy :: OpenExp env aenv lab alab args tenv t -> Bool
 noCostCopy (Var _) = True
 noCostCopy (Const _ _) = True
 noCostCopy _ = False
@@ -229,7 +230,7 @@ inlineA f = \case
       -> Alet lhs2 (inlineA f a1) (inlineA (sinkInlinerALHS lhs lhs2 f) a2)
     Avar var -> unInlinerA f var
 
-inlineAE :: InlinerA aenv aenv' lab alab aargs -> OpenExp env aenv lab alab args t -> OpenExp env aenv' lab alab args t
+inlineAE :: InlinerA aenv aenv' lab alab aargs -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv' lab alab args tenv t
 inlineAE f = \case
     Const ty x -> Const ty x
     PrimApp ty op e -> PrimApp ty op (inlineAE f e)
@@ -243,6 +244,7 @@ inlineAE f = \case
     Let lhs rhs e -> Let lhs (inlineAE f rhs) (inlineAE f e)
     Arg ty idx -> Arg ty idx
     Var var -> Var var
+    FreeVar var -> FreeVar var
     Label lab -> Label lab
   where
     inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args -> Either (A.ArrayVar aenv t) (ADLabel alab t) -> Either (A.ArrayVar aenv' t) (ADLabel alab t)
@@ -251,29 +253,29 @@ inlineAE f = \case
       | otherwise = error "inlineAE: Inlining array variable referenced in expression"
     inlineAE_VarOrLab _ (Right lab) = Right lab
 
-inlineAEF :: InlinerA aenv aenv' lab alab args -> OpenFun env aenv lab alab t -> OpenFun env aenv' lab alab t
+inlineAEF :: InlinerA aenv aenv' lab alab args -> OpenFun env aenv lab alab tenv t -> OpenFun env aenv' lab alab tenv t
 inlineAEF f (Lam lhs fun) = Lam lhs (inlineAEF f fun)
 inlineAEF f (Body e) = Body (inlineAE f e)
 
-inlineALam :: InlinerA aenv aenv' lab alab args -> ExpLambda1 aenv lab alab sh t t' -> ExpLambda1 aenv' lab alab sh t  t'
+inlineALam :: InlinerA aenv aenv' lab alab args -> ExpLambda1 aenv lab alab tenv sh t t' -> ExpLambda1 aenv' lab alab tenv sh t  t'
 inlineALam _ (Left lam) = Left lam
 inlineALam f (Right fun) = Right (inlineAEF f fun)
 
-data InlinerE env env' aenv lab alab args =
-    InlinerE { unInlinerE :: forall t. A.ExpVar env t -> OpenExp env' aenv lab alab args t }
+data InlinerE env env' aenv lab alab args tenv =
+    InlinerE { unInlinerE :: forall t. A.ExpVar env t -> OpenExp env' aenv lab alab args tenv t }
 
-sinkInlinerESucc :: InlinerE env env' aenv lab alab args -> InlinerE (env, a) (env', a) aenv lab alab args
+sinkInlinerESucc :: InlinerE env env' aenv lab alab args tenv -> InlinerE (env, a) (env', a) aenv lab alab args tenv
 sinkInlinerESucc (InlinerE f) =
     InlinerE (\case A.Var ty ZeroIdx -> Var (A.Var ty ZeroIdx)
                     A.Var ty (SuccIdx idx) -> sinkExp (weakenSucc' weakenId) (f (A.Var ty idx)))
 
-sinkInlinerELHS :: A.ELeftHandSide t env env2 -> A.ELeftHandSide t env' env2' -> InlinerE env env' aenv lab alab args -> InlinerE env2 env2' aenv lab alab args
+sinkInlinerELHS :: A.ELeftHandSide t env env2 -> A.ELeftHandSide t env' env2' -> InlinerE env env' aenv lab alab args tenv -> InlinerE env2 env2' aenv lab alab args tenv
 sinkInlinerELHS (LeftHandSideWildcard _) (LeftHandSideWildcard _) = id
 sinkInlinerELHS (LeftHandSideSingle _) (LeftHandSideSingle _) = sinkInlinerESucc
 sinkInlinerELHS (LeftHandSidePair lhs1 lhs2) (LeftHandSidePair lhs1' lhs2') = sinkInlinerELHS lhs2 lhs2' . sinkInlinerELHS lhs1 lhs1'
 sinkInlinerELHS _ _ = error "sinkInlinerELHS: Unequal LHS's"
 
-inlineE :: InlinerE env env' aenv lab alab args -> OpenExp env aenv lab alab args t -> OpenExp env' aenv lab alab args t
+inlineE :: InlinerE env env' aenv lab alab args tenv -> OpenExp env aenv lab alab args tenv t -> OpenExp env' aenv lab alab args tenv t
 inlineE f = \case
     Const ty x -> Const ty x
     PrimApp ty op e -> PrimApp ty op (inlineE f e)
@@ -289,6 +291,7 @@ inlineE f = \case
       -> Let lhs' (inlineE f rhs) (inlineE (sinkInlinerELHS lhs lhs' f) e)
     Arg ty idx -> Arg ty idx
     Var var -> unInlinerE f var
+    FreeVar var -> FreeVar var
     Label lab -> Label lab
 
 data Stats env where

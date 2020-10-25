@@ -202,6 +202,16 @@ adtest3 = do
                        (A.use (A.fromList (Z :. (11 :: Int)) [-5..5])))
   print . I.run . A.unit $ A.gradientE (\(A.T2 x i) -> x * A.toFloating (i `div` 2)) (A.T2 (42 :: A.Exp Float) (3 :: A.Exp Int))
 
+adtestFree :: IO ()
+adtestFree = do
+  print $ I.run (A.map (let c = 1.0 in (c +) . A.gradientE @Float (\x -> c * x))
+                       (A.use (A.fromList (Z :. (1 :: Int)) [1.0])))
+
+  -- This still fails, because free variables in gradientA are not yet implemented.
+  -- print $ I.run (let sharedArr = A.use (A.fromList @_ @Float (Z :. (1 :: Int)) [1.0])
+  --                    arr1 = A.use (A.fromList @_ @Float (Z :. (1 :: Int)) [2.0])
+  --                in A.zipWith (+) sharedArr (A.gradientA (A.sum . A.zipWith (*) sharedArr) arr1))
+
 adtuple1 :: IO ()
 adtuple1 = do
   print . I.run . A.unit $ A.gradientE @Float
@@ -312,11 +322,12 @@ main = do
   -- adtest
   -- adtest2
   -- adtest3
+  adtestFree
   -- adtuple1
   -- adtuple2
   -- adtuple3
   -- arrad
-  adfold
+  -- adfold
   -- neural
   -- neural2
   -- Playground.Neural.main

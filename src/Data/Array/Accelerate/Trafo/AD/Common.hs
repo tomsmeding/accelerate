@@ -28,6 +28,10 @@ data LabVal s lab env where
     LEmpty :: LabVal s lab ()
     LPush :: LabVal s lab env -> DLabel s lab t -> LabVal s lab (env, t)
 
+data PartialVal s topenv env where
+    PTEmpty :: PartialVal s topenv topenv
+    PTPush :: PartialVal s topenv env -> s t -> PartialVal s topenv (env, t)
+
 data DLabel s lab t =
     DLabel { labelType :: s t
            , labelLabel :: lab }
@@ -199,6 +203,12 @@ lpushLabTup labelenv (LeftHandSideSingle _) (TupRsingle lab) = LPush labelenv la
 lpushLabTup labelenv (LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) =
     lpushLabTup (lpushLabTup labelenv lhs1 labs1) lhs2 labs2
 lpushLabTup _ _ _ = error "lpushLabTup: impossible GADTs"
+
+
+pvalPushLHS :: LeftHandSide s t env env' -> PartialVal s topenv env -> PartialVal s topenv env'
+pvalPushLHS (LeftHandSideWildcard _) tv = tv
+pvalPushLHS (LeftHandSideSingle sty) tv = PTPush tv sty
+pvalPushLHS (LeftHandSidePair lhs1 lhs2) tv = pvalPushLHS lhs2 (pvalPushLHS lhs1 tv)
 
 
 -- TODO: Is PDAux actually used anywhere? If not, remove the constructor and the other Aux stuff

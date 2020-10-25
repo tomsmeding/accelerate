@@ -68,13 +68,13 @@ genSingleIds (TupRpair t1 t2) = do
 
 
 -- TODO: make this a data definition, not a tuple
-type Exploded aenv lab alab args res = (EDLabelT lab res, DMap (EDLabelT lab) (Exp aenv lab alab args), DMap (A.Idx args) (EDLabelT lab))
+type Exploded aenv lab alab args tenv res = (EDLabelT lab res, DMap (EDLabelT lab) (Exp aenv lab alab args tenv), DMap (A.Idx args) (EDLabelT lab))
 
-showExploded :: (Ord lab, Show lab, Show alab) => Exploded aenv lab alab args t -> String
+showExploded :: (Ord lab, Show lab, Show alab) => Exploded aenv lab alab args tenv t -> String
 showExploded (endlab, nodemap, argmap) =
     "(" ++ showDLabel endlab ++ ", " ++ showNodemap nodemap ++ ", " ++ showArgmap argmap ++ ")"
 
-showNodemap :: (Ord lab, Show lab, Show alab) => DMap (EDLabelT lab) (Exp aenv lab alab args) -> String
+showNodemap :: (Ord lab, Show lab, Show alab) => DMap (EDLabelT lab) (Exp aenv lab alab args tenv) -> String
 showNodemap nodemap =
     let tups = sortOn fst [(lab, (showDLabel dlab, show expr))
                           | dlab@(DLabel _ lab) :=> expr <- DMap.assocs nodemap]
@@ -92,7 +92,7 @@ showList' :: (a -> String) -> [a] -> String
 showList' f l = "[" ++ intercalate ", " (map f l) ++ "]"
 
 -- Assumes the expression does not contain Arg
-generaliseArgs :: OpenExp env aenv lab alab args t -> OpenExp env aenv lab alab args' t
+generaliseArgs :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args' tenv t
 generaliseArgs (Const ty x) = Const ty x
 generaliseArgs (PrimApp ty op ex) = PrimApp ty op (generaliseArgs ex)
 generaliseArgs (Pair ty e1 e2) = Pair ty (generaliseArgs e1) (generaliseArgs e2)
@@ -104,10 +104,11 @@ generaliseArgs (ShapeSize sht e) = ShapeSize sht (generaliseArgs e)
 generaliseArgs (Get ty path ex) = Get ty path (generaliseArgs ex)
 generaliseArgs (Let lhs rhs ex) = Let lhs (generaliseArgs rhs) (generaliseArgs ex)
 generaliseArgs (Var v) = Var v
+generaliseArgs (FreeVar v) = FreeVar v
 generaliseArgs (Arg _ _) = error "generaliseArgs: Arg found"
 generaliseArgs (Label labs) = Label labs
 
-data ReverseADResE aenv alab t = forall env. ReverseADResE (A.ELeftHandSide t () env) (OpenExp env aenv (PDExp Int) alab () t)
+data ReverseADResE aenv alab tenv t = forall env. ReverseADResE (A.ELeftHandSide t () env) (OpenExp env aenv (PDExp Int) alab () tenv t)
 
 -- TODO: see the argument as one (1) tuple-typed variable of which the adjoint is requested. This should simplify this code a lot.
 -- Action plan:
@@ -124,7 +125,7 @@ data ReverseADResE aenv alab t = forall env. ReverseADResE (A.ELeftHandSide t ()
 --   values with references to this extended part of the environment. The real
 --   LHS needs to be added by surrounding code.
 -- TODO: remove Show constraint from alab
-reverseAD :: Show alab => A.ELeftHandSide t () env -> OpenExp env aenv unused alab () Float -> ReverseADResE aenv alab t
+reverseAD :: Show alab => A.ELeftHandSide t () env -> OpenExp env aenv unused alab () tenv Float -> ReverseADResE aenv alab tenv t
 reverseAD paramlhs expr
   | ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
   , DeclareVars paramlhs'2 _ varsgen <- declareVars (A.lhsToTupR paramlhs)
@@ -149,7 +150,7 @@ reverseAD paramlhs expr
           trace ("AD result: " ++ prettyPrint transformedExp) $
           ReverseADResE paramlhs' (realiseArgs transformedExp paramlhs')
 
-varsToArgs :: A.ExpVars env t -> OpenExp env' aenv lab alab env t
+varsToArgs :: A.ExpVars env t -> OpenExp env' aenv lab alab env tenv t
 varsToArgs TupRunit = Nil
 varsToArgs (TupRsingle (A.Var ty idx)) = Arg ty idx
 varsToArgs (TupRpair vars1 vars2) =
@@ -162,8 +163,8 @@ varsToArgs (TupRpair vars1 vars2) =
 -- Nil/Pair/Arg.
 produceGradient :: DMap (Idx args) (EDLabelT Int)
                 -> EContext Int env
-                -> OpenExp () aenv unused unused2 args t
-                -> OpenExp env aenv (PDExp Int) alab args' t
+                -> OpenExp () aenv unused unused2 args tenv t
+                -> OpenExp env aenv (PDExp Int) alab args' tenv t
 produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case argstup of
     Nil -> Nil
     Pair ty e1 e2 -> Pair ty (produceGradient argLabelMap context e1)
@@ -178,11 +179,11 @@ produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case ar
                         'A' : show (A.idxToInt idx) ++ " not computed"
     _ -> error "produceGradient: what?"
 
-splitLambdaAD :: forall f aenv t t' sh unused unused2. Functor f
+splitLambdaAD :: forall f aenv t t' sh unused unused2 tenv. Functor f
               => LabVal ArrayR Int aenv
               -> (forall ty. TypeR ty -> f (DLabel ArrayR Int (Array sh ty)))
-              -> Fun aenv unused unused2 (t -> t')
-              -> f (SplitLambdaAD t t' (PDExp Int) Int sh)
+              -> Fun aenv unused unused2 tenv (t -> t')
+              -> f (SplitLambdaAD t t' (PDExp Int) Int tenv sh)
 splitLambdaAD alabelenv tmplabGen origfun@(Lam paramlhs (Body expr))
   | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- etypeOf expr  -- Float result type assertion
   , TupRsingle exprtypeS <- etypeOf expr
@@ -210,7 +211,7 @@ splitLambdaAD alabelenv tmplabGen origfun@(Lam paramlhs (Body expr))
                                   (Context (lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs) mempty)
                                   (evars tmpRestoreVars)
                                   (\ctx -> do traceM $ "invoking exp dual with context: " ++ showContext ctx
-                                              let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args t'
+                                              let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args tenv t'
                                                   adjointProducer (Context labelenv' _) =
                                                     case elabValFind labelenv' adjlab of
                                                         Just idx -> Var (A.Var exprtypeS idx)
@@ -233,23 +234,23 @@ splitLambdaAD alabelenv tmplabGen origfun@(Lam paramlhs (Body expr))
                 error "Final primal value not computed"
   | otherwise =
       internalError $ "Non-Float-producing lambdas under gradientA currently unsupported\nIn lambda: " ++
-                          show (generaliseLabFunA (generaliseLabFun origfun) :: Fun aenv () () (t -> t'))
+                          show (generaliseLabFunA (generaliseLabFun origfun) :: Fun aenv () () tenv (t -> t'))
 splitLambdaAD _ _ _ =
     internalError "splitLambdaAD passed function with more than 1 argument"
 
 -- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.
 -- Asserts that there are no array labels yet in the expression, and resets the array environment.
 labeliseFun :: LabVal ArrayR alab aenv
-            -> OpenFun env aenv lab alab' t
-            -> ([AnyLabel ArrayR alab], OpenFun env aenv' lab alab t)
+            -> OpenFun env aenv lab alab' tenv t
+            -> ([AnyLabel ArrayR alab], OpenFun env aenv' lab alab tenv t)
 labeliseFun labelenv (Lam lhs fun) = Lam lhs <$> labeliseFun labelenv fun
 labeliseFun labelenv (Body ex) = Body <$> labeliseExp labelenv ex
 
 -- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.
 -- Asserts that there are no array labels yet in the expression, and resets the array environment.
 labeliseExp :: LabVal ArrayR alab aenv
-            -> OpenExp env aenv lab alab' args t
-            -> ([AnyLabel ArrayR alab], OpenExp env aenv' lab alab args t)
+            -> OpenExp env aenv lab alab' args tenv t
+            -> ([AnyLabel ArrayR alab], OpenExp env aenv' lab alab args tenv t)
 labeliseExp labelenv ex = case ex of
     Const ty x -> return (Const ty x)
     PrimApp ty op e -> PrimApp ty op <$> labeliseExp labelenv e
@@ -266,6 +267,7 @@ labeliseExp labelenv ex = case ex of
     Let lhs rhs e -> Let lhs <$> labeliseExp labelenv rhs <*> labeliseExp labelenv e
     Arg ty idx -> return (Arg ty idx)
     Var var -> return (Var var)
+    FreeVar var -> return (FreeVar var)
     Label lab -> return (Label lab)
     Index _ _ -> error "Index not supported in labeliseExp"
 
@@ -299,19 +301,20 @@ data PrimalBundle env aenv lab alab =
                      (PrimalInstantiator aenv lab alab tmp)
 
 data PrimalInstantiator aenv lab alab tmp =
-    PrimalInstantiator (forall env1 t args.
+    PrimalInstantiator (forall env1 t args tenv.
                         EContext lab env1
-                     -> OpenExp env1 aenv (PDExp lab) alab args tmp
-                     -> (forall env2. EContext lab env2 -> IdGen (OpenExp env2 aenv (PDExp lab) alab args t))
-                     -> IdGen (OpenExp env1 aenv (PDExp lab) alab args t))
+                     -> OpenExp env1 aenv (PDExp lab) alab args tenv tmp
+                     -> (forall env2. EContext lab env2 -> IdGen (OpenExp env2 aenv (PDExp lab) alab args tenv t))
+                     -> IdGen (OpenExp env1 aenv (PDExp lab) alab args tenv t))
 
 data PrimalBundle' env aenv lab alab =
     forall tmp.
         PrimalBundle' (A.ExpVars env tmp)
                       (TypeR tmp)
-                      (forall env' args. OpenExp env' aenv (PDExp lab) alab args tmp
-                                      -> IdGen ([DSum (EDLabel lab) (OpenExp env' aenv (PDExp lab) alab args)]  -- new scalar labels and their corresponding fragments of the temps tuple
-                                               ,DMap (EDLabel lab) (EDLabel lab)))  -- old to new scalar label translation map
+                      (forall env' args tenv.
+                          OpenExp env' aenv (PDExp lab) alab args tenv tmp
+                       -> IdGen ([DSum (EDLabel lab) (OpenExp env' aenv (PDExp lab) alab args tenv)]  -- new scalar labels and their corresponding fragments of the temps tuple
+                                ,DMap (EDLabel lab) (EDLabel lab)))  -- old to new scalar label translation map
 
 -- Does not use the contents of the given context; just adds to the bottom of it.
 constructPrimalBundle :: EContext Int env -> PrimalBundle env aenv Int alab
@@ -341,9 +344,9 @@ constructPrimalBundle (Context toplabelenv topbindmap)
 
     bindAll :: EContext Int env'
             -> env A.:> env'
-            -> [DSum (EDLabel Int) (OpenExp env aenv (PDExp Int) alab args)]
-            -> (forall env2. EContext Int env2 -> IdGen (OpenExp env2 aenv (PDExp Int) alab args t))
-            -> IdGen (OpenExp env' aenv (PDExp Int) alab args t)
+            -> [DSum (EDLabel Int) (OpenExp env aenv (PDExp Int) alab args tenv)]
+            -> (forall env2. EContext Int env2 -> IdGen (OpenExp env2 aenv (PDExp Int) alab args tenv t))
+            -> IdGen (OpenExp env' aenv (PDExp Int) alab args tenv t)
     bindAll ctx _ [] cont = cont ctx
     bindAll (Context labelenv bindmap) w ((lab :=> ex) : rest) cont =
         trace ("bindAll: let-binding expression at label " ++ showDLabel lab) $
@@ -360,8 +363,8 @@ enumerateLabelenv = go A.weakenId
 inlineAvarLabels :: Ord alab
                  => TupR (DLabel ArrayR alab) fv
                  -> A.ArrayVars aenv' fv
-                 -> OpenExp env aenv lab alab args t
-                 -> OpenExp env aenv' lab alab' args t
+                 -> OpenExp env aenv lab alab args tenv t
+                 -> OpenExp env aenv' lab alab' args tenv t
 inlineAvarLabels labs vars =
     let mp = buildVarLabMap labs vars
     in inlineAvarLabels' (\lab -> case DMap.lookup lab mp of
@@ -379,8 +382,8 @@ inlineAvarLabels labs vars =
     buildVarLabMap _ _ = error "Impossible GADTs"
 
 inlineAvarLabels' :: (forall t'. DLabel ArrayR alab t' -> A.ArrayVar aenv' t')
-                  -> OpenExp env aenv lab alab args t
-                  -> OpenExp env aenv' lab alab' args t
+                  -> OpenExp env aenv lab alab args tenv t
+                  -> OpenExp env aenv' lab alab' args tenv t
 inlineAvarLabels' f = \case
     Const ty x -> Const ty x
     PrimApp ty op ex -> PrimApp ty op (inlineAvarLabels' f ex)
@@ -393,16 +396,17 @@ inlineAvarLabels' f = \case
     Get ty tidx ex -> Get ty tidx (inlineAvarLabels' f ex)
     Let lhs rhs ex -> Let lhs (inlineAvarLabels' f rhs) (inlineAvarLabels' f ex)
     Var v -> Var v
+    FreeVar v -> FreeVar v
     Arg ty idx -> Arg ty idx
     Label l -> Label l
     Index _ _ -> error "Index not supported in inlineAvarLabels'"
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
-realiseArgs :: Exp aenv lab alab args res -> A.ELeftHandSide t () args -> OpenExp args aenv lab alab () res
+realiseArgs :: Exp aenv lab alab args tenv res -> A.ELeftHandSide t () args -> OpenExp args aenv lab alab () tenv res
 realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
   where
-    go :: args A.:> env' -> env A.:> env' -> OpenExp env aenv lab alab args res -> OpenExp env' aenv lab alab () res
+    go :: args A.:> env' -> env A.:> env' -> OpenExp env aenv lab alab args tenv res -> OpenExp env' aenv lab alab () tenv res
     go argWeaken varWeaken expr = case expr of
         Const ty x -> Const ty x
         PrimApp ty op ex -> PrimApp ty op (go argWeaken varWeaken ex)
@@ -418,18 +422,19 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
               Let lhs' (go argWeaken varWeaken rhs)
                   (go (A.weakenWithLHS lhs' A..> argWeaken) (A.sinkWithLHS lhs lhs' varWeaken) ex)
         Var (A.Var ty idx) -> Var (A.Var ty (varWeaken A.>:> idx))
+        FreeVar var -> FreeVar var
         Arg ty idx -> Var (A.Var ty (argWeaken A.>:> idx))
         Label _ -> error "realiseArgs: unexpected Label"
 
 -- Map will NOT contain:
 -- - Let or Var
 -- - Label: the original expression should not have included Label
-explode :: Show alab => ELabVal Int env -> OpenExp env aenv unused alab args t -> IdGen (Exploded aenv Int alab args t)
+explode :: Show alab => ELabVal Int env -> OpenExp env aenv unused alab args tenv t -> IdGen (Exploded aenv Int alab args tenv t)
 explode labelenv e =
     trace ("exp explode: exploding " ++ showsExp (ShowEnv (const "L?") show 0 [] []) 9 e "") $
     explode' labelenv e
 
-explode' :: ELabVal Int env -> OpenExp env aenv unused alab args t -> IdGen (Exploded aenv Int alab args t)
+explode' :: ELabVal Int env -> OpenExp env aenv unused alab args tenv t -> IdGen (Exploded aenv Int alab args tenv t)
 explode' env = \case
     Const ty x -> do
         lab <- genId (TupRsingle ty)
@@ -486,6 +491,9 @@ explode' env = \case
         return (lab2, mp, argmp)
     Var (A.Var _ idx) -> do
         return (tupleLabel (prjL idx env), mempty, mempty)
+    FreeVar var@(A.Var ty _) -> do
+        lab <- genId (TupRsingle ty)
+        return (lab, DMap.singleton lab (FreeVar var), mempty)
     Arg ty idx -> do
         lab <- genId (TupRsingle ty)
         return (lab, DMap.singleton lab (Arg ty idx), DMap.singleton idx lab)
@@ -493,7 +501,7 @@ explode' env = \case
     Label _ -> error "explode: Unexpected Label"
     Index _ _ -> error "explode: Index not supported"
   where
-    lpushLHS_Get :: A.ELeftHandSide t env env' -> TupR (EDLabel Int) t -> ELabVal Int env -> Exp aenv Int alab args t -> (ELabVal Int env', DMap (EDLabelT Int) (Exp aenv Int alab args))
+    lpushLHS_Get :: A.ELeftHandSide t env env' -> TupR (EDLabel Int) t -> ELabVal Int env -> Exp aenv Int alab args tenv t -> (ELabVal Int env', DMap (EDLabelT Int) (Exp aenv Int alab args tenv))
     lpushLHS_Get lhs labs labelenv rhs = case (lhs, labs) of
         (A.LeftHandSidePair lhs1 lhs2, TupRpair labs1 labs2) ->
             let (labelenv1, mp1) = lpushLHS_Get lhs1 labs1 labelenv (smartFst rhs)
@@ -524,9 +532,9 @@ showBindmap bindmap =
 
 -- TODO: remove Show constraint from alab
 primaldual :: Show alab
-           => Exploded aenv Int alab args Float
-           -> (forall env. EContext Int env -> IdGen (OpenExp env aenv (PDExp Int) alab args t))
-           -> IdGen (Exp aenv (PDExp Int) alab args t)
+           => Exploded aenv Int alab args tenv Float
+           -> (forall env. EContext Int env -> IdGen (OpenExp env aenv (PDExp Int) alab args tenv t))
+           -> IdGen (Exp aenv (PDExp Int) alab args tenv t)
 primaldual exploded cont = do
     PrimalResult context1 builder1 <- primal exploded
     DualResult context2 _ builder2 <- dual exploded (const (Const scalarType 1.0)) context1
@@ -538,21 +546,21 @@ primaldual exploded cont = do
 -- integrate 'primal' into code that was not written in CPS style, but still
 -- needed to put nontrivial information in the core, I re-wrote primal (and
 -- dual) to return existentials instead of take a continuation.
-data PrimalResult env aenv alab args =
+data PrimalResult env aenv alab args tenv =
     forall env'.
         PrimalResult (EContext Int env')
-                     (forall res. OpenExp env' aenv (PDExp Int) alab args res
-                               -> OpenExp env aenv (PDExp Int) alab args res)
+                     (forall res. OpenExp env' aenv (PDExp Int) alab args tenv res
+                               -> OpenExp env aenv (PDExp Int) alab args tenv res)
 
 -- Resulting computation will only use P, never D
-primal :: Exploded aenv Int alab args res
-       -> IdGen (PrimalResult () aenv alab args)
+primal :: Exploded aenv Int alab args tenv res
+       -> IdGen (PrimalResult () aenv alab args tenv)
 primal (endlab, nodemap, _) = primal' nodemap endlab (Context LEmpty mempty)
 
-primal' :: DMap (EDLabelT Int) (Exp aenv Int alab args)
+primal' :: DMap (EDLabelT Int) (Exp aenv Int alab args tenv)
         -> EDLabelT Int t
         -> EContext Int env
-        -> IdGen (PrimalResult env aenv alab args)
+        -> IdGen (PrimalResult env aenv alab args tenv)
 primal' nodemap lbl (Context labelenv bindmap)
 --   | trace ("primal': computing " ++ show lbl) False = undefined
   | fmapLabel P lbl `DMap.member` bindmap =
@@ -565,6 +573,11 @@ primal' nodemap lbl (Context labelenv bindmap)
               lblS <- genSingleId ty
               return $ PrimalResult (Context (LPush labelenv lblS) (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
                                     (Let (A.LeftHandSideSingle ty) (Const ty value))
+
+          FreeVar var@(A.Var ty _) -> do
+              lblS <- genSingleId ty
+              return $ PrimalResult (Context (LPush labelenv lblS) (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
+                                    (Let (A.LeftHandSideSingle ty) (FreeVar var))
 
           Pair _ (Label arglab1) (Label arglab2) -> do
               PrimalResult ctx1 f1 <- primal' nodemap arglab1 (Context labelenv bindmap)
@@ -660,22 +673,22 @@ primal' nodemap lbl (Context labelenv bindmap)
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
 -- environment (and the bindmap) is needed.
-newtype AdjList aenv lab alab args t = AdjList (forall env. EContext lab env -> [OpenExp env aenv (PDExp lab) alab args t])
+newtype AdjList aenv lab alab args tenv t = AdjList (forall env. EContext lab env -> [OpenExp env aenv (PDExp lab) alab args tenv t])
 
 type AnyLabelT = AnyLabel TypeR
 
-data DualResult env aenv alab args =
+data DualResult env aenv alab args tenv =
     forall env'.
         DualResult (EContext Int env')
-                   (DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args))  -- contribmap
-                   (forall res. OpenExp env' aenv (PDExp Int) alab args res
-                             -> OpenExp env aenv (PDExp Int) alab args res)
+                   (DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args tenv))  -- contribmap
+                   (forall res. OpenExp env' aenv (PDExp Int) alab args tenv res
+                             -> OpenExp env aenv (PDExp Int) alab args tenv res)
 
 dual :: Show alab
-     => Exploded aenv Int alab args t
-     -> (forall env'. EContext Int env' -> OpenExp env' aenv (PDExp Int) alab args t)
+     => Exploded aenv Int alab args tenv t
+     -> (forall env'. EContext Int env' -> OpenExp env' aenv (PDExp Int) alab args tenv t)
      -> EContext Int env
-     -> IdGen (DualResult env aenv alab args)
+     -> IdGen (DualResult env aenv alab args tenv)
 dual (endlab, nodemap, _) endadjoint context =
     trace ("\nexp labelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
     let contribmap = DMap.singleton (fmapLabel D endlab) (AdjList (pure . endadjoint))
@@ -697,11 +710,11 @@ dual (endlab, nodemap, _) endadjoint context =
                           (\(AnyLabel l) -> parentmap Map.! labelLabel l)
 
 dual's :: Show alab
-       => DMap (EDLabelT Int) (Exp aenv Int alab args)
+       => DMap (EDLabelT Int) (Exp aenv Int alab args tenv)
        -> [AnyLabelT Int]
        -> EContext Int env
-       -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args)
-       -> IdGen (DualResult env aenv alab args)
+       -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args tenv)
+       -> IdGen (DualResult env aenv alab args tenv)
 dual's _ [] context contribmap = return $ DualResult context contribmap id
 dual's nodemap (AnyLabel lab : labs) context contribmap = do
     DualResult context1 contribmap1 f1 <- dual' nodemap lab context contribmap
@@ -709,17 +722,21 @@ dual's nodemap (AnyLabel lab : labs) context contribmap = do
     return $ DualResult context2 contribmap2 (f1 . f2)
 
 dual' :: Show alab
-      => DMap (EDLabelT Int) (Exp aenv Int alab args)
+      => DMap (EDLabelT Int) (Exp aenv Int alab args tenv)
       -> EDLabelT Int t
       -> EContext Int env
-      -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args)
-      -> IdGen (DualResult env aenv alab args)
+      -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args tenv)
+      -> IdGen (DualResult env aenv alab args tenv)
 dual' nodemap lbl (Context labelenv bindmap) contribmap =
     -- trace ("dual': computing " ++ show lbl) $
     case nodemap `dmapFind` lbl of
       -- We aren't interested in the adjoint of constant nodes -- seeing as
       -- they don't have any parents to contribute to.
       Const _ _ ->
+          return $ DualResult (Context labelenv bindmap) contribmap id
+
+      -- We also aren't interested in the adjoint of free variables.
+      FreeVar _ ->
           return $ DualResult (Context labelenv bindmap) contribmap id
 
       -- Argument nodes don't have any nodes to contribute to either, but we do
@@ -1024,13 +1041,13 @@ tlmap :: (forall t. f t -> g t) -> TypedList f tys -> TypedList g tys
 tlmap _ TLNil = TLNil
 tlmap f (x :@ xs) = f x :@ tlmap f xs
 
-data Contribution node aenv alab args =
+data Contribution node aenv alab args tenv =
     forall parents t.
         Contribution (EDLabelT Int t)  -- to which label are we contributing an adjoint
                      (TypedList (EDLabelT Int) parents)  -- labels you need the primary value of
                      (forall env. A.ExpVars env node                  -- current node's adjoint
                                -> TypedList (A.ExpVars env) parents   -- requested primal values
-                               -> OpenExp env aenv (PDExp Int) alab args t)   -- contribution
+                               -> OpenExp env aenv (PDExp Int) alab args tenv t)   -- contribution
 
 -- Note: Before this code was extracted into a separate function, its
 -- functionality was inlined in the branches of dual'. Because of that, the
@@ -1042,9 +1059,9 @@ data Contribution node aenv alab args =
 -- have a separate type signature, significantly simplifying the structure of
 -- the code.
 updateContribmap :: EDLabelT Int node
-                 -> [Contribution node aenv alab args]
-                 -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args)
-                 -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args)
+                 -> [Contribution node aenv alab args tenv]
+                 -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args tenv)
+                 -> DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args tenv)
 updateContribmap lbl =
     flip . foldr $ \(Contribution lab parentlabs gen) ->
         addContribution (fmapLabel D lab) $ \(Context labelenv bindmap) ->
@@ -1061,31 +1078,31 @@ updateContribmap lbl =
 
 addContribution :: Ord lab
                 => EDLabelT (PDExp lab) t
-                -> (forall env. EContext lab env -> OpenExp env aenv (PDExp lab) alab args t)
-                -> DMap (EDLabelT (PDExp lab)) (AdjList aenv lab alab args)
-                -> DMap (EDLabelT (PDExp lab)) (AdjList aenv lab alab args)
+                -> (forall env. EContext lab env -> OpenExp env aenv (PDExp lab) alab args tenv t)
+                -> DMap (EDLabelT (PDExp lab)) (AdjList aenv lab alab args tenv)
+                -> DMap (EDLabelT (PDExp lab)) (AdjList aenv lab alab args tenv)
 addContribution lbl contribution =
     DMap.insertWith (\(AdjList f1) (AdjList f2) -> AdjList (\context -> f1 context ++ f2 context))
                     lbl
                     (AdjList (pure . contribution))
 
-collectAdjoint :: DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args)
+collectAdjoint :: DMap (EDLabelT (PDExp Int)) (AdjList aenv Int alab args tenv)
                -> EDLabelT Int item
                -> EContext Int env
-               -> OpenExp env aenv (PDExp Int) alab args item
+               -> OpenExp env aenv (PDExp Int) alab args tenv item
 collectAdjoint contribmap lbl (Context labelenv bindmap) =
     case DMap.lookup (fmapLabel D lbl) contribmap of
         Just (AdjList listgen) -> expSum (labelType lbl) (listgen (Context labelenv bindmap))
         Nothing -> expSum (labelType lbl) []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
 
-oneHotTup :: TypeR t -> TupleIdx t t' -> OpenExp env aenv lab alab args t' -> OpenExp env aenv lab alab args t
+oneHotTup :: TypeR t -> TupleIdx t t' -> OpenExp env aenv lab alab args tenv t' -> OpenExp env aenv lab alab args tenv t
 oneHotTup _ TIHere ex = ex
 oneHotTup ty@(TupRpair ty1 ty2) (TILeft ti) ex = Pair ty (oneHotTup ty1 ti ex) (zeroForType ty2)
 oneHotTup ty@(TupRpair ty1 ty2) (TIRight ti) ex = Pair ty (zeroForType ty1) (oneHotTup ty2 ti ex)
 oneHotTup _ _ _ = error "oneHotTup: impossible GADTs"
 
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
-expLabelParents :: OpenExp env aenv lab alab args t -> [AnyLabelT lab]
+expLabelParents :: OpenExp env aenv lab alab args tenv t -> [AnyLabelT lab]
 expLabelParents = \case
     Const _ _ -> []
     PrimApp _ _ e -> fromLabel e
@@ -1095,6 +1112,7 @@ expLabelParents = \case
     Shape _ -> []
     ShapeSize _ e -> fromLabel e
     Get _ _ e -> fromLabel e
+    FreeVar _ -> []
     Arg _ _ -> []
     Label lab -> [AnyLabel lab]
     Let _ _ _ -> unimplemented "Let"
@@ -1113,7 +1131,7 @@ dmapFind mp elt = case DMap.lookup elt mp of
                     Nothing -> error "dmapFind: not found"
 
 -- TODO: make smartFst and smartSnd non-quadratic (should be easy)
-smartFst :: OpenExp env aenv lab alab args (t1, t2) -> OpenExp env aenv lab alab args t1
+smartFst :: OpenExp env aenv lab alab args tenv (t1, t2) -> OpenExp env aenv lab alab args tenv t1
 smartFst (Pair _ ex _) = ex
 smartFst (Get (TupRpair t1 _) tidx ex) = Get t1 (insertFst tidx) ex
   where insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
@@ -1125,7 +1143,7 @@ smartFst ex
   = Get t1 (TILeft TIHere) ex
 smartFst _ = error "smartFst: impossible GADTs"
 
-smartSnd :: OpenExp env aenv lab alab args (t1, t2) -> OpenExp env aenv lab alab args t2
+smartSnd :: OpenExp env aenv lab alab args tenv (t1, t2) -> OpenExp env aenv lab alab args tenv t2
 smartSnd (Pair _ _ ex) = ex
 smartSnd (Get (TupRpair _ t2) tidx ex) = Get t2 (insertSnd tidx) ex
   where insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
