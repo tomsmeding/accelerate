@@ -8,6 +8,7 @@ module Data.Array.Accelerate.Trafo.AD (
 ) where
 
 import Data.Array.Accelerate.AST
+import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
@@ -53,18 +54,19 @@ convertExp (Undef ty) = Undef ty
 convertExp (Coerce t1 t2 e) = Coerce t1 t2 (convertExp e)
 convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   | SingleScalarType (NumSingleType (FloatingNumType TypeFloat)) <- sty
-  , Exists lhs' <- rebuildLHS lhs =
-      case AD.eCheckClosedInLHS lhs' (AD.translateExp body) of
-          Just transBody
-            | AD.ReverseADResE lhs'' body' <- AD.reverseAD lhs' (transBody `withAlabType` ())
-            , AD.UntranslateResultE lhs''' body'' <- AD.untranslateLHSboundExp lhs'' (AD.simplifyExp body') ->
-                Let lhs''' arg body''
+  , AD.Lam _ (AD.Body transBody) <- AD.translateFun (Lam lhs (Body body))
+  , Exists lhs1 <- rebuildLHS lhs =
+      case AD.eCheckClosedInLHS lhs1 transBody of
+          Just transBody'
+            | AD.ReverseADResE lhs2 body' <- AD.reverseAD lhs1 (transBody' `withAlabType` ())
+            , AD.UntranslateResultE lhs3 body'' <- AD.untranslateLHSboundExp lhs2 (AD.simplifyExp body') (Just weakenId) ->
+                Let lhs3 arg body''
           Nothing ->
               error "Body of gradientE not a closed expression"
   | otherwise =
       error "gradientE expression must produce Float, other types currently unsupported"
   where
-    withAlabType :: AD.OpenExp env aenv lab alab args t -> alab -> AD.OpenExp env aenv lab alab args t
+    withAlabType :: AD.OpenExp env aenv lab alab args tenv t -> alab -> AD.OpenExp env aenv lab alab args tenv t
     withAlabType = const
 convertExp e =
   internalError ("convertExp: Cannot convert Exp node <" ++ showExpOp e ++ ">")
