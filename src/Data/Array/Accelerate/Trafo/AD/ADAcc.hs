@@ -49,6 +49,7 @@ import Data.Array.Accelerate.Trafo.AD.Debug
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
+import Data.Array.Accelerate.Trafo.AD.TupleZip
 import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weakenVars, weaken)
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
@@ -1214,17 +1215,14 @@ arraySum :: ArrayR (Array sh t)
 arraySum (ArrayR sht ty) she [] = generateConstantArray ty (zeroForType ty) sht she
 arraySum _ _ l = foldl1 arrayPlus l
 
--- TODO: use tupleZip
 arraysSum :: ArraysR t
           -> A.ArrayVars aenv t  -- primal result
           -> [OpenAcc aenv lab alab args t]
           -> OpenAcc aenv lab alab args t
 arraysSum TupRunit TupRunit _ = Anil
-arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) l = arraySum ty (Shape (Left pvar)) l
-arraysSum (TupRpair t1 t2) (TupRpair pvars1 pvars2) l =
-    Apair (TupRpair t1 t2)
-          (arraysSum t1 pvars1 (map smartFst l))
-          (arraysSum t2 pvars2 (map smartSnd l))
+arraysSum (TupRsingle (ArrayR sht ty)) (TupRsingle pvar) [] = generateConstantArray ty (zeroForType ty) sht (Shape (Left pvar))
+arraysSum (TupRpair t1 t2) (TupRpair pvars1 pvars2) [] = Apair (TupRpair t1 t2) (arraysSum t1 pvars1 []) (arraysSum t2 pvars2 [])
+arraysSum ty _ l = foldl1 (tupleZipAcc' ty (const arrayPlus)) l
 arraysSum _ _ _ = error "arraysSum: Invalid GADTs"
 
 generateConstantArray :: TypeR t -> Exp aenv lab alab () () t
