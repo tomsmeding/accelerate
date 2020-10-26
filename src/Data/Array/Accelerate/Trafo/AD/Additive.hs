@@ -78,4 +78,4 @@ instance IsAdditive TypeR where
     zeroForType' z (TupRpair t1 t2) =
         Pair (TupRpair t1 t2) (zeroForType' z t1) (zeroForType' z t2)
 
-    expPlus ty e1 e2 = tupleZip' ty expPlus e1 e2
+    expPlus ty e1 e2 = tupleZipExp' ty expPlus e1 e2
