@@ -982,7 +982,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 [Contribution arglab (arglab :@ TLNil) TLNil $
                                     \(TupRsingle adjvar) (TupRsingle pvar :@ TLNil) _ labelenv' ->
                                         Permute argtype (plusLam eltty)
-                                                (arraySum argtype (Shape (Left pvar)) [])
+                                                (generateConstantArray argtype (Shape (Left pvar)))
                                                 (case declareVars (shapeType shtypeArg) of
                                                    DeclareVars lhsArg _ varsgenArg ->
                                                       Lam indexfuncLHS . Body $
@@ -1208,29 +1208,19 @@ arrayPlus a1 a2
             a1 a2
 arrayPlus _ _ = error "unreachable"
 
-arraySum :: ArrayR (Array sh t)
-         -> Exp aenv lab alab () () sh
-         -> [OpenAcc aenv lab alab args (Array sh t)]
-         -> OpenAcc aenv lab alab args (Array sh t)
-arraySum (ArrayR sht ty) she [] = generateConstantArray ty (zeroForType ty) sht she
-arraySum _ _ l = foldl1 arrayPlus l
-
 arraysSum :: ArraysR t
           -> A.ArrayVars aenv t  -- primal result
           -> [OpenAcc aenv lab alab args t]
           -> OpenAcc aenv lab alab args t
 arraysSum TupRunit TupRunit _ = Anil
-arraysSum (TupRsingle (ArrayR sht ty)) (TupRsingle pvar) [] = generateConstantArray ty (zeroForType ty) sht (Shape (Left pvar))
+arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) [] = generateConstantArray ty (Shape (Left pvar))
 arraysSum (TupRpair t1 t2) (TupRpair pvars1 pvars2) [] = Apair (TupRpair t1 t2) (arraysSum t1 pvars1 []) (arraysSum t2 pvars2 [])
 arraysSum ty _ l = foldl1 (tupleZipAcc' ty (const arrayPlus)) l
-arraysSum _ _ _ = error "arraysSum: Invalid GADTs"
 
-generateConstantArray :: TypeR t -> Exp aenv lab alab () () t
-                      -> ShapeR sh -> Exp aenv lab alab () () sh
-                      -> OpenAcc aenv lab alab args (Array sh t)
-generateConstantArray ty e sht she =
+generateConstantArray :: ArrayR (Array sh t) -> Exp aenv lab alab () () sh -> OpenAcc aenv lab alab args (Array sh t)
+generateConstantArray (ArrayR sht ty) she =
     Generate (ArrayR sht ty) she
-             (Right (Lam (A.LeftHandSideWildcard (shapeType sht)) (Body e)))
+             (Right (Lam (A.LeftHandSideWildcard (shapeType sht)) (Body (zeroForType ty))))
 
 expFstLam :: TypeR (t1, t2) -> Fun aenv lab alab tenv ((t1, t2) -> t1)
 expFstLam (TupRpair t1 t2)
