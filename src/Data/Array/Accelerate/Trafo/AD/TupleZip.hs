@@ -48,6 +48,10 @@ tupleZip :: Applicative m
          -> OpenExp env aenv lab alab args tenv t
          -> OpenExp env aenv lab alab args tenv t
          -> m (OpenExp env aenv lab alab args tenv t)
+tupleZip TupRunit _ _ _ = pure Nil
+tupleZip (TupRsingle ty) combine e1 e2 = combine ty e1 e2
+tupleZip ty@(TupRpair t1 t2) combine (Pair _ e11 e12) (Pair _ e21 e22) =
+  Pair ty <$> tupleZip t1 combine e11 e21 <*> tupleZip t2 combine e12 e22
 tupleZip ty combine e1 e2
   | DeclareVars lhs1 _ value1 <- declareVars ty
   , DeclareVars lhs2 _ value2 <- declareVars ty
