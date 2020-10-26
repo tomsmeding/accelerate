@@ -1200,12 +1200,8 @@ arrayPlus :: OpenAcc aenv lab alab args (Array sh t)
           -> OpenAcc aenv lab alab args (Array sh t)
 arrayPlus a1 a2
   | TupRsingle arrty@(ArrayR _ ty) <- atypeOf a1
-  , DeclareVars lhs1 _ vf1 <- declareVars ty
-  , DeclareVars lhs2 w2 vf2 <- declareVars ty
-  = ZipWith arrty
-            (Right (Lam (A.LeftHandSidePair lhs1 lhs2) (Body
-                      (expPlus ty (evars (vf1 w2)) (evars (vf2 A.weakenId))))))
-            a1 a2
+  , Lam lhs1 (Lam lhs2 body) <- plusLam ty
+  = ZipWith arrty (Right (Lam (A.LeftHandSidePair lhs1 lhs2) body)) a1 a2
 arrayPlus _ _ = error "unreachable"
 
 arraysSum :: ArraysR t
@@ -1214,7 +1210,7 @@ arraysSum :: ArraysR t
           -> OpenAcc aenv lab alab args t
 arraysSum TupRunit TupRunit _ = Anil
 arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) [] = generateConstantArray ty (Shape (Left pvar))
-arraysSum (TupRpair t1 t2) (TupRpair pvars1 pvars2) [] = Apair (TupRpair t1 t2) (arraysSum t1 pvars1 []) (arraysSum t2 pvars2 [])
+arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) [] = Apair ty (arraysSum t1 pvars1 []) (arraysSum t2 pvars2 [])
 arraysSum ty _ l = foldl1 (tupleZipAcc' ty (const arrayPlus)) l
 
 generateConstantArray :: ArrayR (Array sh t) -> Exp aenv lab alab () () sh -> OpenAcc aenv lab alab args (Array sh t)
