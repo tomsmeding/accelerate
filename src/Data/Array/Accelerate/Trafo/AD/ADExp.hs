@@ -853,6 +853,22 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               contribmap'
                               (Let (A.LeftHandSideSingle restypeS) adjoint)
 
+      PrimApp _ (A.PrimSqrt restypeF) (Label arglab) -> do
+          let restypeN = FloatingNumType restypeF
+              restypeS = SingleScalarType (NumSingleType restypeN)
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+              contribmap' = updateContribmap lbl
+                                [Contribution arglab (lbl :@ TLNil) $ \(TupRsingle adjvar) (TupRsingle primvar :@ TLNil) ->
+                                    -- dE/dx = dE/d(sqrt x) * d(sqrt x)/dx = adjoint * 1/(2 * sqrt x) = adjoint / (2 * sqrt x)
+                                    -- where 'sqrt x' is just the primal value
+                                    smartFDiv restypeF (Var adjvar) (smartMul restypeN (zeroForType' 2 restypeS) (Var primvar))]
+                                contribmap
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap'
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
       PrimApp _ (A.PrimExpFloating restypeF) (Label arglab) -> do
           let restypeS = SingleScalarType (NumSingleType (FloatingNumType restypeF))
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
