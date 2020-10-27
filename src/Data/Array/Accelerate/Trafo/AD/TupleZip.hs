@@ -35,6 +35,11 @@ type CombinerExp' lab alab =
                  -> OpenExp env aenv lab alab args tenv s
                  -> OpenExp env aenv lab alab args tenv s
 
+type IgnorerExp lab alab =
+  forall s env aenv args tenv.
+    ScalarType s -> OpenExp env aenv lab alab args tenv s
+                 -> Bool
+
 type CombinerAcc m lab alab =
   forall sh t aenv args.
     ArrayR (Array sh t) -> OpenAcc aenv lab alab args (Array sh t)
@@ -46,6 +51,11 @@ type CombinerAcc' lab alab =
     ArrayR (Array sh t) -> OpenAcc aenv lab alab args (Array sh t)
                         -> OpenAcc aenv lab alab args (Array sh t)
                         -> OpenAcc aenv lab alab args (Array sh t)
+
+type IgnorerAcc lab alab =
+  forall sh t aenv args.
+    ArrayR (Array sh t) -> OpenAcc aenv lab alab args (Array sh t)
+                        -> Bool
 
 class ExprLike s f | f -> s where
   nil :: f env ()
@@ -81,6 +91,8 @@ instance ExprLike ArrayR (OpenAccEnv lab alab args) where
 
 type CombinerGen m s f = forall t env. s t -> f env t -> f env t -> m (f env t)
 
+type IgnorerGen s f = forall t env. s t -> f env t -> Bool
+
 varsZip :: (Applicative m, ExprLike s f)
         => CombinerGen m s f
         -> TupR s t
@@ -95,12 +107,15 @@ varsZip combine (TupRpair t1 t2) (TupRpair v11 v12) (TupRpair v21 v22) =
   pair <$> varsZip combine t1 v11 v21 <*> varsZip combine t2 v12 v22
 varsZip _ _ _ _ = error "inconsistency in varsZip"
 
-tupleZipGen :: (Applicative m, ExprLike s f) => TupR s t -> CombinerGen m s f -> f env t -> f env t -> m (f env t)
-tupleZipGen TupRunit _ _ _ = pure nil
-tupleZipGen (TupRsingle ty) combine e1 e2 = combine ty e1 e2
-tupleZipGen (TupRpair t1 t2) combine (fromPair -> Just (e11, e12)) (fromPair -> Just (e21, e22)) =
-  pair <$> tupleZipGen t1 combine e11 e21 <*> tupleZipGen t2 combine e12 e22
-tupleZipGen ty combine e1 e2
+tupleZipGen :: (Applicative m, ExprLike s f) => TupR s t -> CombinerGen m s f -> IgnorerGen s f -> f env t -> f env t -> m (f env t)
+tupleZipGen TupRunit _ _ _ _ = pure nil
+tupleZipGen (TupRsingle ty) combine ignore e1 e2
+  | ignore ty e1 = pure e2
+  | ignore ty e2 = pure e1
+  | otherwise = combine ty e1 e2
+tupleZipGen (TupRpair t1 t2) combine ignore (fromPair -> Just (e11, e12)) (fromPair -> Just (e21, e22)) =
+  pair <$> tupleZipGen t1 combine ignore e11 e21 <*> tupleZipGen t2 combine ignore e12 e22
+tupleZipGen ty combine _ignore e1 e2
   | DeclareVars lhs1 _ value1 <- declareVars ty
   , DeclareVars lhs2 _ value2 <- declareVars ty
   = let_ lhs1 e1 . let_ lhs2 (sink (weakenWithLHS lhs1) e2)
@@ -110,34 +125,44 @@ tupleZipGen ty combine e1 e2
 tupleZipExp :: Applicative m
             => TypeR t
             -> CombinerExp m lab alab
+            -> IgnorerExp lab alab
             -> OpenExp env aenv lab alab args tenv t
             -> OpenExp env aenv lab alab args tenv t
             -> m (OpenExp env aenv lab alab args tenv t)
-tupleZipExp ty combine e1 e2 =
-  unExpEnv <$> tupleZipGen ty (\t (OpenExpEnv x1) (OpenExpEnv x2) -> OpenExpEnv <$> combine t x1 x2) (OpenExpEnv e1) (OpenExpEnv e2)
+tupleZipExp ty combine ignore e1 e2 =
+  unExpEnv <$> tupleZipGen ty (\t (OpenExpEnv x1) (OpenExpEnv x2) -> OpenExpEnv <$> combine t x1 x2)
+                              (\t (OpenExpEnv x) -> ignore t x)
+                              (OpenExpEnv e1)
+                              (OpenExpEnv e2)
 
 tupleZipExp' :: TypeR t
              -> CombinerExp' lab alab
+             -> IgnorerExp lab alab
              -> OpenExp env aenv lab alab args tenv t
              -> OpenExp env aenv lab alab args tenv t
              -> OpenExp env aenv lab alab args tenv t
-tupleZipExp' ty combine' e1 e2 =
-  runIdentity $ tupleZipExp ty (\sty sub1 sub2 -> pure (combine' sty sub1 sub2)) e1 e2
+tupleZipExp' ty combine' ignore e1 e2 =
+  runIdentity $ tupleZipExp ty (\sty sub1 sub2 -> pure (combine' sty sub1 sub2)) ignore e1 e2
 
 -- TODO: check whether this is actually used somewhere (and not only tupleZipAcc')
 tupleZipAcc :: Applicative m
             => ArraysR t
             -> CombinerAcc m lab alab
+            -> IgnorerAcc lab alab
             -> OpenAcc aenv lab alab args t
             -> OpenAcc aenv lab alab args t
             -> m (OpenAcc aenv lab alab args t)
-tupleZipAcc ty combine e1 e2 =
-  unAccEnv <$> tupleZipGen ty (\t@(ArrayR _ _) (OpenAccEnv x1) (OpenAccEnv x2) -> OpenAccEnv <$> combine t x1 x2) (OpenAccEnv e1) (OpenAccEnv e2)
+tupleZipAcc ty combine ignore e1 e2 =
+  unAccEnv <$> tupleZipGen ty (\t@(ArrayR _ _) (OpenAccEnv x1) (OpenAccEnv x2) -> OpenAccEnv <$> combine t x1 x2)
+                              (\t@(ArrayR _ _) (OpenAccEnv x) -> ignore t x)
+                              (OpenAccEnv e1)
+                              (OpenAccEnv e2)
 
 tupleZipAcc' :: ArraysR t
              -> CombinerAcc' lab alab
+             -> IgnorerAcc lab alab
              -> OpenAcc aenv lab alab args t
              -> OpenAcc aenv lab alab args t
              -> OpenAcc aenv lab alab args t
-tupleZipAcc' ty combine' e1 e2 =
-  runIdentity $ tupleZipAcc ty (\sty x1 x2 -> pure (combine' sty x1 x2)) e1 e2
+tupleZipAcc' ty combine' ignore e1 e2 =
+  runIdentity $ tupleZipAcc ty (\sty x1 x2 -> pure (combine' sty x1 x2)) ignore e1 e2
