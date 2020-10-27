@@ -31,7 +31,8 @@ module Data.Array.Accelerate.Analysis.Match (
   -- auxiliary
   matchIdx, matchVar, matchVars, matchArrayR, matchArraysR, matchTypeR, matchShapeR,
   matchShapeType, matchIntegralType, matchFloatingType, matchNumType, matchScalarType,
-  matchLeftHandSide, matchALeftHandSide, matchELeftHandSide, matchSingleType, matchTupR
+  matchLeftHandSide, matchALeftHandSide, matchELeftHandSide, matchSingleType, matchTupR,
+  matchConst
 
 ) where
 

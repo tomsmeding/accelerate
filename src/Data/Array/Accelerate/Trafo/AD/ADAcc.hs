@@ -1211,7 +1211,7 @@ arraysSum :: ArraysR t
 arraysSum TupRunit TupRunit _ = Anil
 arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) [] = generateConstantArray ty (Shape (Left pvar))
 arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) [] = Apair ty (arraysSum t1 pvars1 []) (arraysSum t2 pvars2 [])
-arraysSum ty _ l = foldl1 (tupleZipAcc' ty (const arrayPlus)) l
+arraysSum ty _ l = foldl1 (tupleZipAcc' ty (const arrayPlus) (\_ _ -> False)) l
 
 generateConstantArray :: ArrayR (Array sh t) -> Exp aenv lab alab () () sh -> OpenAcc aenv lab alab args (Array sh t)
 generateConstantArray (ArrayR sht ty) she =

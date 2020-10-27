@@ -9,6 +9,7 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.TupleZip
+import Data.Array.Accelerate.Analysis.Match (matchConst)
 
 
 class IsAdditive s where
@@ -78,4 +79,7 @@ instance IsAdditive TypeR where
     zeroForType' z (TupRpair t1 t2) =
         Pair (TupRpair t1 t2) (zeroForType' z t1) (zeroForType' z t2)
 
-    expPlus ty e1 e2 = tupleZipExp' ty expPlus e1 e2
+    expPlus ty e1 e2 = tupleZipExp' ty expPlus isZero e1 e2
+      where isZero sty (Const _ c)
+              | Const _ c' <- zeroForType sty = matchConst (TupRsingle sty) c c'
+            isZero _ _ = False
