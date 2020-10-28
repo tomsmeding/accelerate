@@ -45,8 +45,10 @@ import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD, labeliseExp, labelis
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as ADExp
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Common
+import Data.Array.Accelerate.Trafo.AD.Config
 import Data.Array.Accelerate.Trafo.AD.Debug
 import Data.Array.Accelerate.Trafo.AD.Exp
+import qualified Data.Array.Accelerate.Trafo.AD.Heuristic as Heuristic
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
 import Data.Array.Accelerate.Trafo.AD.TupleZip
@@ -490,16 +492,21 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
               in case (alabValFind labelenv arglabS, alabValFinds labelenv lambdaLabs') of
                   (Just argidx, Just lambdaVars) -> do
                       lab <- genSingleId restype
-                      let pairEltType = TupRpair reselty lambdaTmpType
-                          pairArrType = ArrayR resshape pairEltType
+                      let pairArrType = ArrayR resshape (TupRpair reselty lambdaTmpType)
                           tmpArrType = ArrayR resshape lambdaTmpType
+                          instantiatedLambda = lambdaPrimal lambdaVars
+                          computePrimal = Map pairArrType (Right (fmapAlabFun (fmapLabel P) instantiatedLambda))
+                                                          (Avar (A.Var argtypeS argidx))
+                          -- For small functions, recompute the primal for the dual usage
+                          producer
+                            | Heuristic.functionSize instantiatedLambda < getConfigVar SmallFunSize
+                            = smartPairA (mapFst pairArrType computePrimal) (mapSnd pairArrType computePrimal)
+                            | otherwise
+                            = Alet (A.LeftHandSideSingle pairArrType) computePrimal
+                                   (let var = Avar (A.Var pairArrType ZeroIdx)
+                                    in smartPairA (mapFst pairArrType var) (mapSnd pairArrType var))
                       Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
-                           (Alet (A.LeftHandSideSingle pairArrType)
-                                 (Map pairArrType (Right (fmapAlabFun (fmapLabel P) (lambdaPrimal lambdaVars)))
-                                                  (Avar (A.Var argtypeS argidx)))
-                                 (smartPairA
-                                      (Map restype (Right (expFstLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))
-                                      (Map tmpArrType (Right (expSndLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))))
+                           producer
                            <$> primal' nodemap restlabels
                                        (Context (LPush (LPush labelenv lab) lambdaTmpLab)
                                                 (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
@@ -514,17 +521,23 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
               in case (alabValFind labelenv arglab1S, alabValFind labelenv arglab2S, alabValFinds labelenv lambdaLabs') of
                   (Just argidx1, Just argidx2, Just lambdaVars) -> do
                       lab <- genSingleId restype
-                      let pairEltType = TupRpair reselty lambdaTmpType
-                          pairArrType = ArrayR resshape pairEltType
+                      let pairArrType = ArrayR resshape (TupRpair reselty lambdaTmpType)
                           tmpArrType = ArrayR resshape lambdaTmpType
+                          instantiatedLambda = lambdaPrimal lambdaVars
+                          computePrimal = ZipWith pairArrType (Right (fmapAlabFun (fmapLabel P) instantiatedLambda))
+                                                              (Avar (A.Var (labelType arglab1S) argidx1))
+                                                              (Avar (A.Var (labelType arglab2S) argidx2))
+                          -- For small functions, recompute the primal for the dual usage
+                          producer
+                            | Heuristic.functionSize instantiatedLambda < getConfigVar SmallFunSize
+                            = smartPairA (mapFst pairArrType computePrimal) (mapSnd pairArrType computePrimal)
+                            | otherwise
+                            = Alet (A.LeftHandSideSingle pairArrType)
+                                   computePrimal
+                                   (let var = Avar (A.Var pairArrType ZeroIdx)
+                                    in smartPairA (mapFst pairArrType var) (mapSnd pairArrType var))
                       Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
-                           (Alet (A.LeftHandSideSingle pairArrType)
-                                 (ZipWith pairArrType (Right (fmapAlabFun (fmapLabel P) (lambdaPrimal lambdaVars)))
-                                                      (Avar (A.Var (labelType arglab1S) argidx1))
-                                                      (Avar (A.Var (labelType arglab2S) argidx2)))
-                                 (smartPairA
-                                      (Map restype (Right (expFstLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))
-                                      (Map tmpArrType (Right (expSndLam pairEltType)) (Avar (A.Var pairArrType ZeroIdx)))))
+                           producer
                            <$> primal' nodemap restlabels
                                        (Context (LPush (LPush labelenv lab) lambdaTmpLab )
                                                 (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
@@ -681,6 +694,14 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
         fmapTupR $ \lamlab -> case bindmap' `dmapFind` fmapLabel P (tupleLabel lamlab) of
                                   TupRsingle singlelab -> singlelab
                                   _ -> error "Unexpected non-scalar label in free array variables in lambdaLabs"
+
+    mapFst :: ArrayR (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh a)
+    mapFst (ArrayR sht ty@(TupRpair t1 _)) = Map (ArrayR sht t1) (Right (expFstLam ty))
+    mapFst _ = error "mapFst: impossible GADTs"
+
+    mapSnd :: ArrayR (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh b)
+    mapSnd (ArrayR sht ty@(TupRpair _ t2)) = Map (ArrayR sht t2) (Right (expSndLam ty))
+    mapSnd _ = error "mapFst: impossible GADTs"
 
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
