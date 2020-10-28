@@ -423,8 +423,10 @@ library
         Data.Array.Accelerate.Trafo.AD.ADAcc
         Data.Array.Accelerate.Trafo.AD.ADExp
         Data.Array.Accelerate.Trafo.AD.Common
+        Data.Array.Accelerate.Trafo.AD.Config
         Data.Array.Accelerate.Trafo.AD.Debug
         Data.Array.Accelerate.Trafo.AD.Exp
+        Data.Array.Accelerate.Trafo.AD.Heuristic
         Data.Array.Accelerate.Trafo.AD.Orphans
         Data.Array.Accelerate.Trafo.AD.Pretty
         Data.Array.Accelerate.Trafo.AD.Simplify
