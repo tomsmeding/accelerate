@@ -40,9 +40,9 @@ translateAcc (A.OpenAcc expr) = case expr of
     A.Anil -> D.Anil
     A.Acond c t e ->
         D.Acond (A.arraysR expr) (translateExp c) (translateAcc t) (translateAcc e)
-    A.Map _ f e -> D.Map (A.arrayR expr) (Right $ translateFun f) (translateAcc e)
+    A.Map _ f e -> D.Map (A.arrayR expr) (D.ELPlain $ translateFun f) (translateAcc e)
     A.ZipWith _ f e1 e2 ->
-        D.ZipWith (A.arrayR expr) (Right $ toPairedBinop $ translateFun f) (translateAcc e1) (translateAcc e2)
+        D.ZipWith (A.arrayR expr) (D.ELPlain $ toPairedBinop $ translateFun f) (translateAcc e1) (translateAcc e2)
     A.Fold (A.Lam (A.LeftHandSideSingle t) (A.Lam (A.LeftHandSideSingle _)
               (A.Body (A.PrimApp (A.PrimAdd _)
                                  (A.Pair (A.Evar (A.Var _ (A.SuccIdx A.ZeroIdx)))
@@ -59,7 +59,7 @@ translateAcc (A.OpenAcc expr) = case expr of
     A.Scan' dir f e0 e ->
         D.Scan' (A.arraysR expr) dir (toPairedBinop $ translateFun f) (translateExp e0) (translateAcc e)
     A.Generate ty she f ->
-        D.Generate ty (translateExp she) (Right $ translateFun f)
+        D.Generate ty (translateExp she) (D.ELPlain $ translateFun f)
     A.Replicate slt sle e ->
         D.Replicate (A.arrayR expr) slt (translateExp sle) (translateAcc e)
     A.Slice slt e sle ->
@@ -246,8 +246,8 @@ untranslateLHSboundAcc toplhs topexpr
         D.Anil -> A.Anil
         D.Apair _ e1 e2 -> A.Apair (go e1 pv) (go e2 pv)
         D.Acond _ e1 e2 e3 -> A.Acond (untranslateClosedExpA e1 pv) (go e2 pv) (go e3 pv)
-        D.Map (ArrayR _ ty) (Right f) e -> A.Map ty (untranslateClosedFunA f pv) (go e pv)
-        D.ZipWith (ArrayR _ ty) (Right f) e1 e2 -> A.ZipWith ty (untranslateClosedFunA (fromPairedBinop f) pv) (go e1 pv) (go e2 pv)
+        D.Map (ArrayR _ ty) (D.ELPlain f) e -> A.Map ty (untranslateClosedFunA f pv) (go e pv)
+        D.ZipWith (ArrayR _ ty) (D.ELPlain f) e1 e2 -> A.ZipWith ty (untranslateClosedFunA (fromPairedBinop f) pv) (go e1 pv) (go e2 pv)
         D.Fold _ f me0 e -> A.Fold (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go e pv)
         D.Scan _ dir f me0 e -> A.Scan dir (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go e pv)
         D.Scan' _ dir f e0 e -> A.Scan' dir (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA e0 pv) (go e pv)
@@ -258,7 +258,7 @@ untranslateLHSboundAcc toplhs topexpr
                                                  (A.Evar (A.Var ty A.ZeroIdx)))))))
                    (Just (untranslateClosedExp (D.zeroForType ty)))
                    (go e pv)
-        D.Generate ty e (Right f) -> A.Generate ty (untranslateClosedExpA e pv) (untranslateClosedFunA f pv)
+        D.Generate ty e (D.ELPlain f) -> A.Generate ty (untranslateClosedExpA e pv) (untranslateClosedFunA f pv)
         D.Replicate _ slt sle e -> A.Replicate slt (untranslateClosedExpA sle pv) (go e pv)
         D.Slice _ slt e sle -> A.Slice slt (go e pv) (untranslateClosedExpA sle pv)
         D.Reduce _ spec combfun e

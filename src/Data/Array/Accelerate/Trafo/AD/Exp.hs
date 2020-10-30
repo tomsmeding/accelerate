@@ -405,20 +405,20 @@ fmapAlabFun :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
 fmapAlabFun f (Lam lhs fun) = Lam lhs (fmapAlabFun f fun)
 fmapAlabFun f (Body ex) = Body (fmapAlabExp f ex)
 
-data SplitLambdaAD t t' lab alab tenv sh =
-    forall fv tmp.
+data SplitLambdaAD t t' lab alab tenv tmp =
+    forall fv.
         SplitLambdaAD (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab tenv (t -> (t', tmp)))
                       (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab tenv ((t', tmp) -> t))
                       (TupR (DLabel ArrayR alab) fv)
-                      (TypeR tmp, DLabel ArrayR alab (Array sh tmp))
+                      (TypeR tmp)
 
 fmapAlabSplitLambdaAD :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
-                      -> SplitLambdaAD t t' lab alab tenv sh
-                      -> SplitLambdaAD t t' lab alab' tenv sh
-fmapAlabSplitLambdaAD f (SplitLambdaAD f1 f2 tup (ty, lab)) =
+                      -> SplitLambdaAD t t' lab alab tenv tmp
+                      -> SplitLambdaAD t t' lab alab' tenv tmp
+fmapAlabSplitLambdaAD f (SplitLambdaAD f1 f2 tup ty) =
     SplitLambdaAD (fmapAlabFun f . f1) (fmapAlabFun f . f2)
                   (fmapTupR f tup)
-                  (ty, f lab)
+                  ty
 
 data LetBoundExpE env t s =
     forall env'. LetBoundExpE (A.ELeftHandSide t env env') (A.ExpVars env' s)

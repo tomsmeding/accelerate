@@ -179,12 +179,11 @@ produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case ar
                         'A' : show (A.idxToInt idx) ++ " not computed"
     _ -> error "produceGradient: what?"
 
-splitLambdaAD :: forall f aenv t t' sh unused unused2 tenv. Functor f
-              => LabVal ArrayR Int aenv
-              -> (forall ty. TypeR ty -> f (DLabel ArrayR Int (Array sh ty)))
+splitLambdaAD :: forall aenv t t' unused unused2 tenv.
+                 LabVal ArrayR Int aenv
               -> Fun aenv unused unused2 tenv (t -> t')
-              -> f (SplitLambdaAD t t' (PDExp Int) Int tenv sh)
-splitLambdaAD alabelenv tmplabGen origfun@(Lam paramlhs (Body expr))
+              -> Exists (SplitLambdaAD t t' (PDExp Int) Int tenv)
+splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
   | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- etypeOf expr  -- Float result type assertion
   , TupRsingle exprtypeS <- etypeOf expr
   , ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
@@ -219,23 +218,24 @@ splitLambdaAD alabelenv tmplabGen origfun@(Lam paramlhs (Body expr))
                                               DualResult ctx' _ builder' <- dual exploded adjointProducer ctx
                                               return $ builder' $ produceGradient argLabelMap ctx' argsRHS)
                   -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
-                  return $ SplitLambdaAD (\fvavars ->
-                                              Lam paramlhs'
-                                                (Body (realiseArgs
-                                                          (inlineAvarLabels fvlabs fvavars e')
-                                                          paramlhs')))
-                                         (\fvavars ->
-                                              Lam (A.LeftHandSidePair (A.LeftHandSideSingle scalarType) tmpRestoreLHS)
-                                                  (Body (generaliseArgs  {- TODO: is this generalisation correct? -}
-                                                            (inlineAvarLabels fvlabs fvavars dualBody))))
-                                         fvlabs
-                                         <$> fmap (A.varsType tmpvars,) (tmplabGen (A.varsType tmpvars))
+                  return $ Exists $
+                      SplitLambdaAD (\fvavars ->
+                                         Lam paramlhs'
+                                           (Body (realiseArgs
+                                                     (inlineAvarLabels fvlabs fvavars e')
+                                                     paramlhs')))
+                                    (\fvavars ->
+                                         Lam (A.LeftHandSidePair (A.LeftHandSideSingle scalarType) tmpRestoreLHS)
+                                             (Body (generaliseArgs  {- TODO: is this generalisation correct? -}
+                                                       (inlineAvarLabels fvlabs fvavars dualBody))))
+                                    fvlabs
+                                    (A.varsType tmpvars)
             _ ->
                 error "Final primal value not computed"
   | otherwise =
       internalError $ "Non-Float-producing lambdas under gradientA currently unsupported\nIn lambda: " ++
                           show (generaliseLabFunA (generaliseLabFun origfun) :: Fun aenv () () tenv (t -> t'))
-splitLambdaAD _ _ _ =
+splitLambdaAD _ _ =
     internalError "splitLambdaAD passed function with more than 1 argument"
 
 -- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.

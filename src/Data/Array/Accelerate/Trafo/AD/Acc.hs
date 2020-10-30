@@ -8,6 +8,7 @@ module Data.Array.Accelerate.Trafo.AD.Acc (
     Idx(..), idxToInt
 ) where
 
+import Data.Functor.Identity
 import Data.List (intercalate)
 import Data.GADT.Show
 
@@ -33,9 +34,21 @@ type ADLabelT = DLabel ArraysR
 -- Array programs
 -- --------------
 
-type ExpLambda1 aenv lab alab tenv sh t1 t2 =
-    Either (SplitLambdaAD t1 t2 lab alab tenv sh)
-           (Fun aenv lab alab tenv (t1 -> t2))
+data ExpLambda1 aenv lab alab tenv sh t1 t2
+  = forall tmp. ELSplit (SplitLambdaAD t1 t2 lab alab tenv tmp) (DLabel ArrayR alab (Array sh tmp))
+  |             ELPlain (Fun aenv lab alab tenv (t1 -> t2))
+
+fmapPlain :: (Fun aenv lab alab tenv (t1 -> t2) -> Fun aenv' lab alab tenv (t1 -> t2))
+          -> ExpLambda1 aenv lab alab tenv sh t1 t2
+          -> ExpLambda1 aenv' lab alab tenv sh t1 t2
+fmapPlain f e = runIdentity (traversePlain (Identity . f) e)
+
+traversePlain :: Applicative f
+              => (Fun aenv lab alab tenv (t1 -> t2) -> f (Fun aenv' lab alab tenv (t1 -> t2)))
+              -> ExpLambda1 aenv lab alab tenv sh t1 t2
+              -> f (ExpLambda1 aenv' lab alab tenv sh t1 t2)
+traversePlain _ (ELSplit lam lab) = pure (ELSplit lam lab)
+traversePlain f (ELPlain fun) = ELPlain <$> f fun
 
 -- TODO: Check how many reified types can be removed in this AST
 data OpenAcc aenv lab alab args t where
@@ -309,8 +322,8 @@ showsAcc se d (Alabel lab) = showParen (d > 0) $
     showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
 
 showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv sh t1 t2 -> ShowS
-showsLambda se d (Right fun) = showsFun se d fun
-showsLambda _ _ (Left _) = showString "{splitlambda}"
+showsLambda se d (ELPlain fun) = showsFun se d fun
+showsLambda _ _ ELSplit{} = showString "{splitlambda}"
 
 instance (Show lab, Show alab) => Show (OpenAcc aenv lab alab args t) where
     showsPrec = showsAcc (ShowEnv show show 0 () [])
