@@ -83,7 +83,7 @@ newtype OpenAccEnv lab alab args aenv t =
 instance ExprLike ArrayR (OpenAccEnv lab alab args) where
   nil = OpenAccEnv Anil
   pair (OpenAccEnv e1) (OpenAccEnv e2) = OpenAccEnv (Apair (TupRpair (atypeOf e1) (atypeOf e2)) e1 e2)
-  var v@(A.Var (ArrayR _ _) _) = OpenAccEnv (Avar v)
+  var v@(A.Var ArrayR{} _) = OpenAccEnv (Avar v)
   let_ lhs (OpenAccEnv e1) (OpenAccEnv e2) = OpenAccEnv (Alet lhs e1 e2)
   fromPair (OpenAccEnv (Apair _ e1 e2)) = Just (OpenAccEnv e1, OpenAccEnv e2)
   fromPair _ = Nothing
@@ -153,8 +153,8 @@ tupleZipAcc :: Applicative m
             -> OpenAcc aenv lab alab args t
             -> m (OpenAcc aenv lab alab args t)
 tupleZipAcc ty combine ignore e1 e2 =
-  unAccEnv <$> tupleZipGen ty (\t@(ArrayR _ _) (OpenAccEnv x1) (OpenAccEnv x2) -> OpenAccEnv <$> combine t x1 x2)
-                              (\t@(ArrayR _ _) (OpenAccEnv x) -> ignore t x)
+  unAccEnv <$> tupleZipGen ty (\t@ArrayR{} (OpenAccEnv x1) (OpenAccEnv x2) -> OpenAccEnv <$> combine t x1 x2)
+                              (\t@ArrayR{} (OpenAccEnv x) -> ignore t x)
                               (OpenAccEnv e1)
                               (OpenAccEnv e2)
 

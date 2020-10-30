@@ -451,7 +451,7 @@ auntranslateGet _ _ = error "auntranslateGet: impossible GADTs"
 
 alhsCopy :: ArraysR t -> LetBoundExpA aenv t t
 alhsCopy TupRunit = LetBoundExpA (A.LeftHandSideWildcard TupRunit) (A.OpenAcc A.Anil)
-alhsCopy (TupRsingle sty@(ArrayR _ _)) = LetBoundExpA (A.LeftHandSideSingle sty) (A.OpenAcc (A.Avar (A.Var sty A.ZeroIdx)))
+alhsCopy (TupRsingle sty@ArrayR{}) = LetBoundExpA (A.LeftHandSideSingle sty) (A.OpenAcc (A.Avar (A.Var sty A.ZeroIdx)))
 alhsCopy (TupRpair t1 t2)
   | LetBoundExpA lhs1 ex1 <- alhsCopy t1
   , LetBoundExpA lhs2 ex2 <- alhsCopy t2
