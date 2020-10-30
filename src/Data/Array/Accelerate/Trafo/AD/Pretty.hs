@@ -291,8 +291,8 @@ layoutFun se d (Lam lhs fun) =
                       (layoutFun (se { seSeed = seed', seEnv = env' }) 0 fun)
 
 layoutLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv sh t1 t2 -> Layout
-layoutLambda se d (Right fun) = layoutFun se d fun
-layoutLambda _ _ (Left _) = string "{splitlambda}"
+layoutLambda se d (ELPlain fun) = layoutFun se d fun
+layoutLambda _ _ ELSplit{} = string "{splitlambda}"
 
 showRSpec :: ReduceSpec spec red full -> String
 showRSpec RSpecNil = "()"

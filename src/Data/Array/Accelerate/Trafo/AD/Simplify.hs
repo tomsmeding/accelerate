@@ -181,8 +181,8 @@ simplifyFun (Lam lhs fun) = Lam lhs !$! simplifyFun fun
 simplifyFun (Body ex) = Body !$! goExp' ex
 
 simplifyLam1 :: ExpLambda1 aenv lab alab tenv sh t1 t2 -> Stats aenv -> (Stats aenv, ExpLambda1 aenv lab alab tenv sh t1 t2)
-simplifyLam1 (Left lam) = returnS (Left lam)
-simplifyLam1 (Right fun) = \s -> Right <$> simplifyFun fun s
+simplifyLam1 (ELSplit lam lab) = returnS (ELSplit lam lab)
+simplifyLam1 (ELPlain fun) = \s -> ELPlain <$> simplifyFun fun s
 
 noCostCopy :: OpenExp env aenv lab alab args tenv t -> Bool
 noCostCopy (Var _) = True
@@ -258,8 +258,7 @@ inlineAEF f (Lam lhs fun) = Lam lhs (inlineAEF f fun)
 inlineAEF f (Body e) = Body (inlineAE f e)
 
 inlineALam :: InlinerA aenv aenv' lab alab args -> ExpLambda1 aenv lab alab tenv sh t t' -> ExpLambda1 aenv' lab alab tenv sh t  t'
-inlineALam _ (Left lam) = Left lam
-inlineALam f (Right fun) = Right (inlineAEF f fun)
+inlineALam f = fmapPlain (inlineAEF f)
 
 data InlinerE env env' aenv lab alab args tenv =
     InlinerE { unInlinerE :: forall t. A.ExpVar env t -> OpenExp env' aenv lab alab args tenv t }
