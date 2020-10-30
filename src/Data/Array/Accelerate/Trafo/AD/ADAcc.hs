@@ -220,7 +220,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
               Alet lhs' (go argWeaken varWeaken rhs)
                   (go (A.weakenWithLHS lhs' A..> argWeaken) (A.sinkWithLHS lhs lhs' varWeaken) ex)
         Avar (A.Var ty idx) -> Avar (A.Var ty (varWeaken A.>:> idx))
-        Aarg ty@(ArrayR _ _) idx -> Avar (A.Var ty (argWeaken A.>:> idx))
+        Aarg ty@ArrayR{} idx -> Avar (A.Var ty (argWeaken A.>:> idx))
         Alabel _ -> error "realiseArgs: unexpected Label"
 
 -- Map will NOT contain:
@@ -1228,7 +1228,7 @@ arraysSum :: ArraysR t
           -> [OpenAcc aenv lab alab args t]
           -> OpenAcc aenv lab alab args t
 arraysSum TupRunit TupRunit _ = Anil
-arraysSum (TupRsingle ty@(ArrayR _ _)) (TupRsingle pvar) [] = generateConstantArray ty (Shape (Left pvar))
+arraysSum (TupRsingle ty@ArrayR{}) (TupRsingle pvar) [] = generateConstantArray ty (Shape (Left pvar))
 arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) [] = Apair ty (arraysSum t1 pvars1 []) (arraysSum t2 pvars2 [])
 arraysSum ty _ l = foldl1 (tupleZipAcc' ty (const arrayPlus) (\_ _ -> False)) l
 

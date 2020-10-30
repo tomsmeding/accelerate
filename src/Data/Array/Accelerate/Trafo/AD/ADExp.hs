@@ -284,7 +284,7 @@ data TuplifyAvars lab aenv =
 
 tuplifyAvars :: Ord lab => [AnyLabel ArrayR lab] -> TuplifyAvars lab aenv
 tuplifyAvars [] = TuplifyAvars (const TupRunit) TupRunit A.LeftHandSideUnit -- (const mempty)
-tuplifyAvars (AnyLabel lab@(DLabel ty@(ArrayR _ _) _) : rest)
+tuplifyAvars (AnyLabel lab@(DLabel ty@ArrayR{} _) : rest)
   | TuplifyAvars tupexprf labs lhs {-mpf-} <- tuplifyAvars rest
   = TuplifyAvars (\w -> TupRpair (tupexprf (A.weakenSucc w))
                                  (TupRsingle (A.Var ty (w A.>:> ZeroIdx))))

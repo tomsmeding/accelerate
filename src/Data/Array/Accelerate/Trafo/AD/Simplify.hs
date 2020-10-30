@@ -57,7 +57,7 @@ goAcc = \case
         goAcc $
             inlineA (InlinerA (\case A.Var ty' ZeroIdx | Just Refl <- matchArrayR ty ty' -> Avar var
                                                        | otherwise -> error "Invalid GADTs"
-                                     A.Var ty'@(ArrayR _ _) (SuccIdx idx) -> Avar (A.Var ty' idx)))
+                                     A.Var ty'@ArrayR{} (SuccIdx idx) -> Avar (A.Var ty' idx)))
                     a2
 
     -- Linear inlining
@@ -67,7 +67,7 @@ goAcc = \case
             in (s2, if n <= 1
                         then inlineA (InlinerA (\case A.Var ty' ZeroIdx | Just Refl <- matchArrayR ty ty' -> a1'
                                                                         | otherwise -> error "Invalid GADTs"
-                                                      A.Var ty'@(ArrayR _ _) (SuccIdx idx) -> Avar (A.Var ty' idx)))
+                                                      A.Var ty'@ArrayR{} (SuccIdx idx) -> Avar (A.Var ty' idx)))
                                      a2'
                         else Alet lhs a1' a2')
 
@@ -194,7 +194,7 @@ data InlinerA aenv aenv' lab alab args =
 
 sinkInlinerASucc :: InlinerA aenv aenv' lab alab args -> InlinerA (aenv, a) (aenv', a) lab alab args
 sinkInlinerASucc (InlinerA f) =
-    InlinerA (\case A.Var ty@(ArrayR _ _) ZeroIdx -> Avar (A.Var ty ZeroIdx)
+    InlinerA (\case A.Var ty@ArrayR{} ZeroIdx -> Avar (A.Var ty ZeroIdx)
                     A.Var ty (SuccIdx idx) -> sinkAcc (weakenSucc' weakenId) (f (A.Var ty idx)))
 
 sinkInlinerALHS :: A.ALeftHandSide t aenv aenv2 -> A.ALeftHandSide t aenv' aenv2' -> InlinerA aenv aenv' lab alab args -> InlinerA aenv2 aenv2' lab alab args

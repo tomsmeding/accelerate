@@ -382,7 +382,7 @@ avars = snd . avars'
   where
     avars' :: A.ArrayVars aenv t -> (ArraysR t, OpenAcc aenv lab alab args t)
     avars' TupRunit = (TupRunit, Anil)
-    avars' (TupRsingle var@(A.Var ty@(ArrayR _ _) _)) = (TupRsingle ty, Avar var)
+    avars' (TupRsingle var@(A.Var ty@ArrayR{} _)) = (TupRsingle ty, Avar var)
     avars' (TupRpair vars1 vars2) =
         let (t1, e1) = avars' vars1
             (t2, e2) = avars' vars2
