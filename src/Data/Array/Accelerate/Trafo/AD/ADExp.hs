@@ -206,17 +206,18 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
                   let e' = builder (evars (TupRpair resultvars tmpvars))
                   adjlab <- genSingleId scalarType
                   (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpRestoreVars)
-                  dualBody <- instantiator
-                                  (Context (lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs) mempty)
-                                  (evars tmpRestoreVars)
-                                  (\ctx -> do traceM $ "invoking exp dual with context: " ++ showContext ctx
-                                              let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args tenv t'
-                                                  adjointProducer (Context labelenv' _) =
-                                                    case elabValFind labelenv' adjlab of
-                                                        Just idx -> Var (A.Var exprtypeS idx)
-                                                        Nothing -> error "splitLambdaAD: adjoint of final value not computed"
-                                              DualResult ctx' _ builder' <- dual exploded adjointProducer ctx
-                                              return $ builder' $ produceGradient argLabelMap ctx' argsRHS)
+                  PrimalInstantiatorCont dualInstCtx dualLiftInst <-
+                      instantiator
+                           (Context (lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs) mempty)
+                           (evars tmpRestoreVars)
+                  traceM $ "invoking exp dual with context: " ++ showContext dualInstCtx
+                  let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args tenv t'
+                      adjointProducer (Context labelenv' _) =
+                        case elabValFind labelenv' adjlab of
+                            Just idx -> Var (A.Var exprtypeS idx)
+                            Nothing -> error "splitLambdaAD: adjoint of final value not computed"
+                  DualResult ctx' _ builder' <- dual exploded adjointProducer dualInstCtx
+                  let dualBody = dualLiftInst $ builder' $ produceGradient argLabelMap ctx' argsRHS
                   -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
                   return $ Exists $
                       SplitLambdaAD (\fvavars ->
@@ -282,7 +283,7 @@ data TuplifyVars s lab env =
                      -- -- Lookup vars in passed tuple inside the lambda
                      -- (forall aenv''. aenv' A.:> aenv'' -> DMap (DLabel ArrayR lab) (A.ArrayVar aenv''))
 
-tuplifyVars :: Ord lab => [AnyLabel s lab] -> TuplifyVars s lab aenv
+tuplifyVars :: Ord lab => [AnyLabel s lab] -> TuplifyVars s lab env
 tuplifyVars [] = TuplifyVars (const TupRunit) TupRunit A.LeftHandSideUnit -- (const mempty)
 tuplifyVars (AnyLabel lab@(DLabel ty _) : rest)
   | TuplifyVars tupexprf labs lhs {-mpf-} <- tuplifyVars rest
@@ -301,11 +302,18 @@ data PrimalBundle env aenv lab alab =
                      (PrimalInstantiator aenv lab alab tmp)
 
 data PrimalInstantiator aenv lab alab tmp =
-    PrimalInstantiator (forall env1 t args tenv.
+    PrimalInstantiator (forall env1 args tenv.
                         EContext lab env1
                      -> OpenExp env1 aenv (PDExp lab) alab args tenv tmp
-                     -> (forall env2. EContext lab env2 -> IdGen (OpenExp env2 aenv (PDExp lab) alab args tenv t))
-                     -> IdGen (OpenExp env1 aenv (PDExp lab) alab args tenv t))
+                     -> IdGen (PrimalInstantiatorCont env1 aenv lab alab args tenv))
+
+-- The continuation in PrimalInstantiator.
+data PrimalInstantiatorCont env1 aenv lab alab args tenv =
+    forall env2.
+        PrimalInstantiatorCont (EContext lab env2)
+                               (forall t.
+                                   OpenExp env2 aenv (PDExp lab) alab args tenv t
+                                -> OpenExp env1 aenv (PDExp lab) alab args tenv t)
 
 data PrimalBundle' env aenv lab alab =
     forall tmp.
@@ -316,11 +324,10 @@ data PrimalBundle' env aenv lab alab =
                        -> IdGen ([DSum (EDLabel lab) (OpenExp env' aenv (PDExp lab) alab args tenv)]  -- new scalar labels and their corresponding fragments of the temps tuple
                                 ,DMap (EDLabel lab) (EDLabel lab)))  -- old to new scalar label translation map
 
--- Does not use the contents of the given context; just adds to the bottom of it.
 constructPrimalBundle :: EContext Int env -> PrimalBundle env aenv Int alab
 constructPrimalBundle (Context toplabelenv topbindmap)
   | PrimalBundle' vars _ instantiator <- constructPrimalBundle' (enumerateLabelenv toplabelenv)
-  = PrimalBundle vars $ PrimalInstantiator $ \(Context locallabelenv localbindmap) tupe cont -> do
+  = PrimalBundle vars $ PrimalInstantiator $ \(Context locallabelenv localbindmap) tupe -> do
       (fragments, oldnewmap) <- instantiator tupe
       let bindmap' = DMap.map (fmapTupR (oldnewmap DMap.!)) topbindmap
           localbindmap' = DMap.unionWithKey (error "constructPrimalBundle: Context at usage of primal bundle contains keys already defined in primal computation")
@@ -328,7 +335,7 @@ constructPrimalBundle (Context toplabelenv topbindmap)
       traceM $ "constructPrimalBundle: oldnewmap: " ++ showList' (\(k :=> v) -> "(" ++ showDLabel k ++ ", " ++ showDLabel v ++ ")") (DMap.assocs oldnewmap) ++ "]"
       traceM $ "constructPrimalBundle: bindmap': " ++ showBindmap bindmap'
       traceM $ "constructPrimalBundle: fragments: " ++ showList' (\(k :=> _) -> "(" ++ showDLabel k ++ ", ...)") fragments
-      bindAll (Context locallabelenv localbindmap') A.weakenId fragments cont
+      bindAll (Context locallabelenv localbindmap') A.weakenId fragments
   where
     constructPrimalBundle' :: [DSum (EDLabel Int) (Idx env)] -> PrimalBundle' env aenv Int alab
     constructPrimalBundle' [] = PrimalBundle' TupRunit TupRunit (\_ -> return (mempty, mempty))
@@ -345,13 +352,12 @@ constructPrimalBundle (Context toplabelenv topbindmap)
     bindAll :: EContext Int env'
             -> env A.:> env'
             -> [DSum (EDLabel Int) (OpenExp env aenv (PDExp Int) alab args tenv)]
-            -> (forall env2. EContext Int env2 -> IdGen (OpenExp env2 aenv (PDExp Int) alab args tenv t))
-            -> IdGen (OpenExp env' aenv (PDExp Int) alab args tenv t)
-    bindAll ctx _ [] cont = cont ctx
-    bindAll (Context labelenv bindmap) w ((lab :=> ex) : rest) cont =
-        trace ("bindAll: let-binding expression at label " ++ showDLabel lab) $
-        Let (A.LeftHandSideSingle (labelType lab)) (sinkExp w ex)
-            <$> bindAll (Context (LPush labelenv lab) bindmap) (A.weakenSucc' w) rest cont
+            -> IdGen (PrimalInstantiatorCont env' aenv Int alab args tenv)
+    bindAll ctx _ [] = return (PrimalInstantiatorCont ctx id)
+    bindAll (Context labelenv bindmap) w ((lab :=> ex) : rest) = do
+        traceM ("bindAll: let-binding expression at label " ++ showDLabel lab)
+        PrimalInstantiatorCont ctx' f1 <- bindAll (Context (LPush labelenv lab) bindmap) (A.weakenSucc' w) rest
+        return (PrimalInstantiatorCont ctx' (Let (A.LeftHandSideSingle (labelType lab)) (sinkExp w ex) . f1))
 
 enumerateLabelenv :: LabVal s lab env -> [DSum (DLabel s lab) (Idx env)]
 enumerateLabelenv = go A.weakenId
