@@ -192,7 +192,7 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
   , let argsRHS = varsToArgs (varsgen A.weakenId)
         closedExpr = Let paramlhs' argsRHS (generaliseArgs (sinkExp paramWeaken (generaliseLab expr)))
   , (fvlablist, labelisedExpr) <- labeliseExp alabelenv closedExpr
-  , TuplifyAvars _ fvlabs _ <- tuplifyAvars fvlablist
+  , TuplifyVars _ fvlabs _ <- tuplifyVars fvlablist
   = -- trace ("AD result: " ++ show transformedExp) $
     evalIdGen $ do
         exploded@(reslab, _, argLabelMap) <- explode LEmpty labelisedExpr
@@ -271,27 +271,27 @@ labeliseExp labelenv ex = case ex of
     Label lab -> return (Label lab)
     Index _ _ -> error "Index not supported in labeliseExp"
 
-data TuplifyAvars lab aenv =
-    forall aenv' t.
-        TuplifyAvars -- Collects vars from array environment outside the lambda
-                     (forall aenv''. aenv' A.:> aenv'' -> A.ArrayVars aenv'' t)
+data TuplifyVars s lab env =
+    forall env' t.
+        TuplifyVars -- Collects vars from array environment outside the lambda
+                     (forall env''. env' A.:> env'' -> A.Vars s env'' t)
                      -- The tuple of labels bound
-                     (TupR (DLabel ArrayR lab) t)
+                     (TupR (DLabel s lab) t)
                      -- Bind the collected vars in the lambda argument
-                     (A.LeftHandSide ArrayR t aenv aenv')
+                     (A.LeftHandSide s t env env')
                      -- -- Lookup vars in passed tuple inside the lambda
                      -- (forall aenv''. aenv' A.:> aenv'' -> DMap (DLabel ArrayR lab) (A.ArrayVar aenv''))
 
-tuplifyAvars :: Ord lab => [AnyLabel ArrayR lab] -> TuplifyAvars lab aenv
-tuplifyAvars [] = TuplifyAvars (const TupRunit) TupRunit A.LeftHandSideUnit -- (const mempty)
-tuplifyAvars (AnyLabel lab@(DLabel ty@ArrayR{} _) : rest)
-  | TuplifyAvars tupexprf labs lhs {-mpf-} <- tuplifyAvars rest
-  = TuplifyAvars (\w -> TupRpair (tupexprf (A.weakenSucc w))
-                                 (TupRsingle (A.Var ty (w A.>:> ZeroIdx))))
-                 (TupRpair labs (TupRsingle lab))
-                 (A.LeftHandSidePair lhs (A.LeftHandSideSingle ty))
-                 -- (\w -> DMap.insert lab (A.Var ty (w A.>:> ZeroIdx))
-                 --                    (mpf (A.weakenSucc w)))
+tuplifyVars :: Ord lab => [AnyLabel s lab] -> TuplifyVars s lab aenv
+tuplifyVars [] = TuplifyVars (const TupRunit) TupRunit A.LeftHandSideUnit -- (const mempty)
+tuplifyVars (AnyLabel lab@(DLabel ty _) : rest)
+  | TuplifyVars tupexprf labs lhs {-mpf-} <- tuplifyVars rest
+  = TuplifyVars (\w -> TupRpair (tupexprf (A.weakenSucc w))
+                                (TupRsingle (A.Var ty (w A.>:> ZeroIdx))))
+                (TupRpair labs (TupRsingle lab))
+                (A.LeftHandSidePair lhs (A.LeftHandSideSingle ty))
+                -- (\w -> DMap.insert lab (A.Var ty (w A.>:> ZeroIdx))
+                --                    (mpf (A.weakenSucc w)))
 
 data PrimalBundle env aenv lab alab =
     forall tmp.
