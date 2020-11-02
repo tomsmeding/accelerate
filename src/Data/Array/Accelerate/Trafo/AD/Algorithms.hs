@@ -4,7 +4,7 @@ module Data.Array.Accelerate.Trafo.AD.Algorithms where
 
 import Data.Foldable (toList)
 import Data.Function (on)
-import Data.List (nubBy)
+import Data.List (nubBy, sort)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import qualified Data.Set as Set
@@ -49,3 +49,11 @@ topsort' ordinject nodes afterfunc =
             incoming' = foldr (\n' -> Map.adjust (fmap pred) (ordinject n')) incoming nexts
             newHeads = filter (\n' -> snd (incoming' Map.! ordinject n') == 0) nexts
         in n : go incoming' (newHeads ++ stk)
+
+sortUniq :: Ord a => [a] -> [a]
+sortUniq = uniq . sort
+  where
+    uniq :: Eq a => [a] -> [a]
+    uniq (x:y:xs) | x == y = uniq (x:xs)
+                  | otherwise = x : uniq (y:xs)
+    uniq l = l

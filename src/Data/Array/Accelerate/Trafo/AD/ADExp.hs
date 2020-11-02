@@ -240,37 +240,48 @@ splitLambdaAD _ _ =
     internalError "splitLambdaAD passed function with more than 1 argument"
 
 -- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.
+-- The list of labels is deduplicated.
 -- Asserts that there are no array labels yet in the expression, and resets the array environment.
-labeliseFun :: LabVal ArrayR alab aenv
+labeliseFun :: Ord alab
+            => LabVal ArrayR alab aenv
             -> OpenFun env aenv lab alab' tenv t
             -> ([AnyLabel ArrayR alab], OpenFun env aenv' lab alab tenv t)
 labeliseFun labelenv (Lam lhs fun) = Lam lhs <$> labeliseFun labelenv fun
 labeliseFun labelenv (Body ex) = Body <$> labeliseExp labelenv ex
 
 -- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.
+-- The list of labels is deduplicated.
 -- Asserts that there are no array labels yet in the expression, and resets the array environment.
-labeliseExp :: LabVal ArrayR alab aenv
+labeliseExp :: Ord alab
+            => LabVal ArrayR alab aenv
             -> OpenExp env aenv lab alab' args tenv t
             -> ([AnyLabel ArrayR alab], OpenExp env aenv' lab alab args tenv t)
-labeliseExp labelenv ex = case ex of
-    Const ty x -> return (Const ty x)
-    PrimApp ty op e -> PrimApp ty op <$> labeliseExp labelenv e
-    Pair ty e1 e2 -> Pair ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2
-    Nil -> return Nil
-    Cond ty e1 e2 e3 -> Cond ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2 <*> labeliseExp labelenv e3
-    Shape (Left (A.Var _ idx)) -> do
-        let lab = prjL idx labelenv
-        W.tell [AnyLabel lab]
-        return (Shape (Right lab))
-    Shape (Right _) -> error "Unexpected Shape(Label) in labeliseExp"
-    ShapeSize sht e -> ShapeSize sht <$> labeliseExp labelenv e
-    Get ty ti e -> Get ty ti <$> labeliseExp labelenv e
-    Let lhs rhs e -> Let lhs <$> labeliseExp labelenv rhs <*> labeliseExp labelenv e
-    Arg ty idx -> return (Arg ty idx)
-    Var var -> return (Var var)
-    FreeVar var -> return (FreeVar var)
-    Label lab -> return (Label lab)
-    Index _ _ -> error "Index not supported in labeliseExp"
+labeliseExp labelenv = \ex -> let (labs, ex') = go ex
+                              in (sortUniq labs, ex')
+  where
+    go ex = case ex of
+      Const ty x -> return (Const ty x)
+      PrimApp ty op e -> PrimApp ty op <$> labeliseExp labelenv e
+      Pair ty e1 e2 -> Pair ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2
+      Nil -> return Nil
+      Cond ty e1 e2 e3 -> Cond ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2 <*> labeliseExp labelenv e3
+      Shape (Left (A.Var _ idx)) -> do
+          let lab = prjL idx labelenv
+          W.tell [AnyLabel lab]
+          return (Shape (Right lab))
+      Shape (Right _) -> error "Unexpected Shape(Label) in labeliseExp"
+      Index (Left (A.Var _ idx)) she -> do
+          let lab = prjL idx labelenv
+          W.tell [AnyLabel lab]
+          Index (Right lab) <$> labeliseExp labelenv she
+      Index (Right _) _ -> error "Unexpected Index(Label) in labeliseExp"
+      ShapeSize sht e -> ShapeSize sht <$> labeliseExp labelenv e
+      Get ty ti e -> Get ty ti <$> labeliseExp labelenv e
+      Let lhs rhs e -> Let lhs <$> labeliseExp labelenv rhs <*> labeliseExp labelenv e
+      Arg ty idx -> return (Arg ty idx)
+      Var var -> return (Var var)
+      FreeVar var -> return (FreeVar var)
+      Label lab -> return (Label lab)
 
 data TuplifyVars s lab env =
     forall env' t.
