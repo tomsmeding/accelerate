@@ -11,6 +11,7 @@ module Data.Array.Accelerate.Trafo.AD.Exp (
     Idx(..), idxToInt
 ) where
 
+import Data.Dependent.Map (DMap)
 import Data.List (intercalate)
 import Data.GADT.Show
 
@@ -405,20 +406,31 @@ fmapAlabFun :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
 fmapAlabFun f (Lam lhs fun) = Lam lhs (fmapAlabFun f fun)
 fmapAlabFun f (Body ex) = Body (fmapAlabExp f ex)
 
-data SplitLambdaAD t t' lab alab tenv tmp =
+newtype IndexInstantiator idxadj sh t =
+    IndexInstantiator
+        (forall     env aenv lab alab args tenv.
+            OpenExp env aenv lab alab args tenv idxadj
+         -> OpenExp env aenv lab alab args tenv (t, sh))
+
+data IndexInstantiators idxadj arr where
+    IndexInstantiators
+        :: [IndexInstantiator idxadj sh t]
+        -> IndexInstantiators idxadj (Array sh t)
+
+instance Semigroup (IndexInstantiators idxadj arr) where
+    IndexInstantiators l <> IndexInstantiators l' = IndexInstantiators (l <> l')
+
+data SplitLambdaAD t t' lab alab tenv tmp idxadj =
     forall fv.
-        SplitLambdaAD (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab tenv (t -> (t', tmp)))
-                      (forall aenv. A.ArrayVars aenv fv -> Fun aenv lab alab tenv ((t', tmp) -> t))
+        SplitLambdaAD (forall aenv alab'. A.ArrayVars aenv fv -> Fun aenv lab alab' tenv (t -> (t', tmp)))
+                      (forall aenv alab'. A.ArrayVars aenv fv -> Fun aenv lab alab' tenv ((t', tmp) -> (t, idxadj)))
                       (TupR (DLabel ArrayR alab) fv)
                       (TypeR tmp)
+                      (TypeR idxadj)
+                      (DMap (DLabel ArrayR alab) (IndexInstantiators idxadj))
 
-fmapAlabSplitLambdaAD :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
-                      -> SplitLambdaAD t t' lab alab tenv tmp
-                      -> SplitLambdaAD t t' lab alab' tenv tmp
-fmapAlabSplitLambdaAD f (SplitLambdaAD f1 f2 tup ty) =
-    SplitLambdaAD (fmapAlabFun f . f1) (fmapAlabFun f . f2)
-                  (fmapTupR f tup)
-                  ty
+data SomeSplitLambdaAD t t' lab alab tenv =
+    forall tmp idxadj. SomeSplitLambdaAD (SplitLambdaAD t t' lab alab tenv tmp idxadj)
 
 data LetBoundExpE env t s =
     forall env'. LetBoundExpE (A.ELeftHandSide t env env') (A.ExpVars env' s)
@@ -510,6 +522,22 @@ expALabels (Label _) = []
 expFunALabels :: OpenFun env aenv lab alab tenv t -> [AnyLabel ArrayR alab]
 expFunALabels (Lam _ fun) = expFunALabels fun
 expFunALabels (Body ex) = expALabels ex
+
+expHasIndex :: OpenExp env aenv lab alab args tenv t -> Bool
+expHasIndex (Const _ _) = False
+expHasIndex (PrimApp _ _ e) = expHasIndex e
+expHasIndex (Pair _ e1 e2) = expHasIndex e1 || expHasIndex e2
+expHasIndex Nil = False
+expHasIndex (Cond _ c t e) = expHasIndex c || expHasIndex t || expHasIndex e
+expHasIndex (Shape _) = False
+expHasIndex (Index _ _) = True
+expHasIndex (ShapeSize _ e) = expHasIndex e
+expHasIndex (Get _ _ e) = expHasIndex e
+expHasIndex (Let _ rhs e) = expHasIndex rhs || expHasIndex e
+expHasIndex (Var _) = False
+expHasIndex (FreeVar _) = False
+expHasIndex (Arg _ _) = False
+expHasIndex (Label _) = False
 
 
 mkJust :: forall env aenv lab alab args tenv t. OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv (A.PrimMaybe t)

@@ -182,10 +182,11 @@ produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case ar
 splitLambdaAD :: forall aenv t t' unused unused2 tenv.
                  LabVal ArrayR Int aenv
               -> Fun aenv unused unused2 tenv (t -> t')
-              -> Exists (SplitLambdaAD t t' (PDExp Int) Int tenv)
+              -> SomeSplitLambdaAD t t' (PDExp Int) Int tenv
 splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
   | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- etypeOf expr  -- Float result type assertion
   , TupRsingle exprtypeS <- etypeOf expr
+  , let argtype = A.lhsToTupR paramlhs
   , ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
   , DeclareVars paramlhs'2 _ varsgen <- declareVars (A.lhsToTupR paramlhs)
   , Refl <- sameLHSsameEnv paramlhs' paramlhs'2
@@ -195,7 +196,7 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
   , TuplifyVars _ fvlabs _ <- tuplifyVars fvlablist
   = -- trace ("AD result: " ++ show transformedExp) $
     evalIdGen $ do
-        exploded@(reslab, _, argLabelMap) <- explode LEmpty labelisedExpr
+        exploded@(reslab, nodemap, argLabelMap) <- explode LEmpty labelisedExpr
         traceM ("exp exploded: " ++ showExploded exploded)
         PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
         traceM ("\nexp context in core: " ++ showContext context)
@@ -217,20 +218,26 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
                             Just idx -> Var (A.Var exprtypeS idx)
                             Nothing -> error "splitLambdaAD: adjoint of final value not computed"
                   DualResult ctx' _ builder' <- dual exploded adjointProducer dualInstCtx
-                  let dualBody = dualLiftInst $ builder' $ produceGradient argLabelMap ctx' argsRHS
-                  -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
-                  return $ Exists $
-                      SplitLambdaAD (\fvavars ->
-                                         Lam paramlhs'
-                                           (Body (realiseArgs
-                                                     (inlineAvarLabels fvlabs fvavars e')
-                                                     paramlhs')))
-                                    (\fvavars ->
-                                         Lam (A.LeftHandSidePair (A.LeftHandSideSingle scalarType) tmpRestoreLHS)
-                                             (Body (generaliseArgs  {- TODO: is this generalisation correct? -}
-                                                       (inlineAvarLabels fvlabs fvavars dualBody))))
-                                    fvlabs
-                                    (A.varsType tmpvars)
+                  case collectIndexed ctx' nodemap of
+                    CollectIndexed idxadjType idxInstantiators idxadjExpr -> do
+                        let dualBody = dualLiftInst $ builder' $
+                                Pair (TupRpair argtype idxadjType) (produceGradient argLabelMap ctx' argsRHS)
+                                                                   idxadjExpr
+                        -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
+                        return $ SomeSplitLambdaAD $
+                            SplitLambdaAD (\fvavars ->
+                                               Lam paramlhs'
+                                                 (Body (realiseArgs
+                                                           (inlineAvarLabels fvlabs fvavars e')
+                                                           paramlhs')))
+                                          (\fvavars ->
+                                               Lam (A.LeftHandSidePair (A.LeftHandSideSingle scalarType) tmpRestoreLHS)
+                                                   (Body (generaliseArgs  {- TODO: is this generalisation correct? -}
+                                                             (inlineAvarLabels fvlabs fvavars dualBody))))
+                                          fvlabs
+                                          (A.varsType tmpvars)
+                                          idxadjType
+                                          idxInstantiators
             _ ->
                 error "Final primal value not computed"
   | otherwise =
@@ -283,6 +290,7 @@ labeliseExp labelenv = \ex -> let (labs, ex') = go ex
       FreeVar var -> return (FreeVar var)
       Label lab -> return (Label lab)
 
+-- TODO: the first and third field of this data type seem to be unused. Remove them if so.
 data TuplifyVars s lab env =
     forall env' t.
         TuplifyVars -- Collects vars from array environment outside the lambda
@@ -304,6 +312,51 @@ tuplifyVars (AnyLabel lab@(DLabel ty _) : rest)
                 (A.LeftHandSidePair lhs (A.LeftHandSideSingle ty))
                 -- (\w -> DMap.insert lab (A.Var ty (w A.>:> ZeroIdx))
                 --                    (mpf (A.weakenSucc w)))
+
+data CollectIndexed env aenv lab alab args tenv =
+    forall idxadj.
+        CollectIndexed (TypeR idxadj)
+                       (DMap (DLabel ArrayR alab) (IndexInstantiators idxadj))
+                       (OpenExp env aenv lab alab args tenv idxadj)
+
+data ArrLabelExpExp env aenv lab alab args tenv =
+    forall sh t.
+        ArrLabelExpExp (DLabel ArrayR alab (Array sh t))
+                       (OpenExp env aenv lab alab args tenv t)
+                       (OpenExp env aenv lab alab args tenv sh)
+
+collectIndexed :: forall env aenv lab alab args tenv. (Ord lab, Ord alab, Show lab)
+               => EContext lab env
+               -> DMap (EDLabelT lab) (Exp aenv lab alab args tenv)  -- nodemap
+               -> CollectIndexed env aenv (PDExp lab) alab args tenv
+collectIndexed (Context labelenv bindmap) nodemap =
+    let lookupNode :: EDLabelT lab t -> (lab -> PDExp lab) -> OpenExp env aenv lab' alab args tenv t
+        lookupNode elab labkind
+          | Just vars <- elabValFinds labelenv (bindmap `dmapFind` fmapLabel labkind elab) = evars vars
+          | otherwise = error ("Label " ++ show elab ++ " from nodemap not in labelenv in collectIndexed")
+        labels = [ArrLabelExpExp alab (lookupNode nodelab D) (lookupNode idxlab P)
+                 | nodelab :=> Index ref idxarg <- DMap.toList nodemap
+                 , let alab = either (error "Non-labelised nodemap in collectIndexed") id ref
+                       idxlab = case idxarg of
+                                  Label l -> l
+                                  _ -> error "Index argument not Label in collectIndexed"]
+    in tuplify labels
+  where
+    tuplify :: [ArrLabelExpExp env aenv lab' alab args tenv] -> CollectIndexed env aenv lab' alab args tenv
+    tuplify [] = CollectIndexed TupRunit mempty Nil
+    tuplify (ArrLabelExpExp lab@(DLabel (ArrayR sht ty) _) adjexp idxexp : rest)
+      | CollectIndexed tupty mp expr <- tuplify rest
+      = let itemtype = TupRpair ty (shapeType sht)
+            restype = TupRpair tupty itemtype
+        in CollectIndexed restype
+                          (let weakenInst :: TypeR (e, sh)  -- dummy argument to be able to reference those type variables in the return type
+                                          -> IndexInstantiators idxadj arr
+                                          -> IndexInstantiators (idxadj, (e, sh)) arr
+                               weakenInst _ (IndexInstantiators l) =
+                                   IndexInstantiators (map (\(IndexInstantiator f) -> IndexInstantiator (f . smartFst)) l)
+                           in DMap.insertWith (<>) lab (IndexInstantiators [IndexInstantiator smartSnd])
+                                              (DMap.map (weakenInst itemtype) mp))
+                          (Pair restype expr (Pair itemtype adjexp idxexp))
 
 data PrimalBundle env aenv lab alab =
     forall tmp.
@@ -408,15 +461,16 @@ inlineAvarLabels' f = \case
     Nil -> Nil
     Cond ty e1 e2 e3 -> Cond ty (inlineAvarLabels' f e1) (inlineAvarLabels' f e2) (inlineAvarLabels' f e3)
     Shape (Right lab) -> Shape (Left (f lab))
-    Shape (Left _) -> error "inlineAvarLabels': Array variable found in labelised expression"
+    Shape (Left _) -> error "inlineAvarLabels': Array variable found in labelised expression (Shape)"
     ShapeSize sht e -> ShapeSize sht (inlineAvarLabels' f e)
+    Index (Right lab) ex -> Index (Left (f lab)) (inlineAvarLabels' f ex)
+    Index (Left _) _ -> error "inlineAvarLabels': Array variable found in labelised expression (Index)"
     Get ty tidx ex -> Get ty tidx (inlineAvarLabels' f ex)
     Let lhs rhs ex -> Let lhs (inlineAvarLabels' f rhs) (inlineAvarLabels' f ex)
     Var v -> Var v
     FreeVar v -> FreeVar v
     Arg ty idx -> Arg ty idx
     Label l -> Label l
-    Index _ _ -> error "Index not supported in inlineAvarLabels'"
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
@@ -491,6 +545,20 @@ explode' env = \case
     Shape (Right alab@(DLabel (ArrayR sht _) _)) -> do
         lab <- genId (shapeType sht)
         return (lab, DMap.singleton lab (Shape (Right alab)), mempty)
+    Index (Left avar@(A.Var (ArrayR _ ty) _)) she -> do
+        (lab1, mp1, argmp1) <- explode' env she
+        lab <- genId ty
+        let pruned = Index (Left avar) (Label lab1)
+        let itemmp = DMap.singleton lab pruned
+            mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
+        return (lab, mp, argmp1)
+    Index (Right alab@(DLabel (ArrayR _ ty) _)) she -> do
+        (lab1, mp1, argmp1) <- explode' env she
+        lab <- genId ty
+        let pruned = Index (Right alab) (Label lab1)
+        let itemmp = DMap.singleton lab pruned
+            mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
+        return (lab, mp, argmp1)
     ShapeSize sht e -> do
         (lab1, mp1, argmp1) <- explode' env e
         lab <- genId (TupRsingle scalarType)
@@ -516,7 +584,6 @@ explode' env = \case
         return (lab, DMap.singleton lab (Arg ty idx), DMap.singleton idx lab)
     Get _ _ _ -> error "explode: Unexpected Get"
     Label _ -> error "explode: Unexpected Label"
-    Index _ _ -> error "explode: Index not supported"
   where
     lpushLHS_Get :: A.ELeftHandSide t env env' -> TupR (EDLabel Int) t -> ELabVal Int env -> Exp aenv Int alab args tenv t -> (ELabVal Int env', DMap (EDLabelT Int) (Exp aenv Int alab args tenv))
     lpushLHS_Get lhs labs labelenv rhs = case (lhs, labs) of
@@ -653,6 +720,16 @@ primal' nodemap lbl (Context labelenv bindmap)
               return $ PrimalResult (Context (lpushLabTup labelenv lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap))
                                     (Let lhs (Shape ref))
 
+          Index ref (Label arglab) -> do
+              PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
+              let arglabs = bindmap' `dmapFind` fmapLabel P arglab
+              case elabValFinds labelenv' arglabs of
+                  Just vars -> do
+                      (Exists lhs, labs) <- genSingleIds (labelType lbl)
+                      return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
+                                            (f1 . Let lhs (Index ref (evars vars)))
+                  _ -> error "primal: Index arguments did not compute arguments"
+
           ShapeSize sht (Label arglab) -> do
               PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
               let arglabs = bindmap' `dmapFind` fmapLabel P arglab
@@ -665,7 +742,7 @@ primal' nodemap lbl (Context labelenv bindmap)
 
           Get _ path (Label arglab) -> do
               PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
-              let pickedlabs = pickDLabels path (bindmap' `dmapFind` fmapLabel P arglab)
+              let pickedlabs = pickTupR path (bindmap' `dmapFind` fmapLabel P arglab)
               -- Note: We don't re-bind the picked tuple into a new let binding
               -- with fresh labels here; we just point the tuple label for this
               -- Get expression node to the pre-existing scalar labels.
@@ -986,6 +1063,18 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
       ShapeSize _ _ ->
           return $ DualResult (Context labelenv bindmap) contribmap id
 
+      -- Argument (the index) is an integral type, which takes no
+      -- contributions. Note that more needs to be done on the array level with
+      -- lambdas that contain Index nodes, but here all is still simple.
+      Index _ _ -> do
+          let TupRsingle restypeS = labelType lbl
+              adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
+          lblS <- genSingleId restypeS
+          return $ DualResult (Context (LPush labelenv lblS)
+                                       (DMap.insert (fmapLabel D lbl) (TupRsingle lblS) bindmap))
+                              contribmap
+                              (Let (A.LeftHandSideSingle restypeS) adjoint)
+
       Cond restype (Label condlab) (Label thenlab) (Label elselab) -> do
           let adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
               contribmap' = updateContribmap lbl
@@ -1143,6 +1232,7 @@ expLabelParents = \case
     Nil -> []
     Cond _ e1 e2 e3 -> fromLabel e1 ++ fromLabel e2 ++ fromLabel e3
     Shape _ -> []
+    Index _ e -> fromLabel e
     ShapeSize _ e -> fromLabel e
     Get _ _ e -> fromLabel e
     FreeVar _ -> []
@@ -1150,7 +1240,6 @@ expLabelParents = \case
     Label lab -> [AnyLabel lab]
     Let _ _ _ -> unimplemented "Let"
     Var _ -> unimplemented "Var"
-    Index _ _ -> unimplemented "Index"
   where
     unimplemented name =
         error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")

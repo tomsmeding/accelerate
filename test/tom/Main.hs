@@ -146,11 +146,19 @@ convnet = do
 
 indexing :: IO ()
 indexing = do
-  print $ I.run $ let store = A.use (A.fromList (Z :. 6) [1.0::Float .. 6])
-                      source = A.use (A.fromList (Z :. 3) [42.0::Float, 10.0, 100.0])
-                  in A.map (\(A.T2 idx x) -> let Z :. i = A.unlift idx :: Z :. A.Exp Int
-                                             in (store A.! A.index1 (2 * i)) + x)
-                           (A.indexed source)
+  -- print $ I.run $ let store = A.use (A.fromList (Z :. (6 :: Int)) [1.0::Float .. 6])
+  --                     source = A.use (A.fromList (Z :. 3) [42.0::Float, 10.0, 100.0])
+  --                 in A.map (\(A.T2 (A.I1 i) x) -> (store A.! A.I1 (2 * i)) + x)
+  --                          (A.indexed source)
+
+  print . I.run $
+    A.gradientA (\(A.T2 a b) -> A.sum (A.map (\x -> x * (a A.! A.I1 (2 * A.round x))) b))
+                (A.T2 (A.use (A.fromList (Z :. (11 :: Int)) [1.0::Float ..]))
+                      (A.use (A.fromList (Z :. (5 :: Int)) [1.0::Float ..])))
+
+  print . I.run $
+    A.gradientA (\a -> A.sum (A.generate (A.I1 5) (\(A.I1 i) -> A.cond (i A.> 2) (a A.! A.I1 (2 * i)) (a A.! A.I1 1))))
+                (A.use (A.fromList (Z :. (10 :: Int)) [1.0::Float ..]))
 
 apply :: IO ()
 apply = do
@@ -316,13 +324,13 @@ main :: IO ()
 main = do
   -- logistic
   -- optimise
-  -- indexing
+  indexing
   -- apply
   -- ignoretest
   -- adtest
   -- adtest2
   -- adtest3
-  adtestFree
+  -- adtestFree
   -- adtuple1
   -- adtuple2
   -- adtuple3
