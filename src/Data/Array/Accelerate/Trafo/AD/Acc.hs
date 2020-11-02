@@ -35,8 +35,8 @@ type ADLabelT = DLabel ArraysR
 -- --------------
 
 data ExpLambda1 aenv lab alab tenv sh t1 t2
-  = forall tmp. ELSplit (SplitLambdaAD t1 t2 lab alab tenv tmp) (DLabel ArrayR alab (Array sh tmp))
-  |             ELPlain (Fun aenv lab alab tenv (t1 -> t2))
+  = forall tmp idxadj. ELSplit (SplitLambdaAD t1 t2 lab alab tenv tmp idxadj) (DLabel ArrayR alab (Array sh tmp))
+  |                    ELPlain (Fun aenv lab alab tenv (t1 -> t2))
 
 fmapPlain :: (Fun aenv lab alab tenv (t1 -> t2) -> Fun aenv' lab alab tenv (t1 -> t2))
           -> ExpLambda1 aenv lab alab tenv sh t1 t2
@@ -143,7 +143,7 @@ data OpenAcc aenv lab alab args t where
 
     -- The combination function is not stored as an ExpLambda1, because we
     -- don't currently support taking the derivative of a Permute: we only
-    -- generate it as the derivative of a Backpermute.
+    -- generate it as the derivative of a Backpermute and of array indexing.
     Permute :: ArrayR (Array sh' e)
             -> Fun aenv lab alab () (e -> e -> e)            -- combination function
             -> OpenAcc aenv lab alab args (Array sh' e)   -- default values

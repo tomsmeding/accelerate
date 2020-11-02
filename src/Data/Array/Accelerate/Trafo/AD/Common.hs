@@ -170,11 +170,11 @@ fmapLabels _ TupRunit = TupRunit
 fmapLabels f (TupRsingle lab) = TupRsingle (fmapLabel f lab)
 fmapLabels f (TupRpair labs1 labs2) = TupRpair (fmapLabels f labs1) (fmapLabels f labs2)
 
-pickDLabels :: TupleIdx t t' -> TupR (DLabel s lab) t -> TupR (DLabel s lab) t'
-pickDLabels TIHere labs = labs
-pickDLabels (TILeft path) (TupRpair lab _) = pickDLabels path lab
-pickDLabels (TIRight path) (TupRpair _ lab) = pickDLabels path lab
-pickDLabels _ _ = error "pickDLabels: impossible GADTs"
+pickTupR :: TupleIdx t t' -> TupR s t -> TupR s t'
+pickTupR TIHere tup = tup
+pickTupR (TILeft path) (TupRpair tup _) = pickTupR path tup
+pickTupR (TIRight path) (TupRpair _ tup) = pickTupR path tup
+pickTupR _ _ = error "pickTupR: impossible GADTs"
 
 -- Used for showing expressions
 namifyLHS :: Int -> LeftHandSide s v env env' -> (String, [String], Int)
