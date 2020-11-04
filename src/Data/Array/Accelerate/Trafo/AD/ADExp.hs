@@ -595,25 +595,6 @@ explode' env = \case
         (A.LeftHandSideWildcard _, _) -> (labelenv, mempty)
         _ -> error "lpushLHS_Get: impossible GADTs"
 
-showContext :: (Ord lab, Show lab) => EContext lab env -> String
-showContext (Context labelenv bindmap) = "Context " ++ showLabelenv labelenv ++ " " ++ showBindmap bindmap
-
-showLabelenv :: Show lab => ELabVal lab env -> String
-showLabelenv LEmpty = "[]"
-showLabelenv (LPush env lab) = "[" ++ go env ++ showDLabel lab ++ "]"
-  where
-    go :: Show lab => ELabVal lab env -> String
-    go LEmpty = ""
-    go (LPush env' lab') = go env' ++ showDLabel lab' ++ ", "
-
-showBindmap :: (Ord lab, Show lab) => DMap (EDLabelT (PDExp lab)) (TupR (EDLabel lab)) -> String
-showBindmap bindmap =
-    let tups = sortOn fst [(lab, (showDLabel dlab, showTupR showDLabel labs))
-                          | dlab@(DLabel _ lab) :=> labs <- DMap.assocs bindmap]
-        s = intercalate ", " ["(" ++ dlabshow ++ ") :=> " ++ labsshow
-                             | (_, (dlabshow, labsshow)) <- tups]
-    in "[" ++ s ++ "]"
-
 -- TODO: remove Show constraint from alab
 primaldual :: Show alab
            => Exploded aenv Int alab args tenv Float
