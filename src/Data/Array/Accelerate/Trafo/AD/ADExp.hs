@@ -210,7 +210,7 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
                   PrimalInstantiatorCont dualInstCtx dualLiftInst <-
                       instantiator
                            (Context (lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs) mempty)
-                           (evars tmpRestoreVars)
+                           tmpRestoreVars
                   traceM $ "invoking exp dual with context: " ++ showContext dualInstCtx
                   let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args tenv t'
                       adjointProducer (Context labelenv' _) =
@@ -358,37 +358,37 @@ collectIndexed (Context labelenv bindmap) nodemap =
                                               (DMap.map (weakenInst itemtype) mp))
                           (Pair restype expr (Pair itemtype adjexp idxexp))
 
-data PrimalBundle env aenv lab alab =
+data PrimalBundle env lab =
     forall tmp.
         PrimalBundle -- Collects temporaries into a tuple
                      (A.ExpVars env tmp)
                      -- Consumes the tuple and reproduces the labels in a new let-environment
-                     (PrimalInstantiator aenv lab alab tmp)
+                     (PrimalInstantiator lab tmp)
 
-data PrimalInstantiator aenv lab alab tmp =
-    PrimalInstantiator (forall env1 args tenv.
+data PrimalInstantiator lab tmp =
+    PrimalInstantiator (forall env1.
                         EContext lab env1
-                     -> OpenExp env1 aenv (PDExp lab) alab args tenv tmp
-                     -> IdGen (PrimalInstantiatorCont env1 aenv lab alab args tenv))
+                     -> A.ExpVars env1 tmp
+                     -> IdGen (PrimalInstantiatorCont env1 lab))
 
 -- The continuation in PrimalInstantiator.
-data PrimalInstantiatorCont env1 aenv lab alab args tenv =
+data PrimalInstantiatorCont env1 lab =
     forall env2.
         PrimalInstantiatorCont (EContext lab env2)
-                               (forall t.
+                               (forall aenv alab args tenv t.
                                    OpenExp env2 aenv (PDExp lab) alab args tenv t
                                 -> OpenExp env1 aenv (PDExp lab) alab args tenv t)
 
-data PrimalBundle' env aenv lab alab =
+data PrimalBundle' env lab =
     forall tmp.
         PrimalBundle' (A.ExpVars env tmp)
                       (TypeR tmp)
-                      (forall env' args tenv.
-                          OpenExp env' aenv (PDExp lab) alab args tenv tmp
-                       -> IdGen ([DSum (EDLabel lab) (OpenExp env' aenv (PDExp lab) alab args tenv)]  -- new scalar labels and their corresponding fragments of the temps tuple
+                      (forall env'.
+                          A.ExpVars env' tmp
+                       -> IdGen ([DSum (EDLabel lab) (A.ExpVars env')]  -- new scalar labels and their corresponding fragments of the temps tuple
                                 ,DMap (EDLabel lab) (EDLabel lab)))  -- old to new scalar label translation map
 
-constructPrimalBundle :: EContext Int env -> PrimalBundle env aenv Int alab
+constructPrimalBundle :: EContext Int env -> PrimalBundle env Int
 constructPrimalBundle (Context toplabelenv topbindmap)
   | PrimalBundle' vars _ instantiator <- constructPrimalBundle' (enumerateLabelenv toplabelenv)
   = PrimalBundle vars $ PrimalInstantiator $ \(Context locallabelenv localbindmap) tupe -> do
@@ -401,27 +401,27 @@ constructPrimalBundle (Context toplabelenv topbindmap)
       traceM $ "constructPrimalBundle: fragments: " ++ showList' (\(k :=> _) -> "(" ++ showDLabel k ++ ", ...)") fragments
       bindAll (Context locallabelenv localbindmap') A.weakenId fragments
   where
-    constructPrimalBundle' :: [DSum (EDLabel Int) (Idx env)] -> PrimalBundle' env aenv Int alab
+    constructPrimalBundle' :: [DSum (EDLabel Int) (Idx env)] -> PrimalBundle' env Int
     constructPrimalBundle' [] = PrimalBundle' TupRunit TupRunit (\_ -> return (mempty, mempty))
     constructPrimalBundle' ((lab@(DLabel ty _) :=> idx) : rest)
       | PrimalBundle' vars restty instantiator <- constructPrimalBundle' rest
       = PrimalBundle' (TupRpair vars (TupRsingle (A.Var ty idx)))
                       (TupRpair restty (TupRsingle ty))
-                      (\tmpe -> do
-                          (locmp, transmp) <- instantiator (smartFst tmpe)
+                      (\(TupRpair tmps1 tmps2) -> do
+                          (locmp, transmp) <- instantiator tmps1
                           lab' <- genSingleId ty
-                          return ((lab' :=> smartSnd tmpe) : locmp
+                          return ((lab' :=> tmps2) : locmp
                                  ,DMap.insert lab lab' transmp))
 
     bindAll :: EContext Int env'
             -> env A.:> env'
-            -> [DSum (EDLabel Int) (OpenExp env aenv (PDExp Int) alab args tenv)]
-            -> IdGen (PrimalInstantiatorCont env' aenv Int alab args tenv)
+            -> [DSum (EDLabel Int) (A.ExpVars env)]
+            -> IdGen (PrimalInstantiatorCont env' Int)
     bindAll ctx _ [] = return (PrimalInstantiatorCont ctx id)
-    bindAll (Context labelenv bindmap) w ((lab :=> ex) : rest) = do
+    bindAll (Context labelenv bindmap) w ((lab :=> vars) : rest) = do
         traceM ("bindAll: let-binding expression at label " ++ showDLabel lab)
         PrimalInstantiatorCont ctx' f1 <- bindAll (Context (LPush labelenv lab) bindmap) (A.weakenSucc' w) rest
-        return (PrimalInstantiatorCont ctx' (Let (A.LeftHandSideSingle (labelType lab)) (sinkExp w ex) . f1))
+        return (PrimalInstantiatorCont ctx' (Let (A.LeftHandSideSingle (labelType lab)) (sinkExp w (evars vars)) . f1))
 
 enumerateLabelenv :: LabVal s lab env -> [DSum (DLabel s lab) (Idx env)]
 enumerateLabelenv = go A.weakenId
