@@ -1,12 +1,16 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Array.Accelerate.Trafo.AD.Common where
 
 import Control.Monad.State.Strict
 import Data.Char (isDigit)
+import Data.List (intercalate, sortOn)
 import Data.Dependent.Map (DMap)
+import qualified Data.Dependent.Map as DMap
+import Data.Dependent.Sum (DSum(..))
 import Data.GADT.Compare
 import Data.GADT.Show
 import Data.Some (Some, mkSome)
@@ -231,6 +235,27 @@ data Context s tag lab env =
     Context (LabVal s lab env)
             (DMap (DLabel (TupR s) (PD tag lab))
                   (TupR (DLabel s lab)))
+
+showContext :: (Ord lab, Show lab, Show tag, Ord tag, forall t. Show (s t), forall t. Show (TupR s t))
+            => Context s tag lab aenv -> String
+showContext (Context labelenv bindmap) = "Context " ++ showLabelenv labelenv ++ " " ++ showBindmap bindmap
+
+showLabelenv :: (Show lab, forall t. Show (s t)) => LabVal s lab aenv -> String
+showLabelenv LEmpty = "[]"
+showLabelenv (LPush env lab) = "[" ++ go env ++ showDLabel lab ++ "]"
+  where
+    go :: (Show lab, forall t. Show (s t)) => LabVal s lab aenv -> String
+    go LEmpty = ""
+    go (LPush env' lab') = go env' ++ showDLabel lab' ++ ", "
+
+showBindmap :: (Ord lab, Show lab, Show tag, Ord tag, forall t. Show (s t), forall t. Show (TupR s t))
+            => DMap (DLabel (TupR s) (PD tag lab)) (TupR (DLabel s lab)) -> String
+showBindmap bindmap =
+    let tups = sortOn fst [(lab, (showDLabel dlab, showTupR showDLabel labs))
+                          | dlab@(DLabel _ lab) :=> labs <- DMap.assocs bindmap]
+        s = intercalate ", " ["(" ++ dlabshow ++ ") :=> " ++ labsshow
+                             | (_, (dlabshow, labsshow)) <- tups]
+    in "[" ++ s ++ "]"
 
 
 -- TODO: make this 'type AnyLabel s lab = Exists (DLabel s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.

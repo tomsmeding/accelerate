@@ -391,25 +391,6 @@ computeLabelorder (endlab, nodemap, _) =
     parentmap = Map.fromList [(labelLabel numlbl, parentsOf l)
                              | l@(AnyLabel numlbl) <- alllabels]
 
-showContext :: (Ord alab, Show alab) => AContext alab aenv -> String
-showContext (Context labelenv bindmap) = "Context " ++ showLabelenv labelenv ++ " " ++ showBindmap bindmap
-
-showLabelenv :: Show alab => ALabVal alab aenv -> String
-showLabelenv LEmpty = "[]"
-showLabelenv (LPush env lab) = "[" ++ go env ++ showDLabel lab ++ "]"
-  where
-    go :: Show alab => ALabVal alab aenv -> String
-    go LEmpty = ""
-    go (LPush env' lab') = go env' ++ showDLabel lab' ++ ", "
-
-showBindmap :: (Ord alab, Show alab) => DMap (ADLabelT (PDAcc alab)) (TupR (ADLabel alab)) -> String
-showBindmap bindmap =
-    let tups = sortOn fst [(lab, (showDLabel dlab, showTupR showDLabel labs))
-                          | dlab@(DLabel _ lab) :=> labs <- DMap.assocs bindmap]
-        s = intercalate ", " ["(" ++ dlabshow ++ ") :=> " ++ labsshow
-                             | (_, (dlabshow, labsshow)) <- tups]
-    in "[" ++ s ++ "]"
-
 primaldual :: Exploded (PDExp Int) Int args (Array () Float)
            -> (forall aenv. AContext Int aenv -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args t))
            -> IdGen (Acc (PDExp Int) (PDAcc Int) args t)
