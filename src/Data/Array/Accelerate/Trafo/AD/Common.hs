@@ -234,12 +234,19 @@ data Context s tag lab env =
 
 
 -- TODO: make this 'type AnyLabel s lab = Exists (DLabel s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
+-- (But consider the specialised Eq/Ord instances below. Can we reproduce that with an Exists version?)
 data AnyLabel s lab = forall t. AnyLabel (DLabel s lab t)
 
--- TODO: This only uses the actual label, not the type, for equality check
-instance Eq lab => Eq (AnyLabel s lab) where
-    AnyLabel (DLabel _ lab1) == AnyLabel (DLabel _ lab2) = lab1 == lab2
+instance (Eq lab, GEq s) => Eq (AnyLabel s lab) where
+    AnyLabel (DLabel ty1 lab1) == AnyLabel (DLabel ty2 lab2)
+      | lab1 /= lab2 = False
+      | Just Refl <- geq ty1 ty2 = True
+      | otherwise = error "Eq AnyLabel: labels match, but types do not!"
 
--- TODO: This only uses the actual label, not the type, for the ordering
-instance Ord lab => Ord (AnyLabel s lab) where
-    compare (AnyLabel (DLabel _ lab1)) (AnyLabel (DLabel _ lab2)) = compare lab1 lab2
+instance (Ord lab, GCompare s) => Ord (AnyLabel s lab) where
+    compare (AnyLabel (DLabel ty1 lab1)) (AnyLabel (DLabel ty2 lab2)) =
+        case compare lab1 lab2 of
+          LT -> LT
+          GT -> GT
+          EQ | GEQ <- gcompare ty1 ty2 -> EQ
+             | otherwise -> error "Ord AnyLabel: labels match, but types do not!"
