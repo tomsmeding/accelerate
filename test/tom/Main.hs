@@ -17,6 +17,7 @@ import qualified Logistic
 import qualified Neural
 import qualified Optimise
 import qualified Playground.Neural
+import qualified TestSuite
 
 
 questionableBenchmark :: (Show a, Show b) => (a -> IO b) -> a -> IO (b, Double)
@@ -156,7 +157,7 @@ indexing = do
                 (A.T2 (A.use (A.fromList (Z :. (11 :: Int)) [1.0::Float ..]))
                       (A.use (A.fromList (Z :. (5 :: Int)) [1.0::Float ..])))
 
-  print . I.run $
+  print $
     A.gradientA (\a -> A.sum (A.generate (A.I1 5) (\(A.I1 i) -> A.cond (i A.> 2) (a A.! A.I1 (2 * i)) (a A.! A.I1 1))))
                 (A.use (A.fromList (Z :. (10 :: Int)) [1.0::Float ..]))
 
@@ -322,9 +323,10 @@ adfold = do
 
 main :: IO ()
 main = do
+  TestSuite.main
   -- logistic
   -- optimise
-  indexing
+  -- indexing
   -- apply
   -- ignoretest
   -- adtest

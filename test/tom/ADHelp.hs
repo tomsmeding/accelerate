@@ -54,6 +54,12 @@ class (A.Arrays a, Show a) => AFinDiff a where
   -- array elementwise.
   fdfmap :: ([Float] -> Float) -> [a] -> a
 
+  -- | List of all values in all arrays in the tuple.
+  fdtoList :: a -> [Float]
+
+  -- | The total number of values in the arrays.
+  fdTotalSize :: a -> Int
+
 instance A.Shape sh => AFinDiff (A.Array sh Float) where
   ahfindiff h f x =
     A.fromList (A.arrayShape x)
@@ -72,11 +78,17 @@ instance A.Shape sh => AFinDiff (A.Array sh Float) where
         | i <- [0 .. A.arraySize x0 - 1]]
   fdfmap _ _ = error "fdfmap: Cannot extract shape from empty list of arrays"
 
+  fdtoList = A.toList
+  fdTotalSize = A.arraySize
+
 instance (AFinDiff a, AFinDiff b) => AFinDiff (a, b) where
   ahfindiff h f (x, y) =
     (ahfindiff h (\x' -> f (A.T2 x' (A.use y))) x, ahfindiff h (\y' -> f (A.T2 (A.use x) y')) y)
 
   fdfmap f xs = (fdfmap f (map fst xs), fdfmap f (map snd xs))
+
+  fdtoList (x, y) = fdtoList x ++ fdtoList y
+  fdTotalSize (x, y) = fdTotalSize x + fdTotalSize y
 
 data AFinDiffRes a = AFinDiffRes [Float] [a]
 
