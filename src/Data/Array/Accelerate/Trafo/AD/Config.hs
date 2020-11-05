@@ -7,6 +7,7 @@ module Data.Array.Accelerate.Trafo.AD.Config (
   getConfigVar
 ) where
 
+import Data.Char (toLower)
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum (DSum(..))
@@ -25,22 +26,31 @@ import System.IO.Unsafe (unsafePerformIO)
 
 data ConfigVar a where
   SmallFunSize :: ConfigVar Int
+  Debug :: ConfigVar Bool
 
 instance GEq ConfigVar where
   geq SmallFunSize SmallFunSize = Just Refl
+  geq Debug Debug = Just Refl
+  geq _ _ = Nothing
 
 instance GCompare ConfigVar where
   gcompare SmallFunSize SmallFunSize = GEQ
+  gcompare SmallFunSize _ = GLT
+  gcompare _ SmallFunSize = GGT
+  gcompare Debug Debug = GEQ
 
 parseVar :: String -> Maybe SomeConfigVar
 parseVar "SMALLFUNSIZE" = Just (SomeConfigVar SmallFunSize)
+parseVar "DEBUG" = Just (SomeConfigVar Debug)
 parseVar _ = Nothing
 
 varDescr :: ConfigVar a -> String
 varDescr SmallFunSize = "small expression function size bound"
+varDescr Debug = "debug printing"
 
 defaultValue :: ConfigVar a -> a
 defaultValue SmallFunSize = 20
+defaultValue Debug = False
 
 configVarPrefix :: String
 configVarPrefix = "ACCELERATE_AD_"
@@ -65,6 +75,16 @@ class Show a => ConfigVarType a where
 instance ConfigVarType Int where
   parseType = readMaybe
   typeDescr _ = "integer"
+
+instance ConfigVarType Bool where
+  parseType s =
+    case map toLower s of
+      "true" -> Just True
+      "1" -> Just True
+      "false" -> Just False
+      "0" -> Just False
+      _ -> Nothing
+  typeDescr _ = "boolean"
 
 parse :: forall a. ConfigVarType a => String -> ConfigVar a -> String -> Either String a
 parse origkey var value
