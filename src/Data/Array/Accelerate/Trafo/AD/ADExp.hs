@@ -16,6 +16,8 @@ module Data.Array.Accelerate.Trafo.AD.ADExp (
 ) where
 
 import qualified Control.Monad.Writer as W
+import qualified Data.Functor.Product as Product
+import Data.Functor.Product (Product)
 import Data.List (intercalate, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
@@ -87,9 +89,6 @@ showArgmap argmap =
     let s = intercalate ", " ['A' : show (A.idxToInt argidx) ++ " :=> " ++ showDLabel dlab
                              | argidx :=> dlab <- DMap.assocs argmap]
     in "[" ++ s ++ "]"
-
-showList' :: (a -> String) -> [a] -> String
-showList' f l = "[" ++ intercalate ", " (map f l) ++ "]"
 
 -- Assumes the expression does not contain Arg
 generaliseArgs :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args' tenv t
@@ -207,20 +206,21 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
                   let e' = builder (evars (TupRpair resultvars tmpvars))
                   adjlab <- genSingleId scalarType
                   (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpRestoreVars)
-                  PrimalInstantiatorCont dualInstCtx dualLiftInst <-
-                      instantiator
-                           (Context (lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs) mempty)
-                           tmpRestoreVars
+                  -- The type of the labelenv here is (((), adjoint), ...temporaries). This is the
+                  -- type of the argument of dual lambda.
+                  let dualLabelenv = lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs
+                      dualBindmap = instantiator (Context dualLabelenv mempty) tmpRestoreVars
+                      dualInstCtx = Context dualLabelenv dualBindmap
                   traceM $ "invoking exp dual with context: " ++ showContext dualInstCtx
                   let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args tenv t'
                       adjointProducer (Context labelenv' _) =
                         case elabValFind labelenv' adjlab of
                             Just idx -> Var (A.Var exprtypeS idx)
-                            Nothing -> error "splitLambdaAD: adjoint of final value not computed"
+                            Nothing -> error "splitLambdaAD: end-node adjoint label not put in labelenv?"
                   DualResult ctx' _ builder' <- dual exploded adjointProducer dualInstCtx
                   case collectIndexed ctx' nodemap of
                     CollectIndexed idxadjType idxInstantiators idxadjExpr -> do
-                        let dualBody = dualLiftInst $ builder' $
+                        let dualBody = builder' $
                                 Pair (TupRpair argtype idxadjType) (produceGradient argLabelMap ctx' argsRHS)
                                                                    idxadjExpr
                         -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
@@ -365,70 +365,52 @@ data PrimalBundle env lab =
                      -- Consumes the tuple and reproduces the labels in a new let-environment
                      (PrimalInstantiator lab tmp)
 
+-- Given a new context, and pointers into that context reconstructing the temp
+-- tuple, returns a new bindmap that binds the previous tuple labels to the new
+-- locations.
 data PrimalInstantiator lab tmp =
     PrimalInstantiator (forall env1.
                         EContext lab env1
                      -> A.ExpVars env1 tmp
-                     -> IdGen (PrimalInstantiatorCont env1 lab))
-
--- The continuation in PrimalInstantiator.
-data PrimalInstantiatorCont env1 lab =
-    forall env2.
-        PrimalInstantiatorCont (EContext lab env2)
-                               (forall aenv alab args tenv t.
-                                   OpenExp env2 aenv (PDExp lab) alab args tenv t
-                                -> OpenExp env1 aenv (PDExp lab) alab args tenv t)
-
-data PrimalBundle' env lab =
-    forall tmp.
-        PrimalBundle' (A.ExpVars env tmp)
-                      (TypeR tmp)
-                      (forall env'.
-                          A.ExpVars env' tmp
-                       -> IdGen ([DSum (EDLabel lab) (A.ExpVars env')]  -- new scalar labels and their corresponding fragments of the temps tuple
-                                ,DMap (EDLabel lab) (EDLabel lab)))  -- old to new scalar label translation map
+                     -> DMap (EDLabelT (PDExp lab)) (TupR (EDLabel lab)))
 
 constructPrimalBundle :: EContext Int env -> PrimalBundle env Int
-constructPrimalBundle (Context toplabelenv topbindmap)
-  | PrimalBundle' vars _ instantiator <- constructPrimalBundle' (enumerateLabelenv toplabelenv)
-  = PrimalBundle vars $ PrimalInstantiator $ \(Context locallabelenv localbindmap) tupe -> do
-      (fragments, oldnewmap) <- instantiator tupe
-      let bindmap' = DMap.map (fmapTupR (oldnewmap DMap.!)) topbindmap
-          localbindmap' = DMap.unionWithKey (error "constructPrimalBundle: Context at usage of primal bundle contains keys already defined in primal computation")
-                                            localbindmap bindmap'
-      traceM $ "constructPrimalBundle: oldnewmap: " ++ showList' (\(k :=> v) -> "(" ++ showDLabel k ++ ", " ++ showDLabel v ++ ")") (DMap.assocs oldnewmap) ++ "]"
-      traceM $ "constructPrimalBundle: bindmap': " ++ showBindmap bindmap'
-      traceM $ "constructPrimalBundle: fragments: " ++ showList' (\(k :=> _) -> "(" ++ showDLabel k ++ ", ...)") fragments
-      bindAll (Context locallabelenv localbindmap') A.weakenId fragments
+constructPrimalBundle (Context origlabelenv origbindmap)
+  | Exists origpairs <- collect A.weakenId origlabelenv =
+      PrimalBundle
+        (fmapTupR productSnd origpairs)
+        (PrimalInstantiator $ \(Context toplabelenv topbindmap) pointers ->
+            let oldnewmap =
+                  DMap.fromList $
+                    tupRtoList (\(Product.Pair origlab newlab) -> origlab :=> newlab) $
+                      zipWithTupR (\origlab (A.Var _ idx) -> Product.Pair origlab (prjL idx toplabelenv))
+                                  (fmapTupR productFst origpairs) pointers
+                rebound = DMap.map (fmapTupR (oldnewmap DMap.!)) origbindmap
+            in DMap.unionWithKey (error "constructPrimalBundle: Context at usage of primal bundle contains keys already defined in primal computation")
+                                 topbindmap rebound)
   where
-    constructPrimalBundle' :: [DSum (EDLabel Int) (Idx env)] -> PrimalBundle' env Int
-    constructPrimalBundle' [] = PrimalBundle' TupRunit TupRunit (\_ -> return (mempty, mempty))
-    constructPrimalBundle' ((lab@(DLabel ty _) :=> idx) : rest)
-      | PrimalBundle' vars restty instantiator <- constructPrimalBundle' rest
-      = PrimalBundle' (TupRpair vars (TupRsingle (A.Var ty idx)))
-                      (TupRpair restty (TupRsingle ty))
-                      (\(TupRpair tmps1 tmps2) -> do
-                          (locmp, transmp) <- instantiator tmps1
-                          lab' <- genSingleId ty
-                          return ((lab' :=> tmps2) : locmp
-                                 ,DMap.insert lab lab' transmp))
+    collect :: env A.:> env' -> ELabVal lab env -> Exists (TupR (Product (EDLabel lab) (A.ExpVar env')))
+    collect _ LEmpty = Exists TupRunit
+    collect w (LPush labelenv lab)
+      | Exists tup <- collect (A.weakenSucc w) labelenv =
+          Exists (TupRpair tup (TupRsingle (Product.Pair lab (A.Var (labelType lab) (w A.>:> ZeroIdx)))))
 
-    bindAll :: EContext Int env'
-            -> env A.:> env'
-            -> [DSum (EDLabel Int) (A.ExpVars env)]
-            -> IdGen (PrimalInstantiatorCont env' Int)
-    bindAll ctx _ [] = return (PrimalInstantiatorCont ctx id)
-    bindAll (Context labelenv bindmap) w ((lab :=> vars) : rest) = do
-        traceM ("bindAll: let-binding expression at label " ++ showDLabel lab)
-        PrimalInstantiatorCont ctx' f1 <- bindAll (Context (LPush labelenv lab) bindmap) (A.weakenSucc' w) rest
-        return (PrimalInstantiatorCont ctx' (Let (A.LeftHandSideSingle (labelType lab)) (sinkExp w (evars vars)) . f1))
+    zipWithTupR :: (forall t'. s1 t' -> s2 t' -> s t') -> TupR s1 t -> TupR s2 t -> TupR s t
+    zipWithTupR _ TupRunit TupRunit = TupRunit
+    zipWithTupR f (TupRsingle a) (TupRsingle b) = TupRsingle (f a b)
+    zipWithTupR f (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (zipWithTupR f a1 b1) (zipWithTupR f a2 b2)
+    zipWithTupR _ _ _ = error "impossible GADTs"
 
-enumerateLabelenv :: LabVal s lab env -> [DSum (DLabel s lab) (Idx env)]
-enumerateLabelenv = go A.weakenId
-  where
-    go :: env A.:> env' -> LabVal s lab env -> [DSum (DLabel s lab) (Idx env')]
-    go _ LEmpty = []
-    go w (LPush labelenv lab) = (lab :=> w A.>:> ZeroIdx) : go (A.weakenSucc w) labelenv
+    tupRtoList :: (forall t'. s t' -> a) -> TupR s t -> [a]
+    tupRtoList _ TupRunit = []
+    tupRtoList f (TupRsingle x) = [f x]
+    tupRtoList f (TupRpair t1 t2) = tupRtoList f t1 ++ tupRtoList f t2
+
+    productFst :: Product f g t -> f t
+    productFst (Product.Pair x _) = x
+
+    productSnd :: Product f g t -> g t
+    productSnd (Product.Pair _ x) = x
 
 inlineAvarLabels :: Ord alab
                  => TupR (DLabel ArrayR alab) fv
