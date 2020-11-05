@@ -1300,7 +1300,7 @@ generateConstantArray (ArrayR sht ty) she =
 expGetLam :: TupleIdx t t' -> TypeR t -> Fun aenv lab alab tenv (t -> t')
 expGetLam ti ty
   | LetBoundExpE lhs vars <- elhsCopy ty
-  = Lam lhs (Body (Get (pickTupR ti ty) ti (evars vars)))
+  = Lam lhs (Body (evars (pickTupR ti vars)))
 
 mapGet :: TupleIdx t t' -> ArrayR (Array sh t) -> OpenAcc aenv lab alab tenv (Array sh t) -> OpenAcc aenv lab alab tenv (Array sh t')
 mapGet ti (ArrayR sht ty) = Map (ArrayR sht (pickTupR ti ty)) (ELPlain (expGetLam ti ty))
