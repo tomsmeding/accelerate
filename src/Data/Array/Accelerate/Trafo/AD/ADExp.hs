@@ -962,9 +962,9 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
               restypeN = FloatingNumType restypeF
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
               contribmap' = updateContribmap lbl
-                                [Contribution arglab TLNil $ \(TupRsingle adjvar) _ ->
+                                [Contribution arglab (arglab :@ TLNil) $ \(TupRsingle adjvar) (TupRsingle primvar :@ TLNil) ->
                                     smartMul restypeN (Var adjvar)
-                                                      (PrimApp restype (A.PrimCos restypeF) (zeroForType' 1 restypeF))]
+                                                      (PrimApp restype (A.PrimCos restypeF) (Var primvar))]
                                 contribmap
           lblS <- genSingleId restypeS
           return $ DualResult (Context (LPush labelenv lblS)
@@ -977,10 +977,10 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
               restypeN = FloatingNumType restypeF
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
               contribmap' = updateContribmap lbl
-                                [Contribution arglab TLNil $ \(TupRsingle adjvar) _ ->
+                                [Contribution arglab (arglab :@ TLNil) $ \(TupRsingle adjvar) (TupRsingle primvar :@ TLNil) ->
                                     smartMul restypeN (Var adjvar)
                                                       (PrimApp restype (A.PrimNeg restypeN)
-                                                          (PrimApp restype (A.PrimSin restypeF) (zeroForType' 1 restypeF)))]
+                                                          (PrimApp restype (A.PrimSin restypeF) (Var primvar)))]
                                 contribmap
           lblS <- genSingleId restypeS
           return $ DualResult (Context (LPush labelenv lblS)
