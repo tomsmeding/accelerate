@@ -27,7 +27,7 @@ import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
 import Data.Type.Equality
-import Data.GADT.Compare (GCompare)
+import Data.GADT.Compare (GCompare, geq)
 
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Environment as A
@@ -200,8 +200,8 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
         PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
         traceM ("\nexp context in core: " ++ showContext context)
         let reslabs = bindmap DMap.! fmapLabel P reslab
-        case (elabValFinds labelenv reslabs, constructPrimalBundle context) of
-            (Just resultvars, PrimalBundle tmpvars (PrimalInstantiator instantiator))
+        case (elabValFinds labelenv reslabs, captureEnvironmentSlice (Context LEmpty mempty) context) of
+            (Just resultvars, EnvCapture tmpvars (EnvInstantiator instantiator))
               | LetBoundExpE tmpRestoreLHS tmpRestoreVars <- elhsCopy (A.varsType tmpvars) -> do
                   let e' = builder (evars (TupRpair resultvars tmpvars))
                   adjlab <- genSingleId scalarType
@@ -358,41 +358,49 @@ collectIndexed (Context labelenv bindmap) nodemap =
                                               (DMap.map (weakenInst itemtype) mp))
                           (Pair restype expr (Pair itemtype adjexp idxexp))
 
-data PrimalBundle env lab =
+data EnvCapture env lab =
     forall tmp.
-        PrimalBundle -- Collects temporaries into a tuple
-                     (A.ExpVars env tmp)
-                     -- Consumes the tuple and reproduces the labels in a new let-environment
-                     (PrimalInstantiator lab tmp)
+        EnvCapture -- Collects temporaries into a tuple
+                   (A.ExpVars env tmp)
+                   -- Consumes the tuple and reproduces the labels in a new let-environment
+                   (EnvInstantiator lab tmp)
 
 -- Given a new context, and pointers into that context reconstructing the temp
 -- tuple, returns a new bindmap that binds the previous tuple labels to the new
 -- locations.
-data PrimalInstantiator lab tmp =
-    PrimalInstantiator (forall env1.
-                        EContext lab env1
-                     -> A.ExpVars env1 tmp
-                     -> DMap (EDLabelT (PDExp lab)) (TupR (EDLabel lab)))
+-- Precondition: the given context must contain all scalar labels that were in
+-- the non-captured part of the environment used to construct the EnvCapture.
+data EnvInstantiator lab tmp =
+    EnvInstantiator (forall env1.
+                     EContext lab env1
+                  -> A.ExpVars env1 tmp
+                  -> DMap (EDLabelT (PDExp lab)) (TupR (EDLabel lab)))
 
-constructPrimalBundle :: EContext Int env -> PrimalBundle env Int
-constructPrimalBundle (Context origlabelenv origbindmap)
-  | Exists origpairs <- collect A.weakenId origlabelenv =
-      PrimalBundle
-        (fmapTupR productSnd origpairs)
-        (PrimalInstantiator $ \(Context toplabelenv topbindmap) pointers ->
-            let oldnewmap =
-                  DMap.fromList $
-                    tupRtoList (\(Product.Pair origlab newlab) -> origlab :=> newlab) $
-                      zipWithTupR (\origlab (A.Var _ idx) -> Product.Pair origlab (prjL idx toplabelenv))
-                                  (fmapTupR productFst origpairs) pointers
-                rebound = DMap.map (fmapTupR (oldnewmap DMap.!)) origbindmap
-            in DMap.unionWithKey (error "constructPrimalBundle: Context at usage of primal bundle contains keys already defined in primal computation")
-                                 topbindmap rebound)
+captureEnvironmentSlice :: EContext Int topenv -> EContext Int env -> EnvCapture env Int
+captureEnvironmentSlice (Context toplabelenv topbindmap) (Context origlabelenv origbindmap)
+  | let barrierLab = case toplabelenv of
+                       LEmpty -> Nothing
+                       LPush _ lab -> Just (AnyLabel lab)
+  , Exists origpairs <- collect barrierLab A.weakenId origlabelenv
+  = let origdiffmap = origbindmap `DMap.difference` topbindmap
+    in EnvCapture
+          (fmapTupR productSnd origpairs)
+          (EnvInstantiator $ \(Context newlabelenv newbindmap) pointers ->
+              let oldnewmap =  -- only the captured part
+                    DMap.fromList $
+                      tupRtoList (\(Product.Pair origlab newlab) -> origlab :=> newlab) $
+                        zipWithTupR (\origlab (A.Var _ idx) -> Product.Pair origlab (prjL idx newlabelenv))
+                                    (fmapTupR productFst origpairs) pointers
+                  -- rebind the variables in the captured part to the new scalar labels
+                  rebounddiff = DMap.map (fmapTupR (\lab -> fromMaybe lab (DMap.lookup lab oldnewmap))) origdiffmap
+              in DMap.unionWithKey (error "captureEnvironmentSlice: Context at usage of primal bundle contains keys already defined in primal computation")
+                                   newbindmap rebounddiff)
   where
-    collect :: env A.:> env' -> ELabVal lab env -> Exists (TupR (Product (EDLabel lab) (A.ExpVar env')))
-    collect _ LEmpty = Exists TupRunit
-    collect w (LPush labelenv lab)
-      | Exists tup <- collect (A.weakenSucc w) labelenv =
+    collect :: Maybe (AnyLabel ScalarType lab) -> env A.:> env' -> ELabVal lab env -> Exists (TupR (Product (EDLabel lab) (A.ExpVar env')))
+    collect _ _ LEmpty = Exists TupRunit
+    collect barrier w (LPush labelenv lab)
+      | Just (AnyLabel b) <- barrier, Just Refl <- geq lab b = Exists TupRunit
+      | Exists tup <- collect barrier (A.weakenSucc w) labelenv =
           Exists (TupRpair tup (TupRsingle (Product.Pair lab (A.Var (labelType lab) (w A.>:> ZeroIdx)))))
 
     zipWithTupR :: (forall t'. s1 t' -> s2 t' -> s t') -> TupR s1 t -> TupR s2 t -> TupR s t
