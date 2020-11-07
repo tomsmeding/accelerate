@@ -49,7 +49,7 @@ vec :: Size -> Gen (A.Vector Float)
 vec (Size n) = genArray (Gen.float (Range.linearFrac (-10) 10)) (A.Z A.:. n)
 
 sized_vec :: Gen (A.Vector Float)
-sized_vec = Gen.scale (min 50) (sized vec)
+sized_vec = Gen.scale (min 20) (sized vec)
 
 t2_ :: Gen a -> Gen b -> Gen (a, b)
 t2_ a b = Gen.small ((,) <$> a <*> b)
@@ -128,6 +128,12 @@ prop_replicate_4 = compareAD' (Gen.small sized_vec) $ \a ->
 
 -- prop_reshape :: Property
 -- prop_reshape = compareAD' sized_vec
+
+prop_acond_1 :: Property
+prop_acond_1 = compareAD' sized_vec $ \a ->
+  let b = A.map (*2) a
+      A.T2 a1 _ = A.acond (A.the (A.sum a) A.> 0) (A.T2 a b) (A.T2 b a)
+  in A.sum (A.map (\x -> x * A.toFloating (A.indexHead (A.shape a1))) b)
 
 
 {-# NOINLINE main #-}
