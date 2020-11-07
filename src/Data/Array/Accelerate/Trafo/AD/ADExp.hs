@@ -487,6 +487,12 @@ explode labelenv e =
     trace ("exp explode: exploding " ++ showsExp (ShowEnv (const "L?") show 0 [] []) 9 e "") $
     explode' labelenv e
 
+-- The labelenv in explode contains the node labels in scope. This means that
+-- it contains tuple labels; however, a LabVal must contain scalar labels, thus
+-- the label numbers are wrapped in scalar DLabel's instead of tuple labels.
+-- This works out because any node that enters the environment does so via a
+-- Let binding, which forcibly destructures any tuples to scalar-typed values.
+-- After explode finishes, this LabVal is thrown away.
 explode' :: ELabVal Int env -> OpenExp env aenv unused alab args tenv t -> IdGen (Exploded aenv Int alab args tenv t)
 explode' env = \case
     Const ty x -> do
