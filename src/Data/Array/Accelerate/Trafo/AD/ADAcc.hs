@@ -231,9 +231,13 @@ explode labelenv e =
     trace ("acc explode: exploding " ++ showsAcc (ShowEnv (const "L?") (const "AL?") 0 () []) 9 e "") $
     explode' labelenv e
 
+-- As for expressions, the LabVal here contains node labels which happen to be
+-- single-array typed. These labels end up in labelised expressions, which is
+-- the reason why array labels in expressions need to go through the bindmap
+-- before looking them up.
 explode' :: ALabVal Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
 explode' labelenv = \case
-    e | trace ("acc explode': | " ++ showsAcc (ShowEnv (const "L?") (const "AL?") 0 () ['t' : show i | i <- [1::Int ..]]) 0 e "") False -> undefined
+    e | trace ("acc explode': | " ++ showsAcc (ShowEnv (const "L?") (const "AL?") 0 () ['t' : show i | i <- [1::Int ..]]) 0 e "" ++ "   labelenv = " ++ showLabelenv labelenv) False -> undefined
     Aconst ty x -> do
         lab <- genId (TupRsingle ty)
         return (lab, DMap.singleton lab (Aconst ty x), mempty)
@@ -1407,7 +1411,7 @@ accLabelParents = \case
     Aconst _ _ -> []
     Apair _ e1 e2 -> fromLabel e1 ++ fromLabel e2
     Anil -> []
-    Acond _ _ e1 e2 -> fromLabel e1 ++ fromLabel e2
+    Acond _ ce e1 e2 -> expLabels ce ++ fromLabel e1 ++ fromLabel e2
     Map _ lam e -> fromLabel e ++ lamLabels lam
     ZipWith _ lam e1 e2 -> fromLabel e1 ++ fromLabel e2 ++ lamLabels lam
     Generate _ e lam -> expLabels e ++ lamLabels lam
@@ -1445,7 +1449,7 @@ accLabelParents = \case
         [AnyLabel (tupleLabel lab) | Some lab <- enumerateTupR fvtup ++ DMap.keys instMap]
     lamLabels (ELPlain fun) = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expFunALabels fun]
 
-resolveAlabs :: (Ord alab, Show alab)
+resolveAlabs :: (HasCallStack, Ord alab, Show alab)
              => AContext alab aenv
              -> OpenExp env aenv' lab alab args tenv t
              -> OpenExp env aenv lab alab' args tenv t
