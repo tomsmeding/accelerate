@@ -495,9 +495,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Arg ty idx -> Var (A.Var ty (argWeaken A.>:> idx))
         Label _ -> error "realiseArgs: unexpected Label"
 
--- Map will NOT contain:
--- - Let or Var
--- - Label: the original expression should not have included Label
+-- Map will NOT contain Let or Var. Note that it may contain Label due to Let-bindings.
 explode :: Show alab => LabVal NodeLabel ScalarType Int env -> OpenExp env aenv unused alab args tenv t -> IdGen (Exploded aenv Int alab args tenv t)
 explode labelenv e =
     trace ("exp explode: exploding " ++ showsExp (ShowEnv (const "L?") show 0 [] []) 9 e "") $
