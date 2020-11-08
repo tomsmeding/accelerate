@@ -499,11 +499,11 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                             -- Note: the primal-transformed lambda is a lot larger than the input lambda, but it doesn't do
                             -- more _work_ as far as functionSize is concerned. Thus this heuristic application is sensible.
                             | Heuristic.functionSize instantiatedLambda < getConfigVar SmallFunSize
-                            = smartPairA (mapFst pairArrType computePrimal) (mapSnd pairArrType computePrimal)
+                            = smartPairA (mapFst computePrimal) (mapSnd computePrimal)
                             | otherwise
                             = Alet (A.LeftHandSideSingle pairArrType) computePrimal
                                    (let var = Avar (A.Var pairArrType ZeroIdx)
-                                    in smartPairA (mapFst pairArrType var) (mapSnd pairArrType var))
+                                    in smartPairA (mapFst var) (mapSnd var))
                       Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
                            producer
                            <$> primal' nodemap restlabels
@@ -529,12 +529,12 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                           -- For small functions, recompute the primal for the dual usage
                           producer
                             | Heuristic.functionSize instantiatedLambda < getConfigVar SmallFunSize
-                            = smartPairA (mapFst pairArrType computePrimal) (mapSnd pairArrType computePrimal)
+                            = smartPairA (mapFst computePrimal) (mapSnd computePrimal)
                             | otherwise
                             = Alet (A.LeftHandSideSingle pairArrType)
                                    computePrimal
                                    (let var = Avar (A.Var pairArrType ZeroIdx)
-                                    in smartPairA (mapFst pairArrType var) (mapSnd pairArrType var))
+                                    in smartPairA (mapFst var) (mapSnd var))
                       Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
                            producer
                            <$> primal' nodemap restlabels
@@ -588,11 +588,11 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                           -- For small functions, recompute the primal for the dual usage
                           producer
                             | Heuristic.functionSize instantiatedLambda < getConfigVar SmallFunSize
-                            = smartPairA (mapFst pairArrType computePrimal) (mapSnd pairArrType computePrimal)
+                            = smartPairA (mapFst computePrimal) (mapSnd computePrimal)
                             | otherwise
                             = Alet (A.LeftHandSideSingle pairArrType) computePrimal
                                    (let var = Avar (A.Var pairArrType ZeroIdx)
-                                    in smartPairA (mapFst pairArrType var) (mapSnd pairArrType var))
+                                    in smartPairA (mapFst var) (mapSnd var))
                       Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
                            producer
                            <$> primal' nodemap restlabels
@@ -762,7 +762,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
           let contribmap' = updateContribmap lbl
                                 ([Contribution arglab TLNil (TupRsingle templab :@ TLNil) $
                                     \_ _ (TupRsingle tempVar :@ TLNil) _ ->
-                                        mapFst pairArrType (Avar tempVar)]
+                                        mapFst (Avar tempVar)]
                                  ++ indexingContributions templab idxInstMap)
                                 contribmap
           lab <- genSingleId restype
@@ -798,10 +798,10 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
           let contribmap' = updateContribmap lbl
                                 ([Contribution arglab1 TLNil (TupRsingle templab :@ TLNil) $
                                      \_ _ (TupRsingle tempVar :@ TLNil) _ ->
-                                         mapGet (TILeft (TILeft TIHere)) pairArrType (Avar tempVar)
+                                         mapGet (TILeft (TILeft TIHere)) (Avar tempVar)
                                  ,Contribution arglab2 TLNil (TupRsingle templab :@ TLNil) $
                                      \_ _ (TupRsingle tempVar :@ TLNil) _ ->
-                                         mapGet (TILeft (TIRight TIHere)) pairArrType (Avar tempVar)]
+                                         mapGet (TILeft (TIRight TIHere)) (Avar tempVar)]
                                  ++ indexingContributions templab idxInstMap)
                                 contribmap
           lab <- genSingleId restype
@@ -1311,13 +1311,15 @@ expGetLam ti ty
   | LetBoundExpE lhs vars <- elhsCopy ty
   = Lam lhs (Body (evars (pickTupR ti vars)))
 
-mapGet :: TupleIdx t t' -> ArrayR (Array sh t) -> OpenAcc aenv lab alab tenv (Array sh t) -> OpenAcc aenv lab alab tenv (Array sh t')
-mapGet ti (ArrayR sht ty) = Map (ArrayR sht (pickTupR ti ty)) (ELPlain (expGetLam ti ty))
+mapGet :: TupleIdx t t' -> OpenAcc aenv lab alab tenv (Array sh t) -> OpenAcc aenv lab alab tenv (Array sh t')
+mapGet ti a =
+  let TupRsingle (ArrayR sht ty) = atypeOf a
+  in Map (ArrayR sht (pickTupR ti ty)) (ELPlain (expGetLam ti ty)) a
 
-mapFst :: ArrayR (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh a)
+mapFst :: OpenAcc aenv lab alab tenv (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh a)
 mapFst = mapGet (TILeft TIHere)
 
-mapSnd :: ArrayR (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh b)
+mapSnd :: OpenAcc aenv lab alab tenv (Array sh (a, b)) -> OpenAcc aenv lab alab tenv (Array sh b)
 mapSnd = mapGet (TIRight TIHere)
 
 plusLam :: TypeR t -> Fun aenv lab alab tenv (t -> t -> t)
