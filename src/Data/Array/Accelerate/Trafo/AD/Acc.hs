@@ -25,17 +25,14 @@ import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
 
 
-type ALabVal = LabVal ArrayR
-
-type ADLabel = DLabel ArrayR
-type ADLabelT = DLabel ArraysR
-
-
 -- Array programs
 -- --------------
 
+-- An expression lambda is either a split AD'd function (ELSplit), which
+-- contains the split-lambda information as well as the label at which the
+-- expression temporaries are stored; or a plain expression function (ELPlain).
 data ExpLambda1 aenv lab alab tenv sh t1 t2
-  = forall tmp idxadj. ELSplit (SplitLambdaAD t1 t2 lab alab tenv tmp idxadj) (DLabel ArrayR alab (Array sh tmp))
+  = forall tmp idxadj. ELSplit (SplitLambdaAD t1 t2 lab alab tenv tmp idxadj) (ADLabel alab (Array sh tmp))
   |                    ELPlain (Fun aenv lab alab tenv (t1 -> t2))
 
 fmapPlain :: (Fun aenv lab alab tenv (t1 -> t2) -> Fun aenv' lab alab tenv (t1 -> t2))
@@ -170,7 +167,7 @@ data OpenAcc aenv lab alab args t where
             -> Idx args t
             -> OpenAcc env lab alab args t
 
-    Alabel  :: ADLabelT alab t
+    Alabel  :: ADLabelN alab t
             -> OpenAcc env lab alab args t
 
 type Acc = OpenAcc ()
@@ -358,14 +355,14 @@ atypeOf (Avar (A.Var ty _)) = TupRsingle ty
 atypeOf (Aarg ty _) = TupRsingle ty
 atypeOf (Alabel lab) = labelType lab
 
-alabValFind :: Eq lab => ALabVal lab env -> ADLabel lab t -> Maybe (Idx env t)
+alabValFind :: Eq lab => LabVal lty ArrayR lab env -> DLabel lty ArrayR lab t -> Maybe (Idx env t)
 alabValFind LEmpty _ = Nothing
 alabValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
     | Just Refl <- matchArrayR ty ty2
     , lab == lab2 = Just ZeroIdx
     | otherwise = SuccIdx <$> alabValFind env target
 
-alabValFinds :: Eq lab => ALabVal lab env -> TupR (DLabel ArrayR lab) t -> Maybe (A.ArrayVars env t)
+alabValFinds :: Eq lab => LabVal lty ArrayR lab env -> TupR (DLabel lty ArrayR lab) t -> Maybe (A.ArrayVars env t)
 alabValFinds _ TupRunit = Just TupRunit
 alabValFinds labelenv (TupRsingle lab) =
     TupRsingle . A.Var (labelType lab) <$> alabValFind labelenv lab

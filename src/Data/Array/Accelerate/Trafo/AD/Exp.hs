@@ -33,12 +33,6 @@ import Data.Array.Accelerate.Trafo.AD.Orphans ()
 import qualified Data.Array.Accelerate.Trafo.Substitution as A (weakenVars, rebuildLHS)
 
 
-type ELabVal = LabVal ScalarType
-
-type EDLabel = DLabel ScalarType
-type EDLabelT = DLabel TypeR
-
-
 -- Expressions
 -- -----------
 
@@ -67,11 +61,11 @@ data OpenExp env aenv lab alab args tenv t where
             -> OpenExp env aenv lab alab args tenv a
 
     Shape   :: Either (A.ArrayVar aenv (Array sh e))
-                      (DLabel ArrayR alab (Array sh e))
+                      (ADLabelNS alab (Array sh e))
             -> OpenExp env aenv lab alab args tenv sh
 
     Index   :: Either (A.ArrayVar aenv (Array sh e))
-                      (DLabel ArrayR alab (Array sh e))
+                      (ADLabelNS alab (Array sh e))
             -> OpenExp env aenv lab alab args tenv sh
             -> OpenExp env aenv lab alab args tenv e
 
@@ -101,7 +95,7 @@ data OpenExp env aenv lab alab args tenv t where
             -> Idx args t
             -> OpenExp env aenv lab alab args tenv t
 
-    Label   :: EDLabelT lab t
+    Label   :: EDLabelN lab t
             -> OpenExp env aenv lab alab args tenv t
 
 type Exp = OpenExp ()
@@ -303,14 +297,14 @@ prettyPrimFun Prefix op = '(' : prettyPrimFun Infix op ++ ")"
 prettyPrimFun fixity op =
     error ("prettyPrimFun: not defined for " ++ show fixity ++ " " ++ showPrimFun op)
 
-elabValFind :: Eq lab => ELabVal lab env -> EDLabel lab t -> Maybe (Idx env t)
+elabValFind :: Eq lab => LabVal lty ScalarType lab env -> DLabel lty ScalarType lab t -> Maybe (Idx env t)
 elabValFind LEmpty _ = Nothing
 elabValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
     | Just Refl <- matchScalarType ty ty2
     , lab == lab2 = Just ZeroIdx
     | otherwise = SuccIdx <$> elabValFind env target
 
-elabValFinds :: Eq lab => ELabVal lab env -> TupR (DLabel ScalarType lab) t -> Maybe (A.ExpVars env t)
+elabValFinds :: Eq lab => LabVal lty ScalarType lab env -> TupR (DLabel lty ScalarType lab) t -> Maybe (A.ExpVars env t)
 elabValFinds _ TupRunit = Just TupRunit
 elabValFinds labelenv (TupRsingle lab) =
     TupRsingle . A.Var (labelType lab) <$> elabValFind labelenv lab
@@ -381,7 +375,7 @@ generaliseLabFunA :: OpenFun env aenv lab alab tenv t -> OpenFun env aenv lab al
 generaliseLabFunA (Lam lhs fun) = Lam lhs (generaliseLabFunA fun)
 generaliseLabFunA (Body ex) = Body (generaliseLabA ex)
 
-fmapAlabExp :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
+fmapAlabExp :: (forall ty. ADLabelNS alab ty -> ADLabelNS alab' ty)
             -> OpenExp env aenv lab alab args tenv t
             -> OpenExp env aenv lab alab' args tenv t
 fmapAlabExp f ex = case ex of
@@ -400,12 +394,13 @@ fmapAlabExp f ex = case ex of
     FreeVar var -> FreeVar var
     Label lab -> Label lab
 
-fmapAlabFun :: (forall ty. DLabel ArrayR alab ty -> DLabel ArrayR alab' ty)
+fmapAlabFun :: (forall ty. ADLabelNS alab ty -> ADLabelNS alab' ty)
             -> OpenFun env aenv lab alab tenv t
             -> OpenFun env aenv lab alab' tenv t
 fmapAlabFun f (Lam lhs fun) = Lam lhs (fmapAlabFun f fun)
 fmapAlabFun f (Body ex) = Body (fmapAlabExp f ex)
 
+-- TODO: These IndexInstantiators need some documentation
 newtype IndexInstantiator idxadj sh t =
     IndexInstantiator
         (forall     env aenv lab alab args tenv.
@@ -424,10 +419,10 @@ data SplitLambdaAD t t' lab alab tenv tmp idxadj =
     forall fv.
         SplitLambdaAD (forall aenv alab'. A.ArrayVars aenv fv -> Fun aenv lab alab' tenv (t -> (t', tmp)))
                       (forall aenv alab'. A.ArrayVars aenv fv -> Fun aenv lab alab' tenv ((t', tmp) -> (t, idxadj)))
-                      (TupR (DLabel ArrayR alab) fv)
+                      (TupR (ADLabelNS alab) fv)
                       (TypeR tmp)
                       (TypeR idxadj)
-                      (DMap (DLabel ArrayR alab) (IndexInstantiators idxadj))
+                      (DMap (ADLabelNS alab) (IndexInstantiators idxadj))
 
 data SomeSplitLambdaAD t t' lab alab tenv =
     forall tmp idxadj. SomeSplitLambdaAD (SplitLambdaAD t t' lab alab tenv tmp idxadj)
@@ -503,7 +498,7 @@ eCheckLocalP' match (A.Var sty (A.SuccIdx idx)) (PTPush tagval _)
       Just (A.Var sty' (SuccIdx idx'))
   | otherwise = Nothing
 
-expALabels :: OpenExp env aenv lab alab args tenv t -> [AnyLabel ArrayR alab]
+expALabels :: OpenExp env aenv lab alab args tenv t -> [AAnyLabelNS alab]
 expALabels (Const _ _) = []
 expALabels (PrimApp _ _ e) = expALabels e
 expALabels (Pair _ e1 e2) = expALabels e1 ++ expALabels e2
@@ -519,7 +514,7 @@ expALabels (FreeVar _) = []
 expALabels (Arg _ _) = []
 expALabels (Label _) = []
 
-expFunALabels :: OpenFun env aenv lab alab tenv t -> [AnyLabel ArrayR alab]
+expFunALabels :: OpenFun env aenv lab alab tenv t -> [AAnyLabelNS alab]
 expFunALabels (Lam _ fun) = expFunALabels fun
 expFunALabels (Body ex) = expALabels ex
 

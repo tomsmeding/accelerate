@@ -172,7 +172,7 @@ goExp = \case
     FreeVar var -> returnS $ FreeVar var
     Label lab -> returnS $ Label lab
 
-goVarOrLab :: Either (A.ArrayVar aenv t) (ADLabel lab t) -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), Either (A.ArrayVar aenv t) (ADLabel lab t))
+goVarOrLab :: Either (A.ArrayVar aenv t) (ADLabelNS lab t) -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), Either (A.ArrayVar aenv t) (ADLabelNS lab t))
 goVarOrLab (Left var) (sa, se) = ((statAddV var 2 sa, se), Left var)
 goVarOrLab (Right lab) s = (s, Right lab)
 
@@ -247,7 +247,7 @@ inlineAE f = \case
     FreeVar var -> FreeVar var
     Label lab -> Label lab
   where
-    inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args -> Either (A.ArrayVar aenv t) (ADLabel alab t) -> Either (A.ArrayVar aenv' t) (ADLabel alab t)
+    inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args -> Either (A.ArrayVar aenv t) (ADLabelNS alab t) -> Either (A.ArrayVar aenv' t) (ADLabelNS alab t)
     inlineAE_VarOrLab f' (Left var)
       | Avar var' <- unInlinerA f' var = Left var'
       | otherwise = error "inlineAE: Inlining array variable referenced in expression"
