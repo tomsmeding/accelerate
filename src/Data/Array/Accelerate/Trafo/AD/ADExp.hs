@@ -137,7 +137,8 @@ reverseAD paramlhs expr
   | ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
   , DeclareVars paramlhs'2 _ varsgen <- declareVars (A.lhsToTupR paramlhs)
   , Refl <- sameLHSsameEnv paramlhs' paramlhs'2 =
-      let argsRHS = varsToArgs (varsgen A.weakenId)
+      let argsVars = varsgen A.weakenId
+          argsRHS = varsToArgs argsVars
           closedExpr = Let paramlhs' argsRHS (generaliseArgs (sinkExp paramWeaken expr))
           transformedExp = evalIdGen $ do
               exploded@(_, _, argLabelMap) <- explode LEmpty closedExpr
@@ -152,7 +153,7 @@ reverseAD paramlhs expr
                   -- lookup produces an Idx, which, put in a Var, should replace the Arg in
                   -- 'argsRHS'.
                   trace ("\ncontext in core: " ++ showContext context) $
-                  return $ produceGradient argLabelMap context argsRHS
+                  return $ produceGradient argLabelMap context argsVars
       in
           trace ("AD result: " ++ prettyPrint transformedExp) $
           ReverseADResE paramlhs' (realiseArgs transformedExp paramlhs')
@@ -160,23 +161,18 @@ reverseAD paramlhs expr
 varsToArgs :: A.ExpVars env t -> OpenExp env' aenv lab alab env tenv t
 varsToArgs TupRunit = Nil
 varsToArgs (TupRsingle (A.Var ty idx)) = Arg ty idx
-varsToArgs (TupRpair vars1 vars2) =
-  let ex1 = varsToArgs vars1
-      ex2 = varsToArgs vars2
-  in Pair (TupRpair (etypeOf ex1) (etypeOf ex2)) ex1 ex2
+varsToArgs (TupRpair vars1 vars2) = smartPair (varsToArgs vars1) (varsToArgs vars2)
 
--- TODO: produceGradient should take the ExpVars value from BEFORE varsToArgs,
--- not after. That eliminates the error case if the argument is not
--- Nil/Pair/Arg.
 produceGradient :: DMap (Idx args) (EDLabelN Int)
                 -> EContext Int env
-                -> OpenExp () aenv unused unused2 args tenv t
+                -> A.ExpVars args t
                 -> OpenExp env aenv (PDExp Int) alab args' tenv t
 produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case argstup of
-    Nil -> Nil
-    Pair ty e1 e2 -> Pair ty (produceGradient argLabelMap context e1)
-                             (produceGradient argLabelMap context e2)
-    Arg ty idx
+    TupRunit -> Nil
+    TupRpair vars1 vars2 ->
+        smartPair (produceGradient argLabelMap context vars1)
+                  (produceGradient argLabelMap context vars2)
+    TupRsingle (A.Var ty idx)
       | Just lab <- DMap.lookup idx argLabelMap
       , Just labs <- DMap.lookup (fmapLabel D lab) bindmap
       , Just vars <- elabValFinds labelenv labs
@@ -184,7 +180,6 @@ produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case ar
       | otherwise
           -> error $ "produceGradient: Adjoint of Arg (" ++ show ty ++ ") " ++
                         'A' : show (A.idxToInt idx) ++ " not computed"
-    _ -> error "produceGradient: what?"
 
 splitLambdaAD :: forall aenv t t' unused unused2 tenv.
                  LabVal NodeLabel ArrayR Int aenv
@@ -195,10 +190,11 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
   , TupRsingle exprtypeS <- etypeOf expr
   , let argtype = A.lhsToTupR paramlhs
   , ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
-  , DeclareVars paramlhs'2 _ varsgen <- declareVars (A.lhsToTupR paramlhs)
+  , DeclareVars paramlhs'2 _ varsgen <- declareVars argtype
   , Refl <- sameLHSsameEnv paramlhs' paramlhs'2
-  , let argsRHS = varsToArgs (varsgen A.weakenId)
-        closedExpr = Let paramlhs' argsRHS (generaliseArgs (sinkExp paramWeaken (generaliseLab expr)))
+  , let argsVars = varsgen A.weakenId
+        argsRHS = varsToArgs argsVars
+        closedExpr = Let paramlhs' argsRHS (sinkExp paramWeaken (generaliseArgs (generaliseLab expr)))
   , (fvlablist, labelisedExpr) <- labeliseExp alabelenv closedExpr
   , TuplifyVars _ fvlabs _ <- tuplifyVars fvlablist
   = -- trace ("AD result: " ++ show transformedExp) $
@@ -208,14 +204,16 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
         PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
         traceM ("\nexp context in core: " ++ showContext context)
         let reslabs = bindmap DMap.! fmapLabel P reslab
-        case (elabValFinds labelenv reslabs, captureEnvironmentSlice (Context LEmpty mempty) context) of
-            (Just resultvars, EnvCapture tmpvars (EnvInstantiator instantiator))
-              | LetBoundExpE tmpRestoreLHS tmpRestoreVars <- elhsCopy (A.varsType tmpvars) -> do
-                  let e' = builder (evars (TupRpair resultvars tmpvars))
+        case elabValFinds labelenv reslabs of
+            Just resultvars
+              | EnvCapture tmpvars (EnvInstantiator instantiator) <- captureEnvironmentSlice (Context LEmpty mempty) context
+              , LetBoundExpE tmpRestoreLHS tmpRestoreVars <- elhsCopy (A.varsType tmpvars) -> do
+                  let primalBody = builder (evars (TupRpair resultvars tmpvars))
+
                   adjlab <- genSingleId scalarType
                   (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpRestoreVars)
                   -- The type of the labelenv here is (((), adjoint), ...temporaries). This is the
-                  -- type of the argument of dual lambda.
+                  -- type of the argument of the dual lambda.
                   let dualLabelenv = lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs
                       dualBindmap = instantiator (Context dualLabelenv mempty) tmpRestoreVars
                       dualInstCtx = Context dualLabelenv dualBindmap
@@ -228,19 +226,18 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
                   DualResult ctx' _ builder' <- dual exploded adjointProducer dualInstCtx
                   case collectIndexed ctx' nodemap of
                     CollectIndexed idxadjType idxInstantiators idxadjExpr -> do
-                        let dualBody = builder' $
-                                Pair (TupRpair argtype idxadjType) (produceGradient argLabelMap ctx' argsRHS)
-                                                                   idxadjExpr
+                        let dualBody = builder' (smartPair (produceGradient argLabelMap ctx' argsVars) idxadjExpr)
+
                         -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
                         return $ SomeSplitLambdaAD $
                             SplitLambdaAD (\fvavars ->
                                                Lam paramlhs'
                                                  (Body (realiseArgs
-                                                           (inlineAvarLabels fvlabs fvavars e')
+                                                           (inlineAvarLabels fvlabs fvavars primalBody)
                                                            paramlhs')))
                                           (\fvavars ->
                                                Lam (A.LeftHandSidePair (A.LeftHandSideSingle scalarType) tmpRestoreLHS)
-                                                   (Body (generaliseArgs  {- TODO: is this generalisation correct? -}
+                                                   (Body (generaliseArgs
                                                              (inlineAvarLabels fvlabs fvavars dualBody))))
                                           fvlabs
                                           (A.varsType tmpvars)
