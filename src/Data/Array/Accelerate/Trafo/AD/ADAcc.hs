@@ -56,16 +56,24 @@ import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weakenVars, weaken)
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
-type AContext = Context ArrayR PDAuxTagAcc
-
-
-genId :: ArraysR t -> IdGen (ADLabelT Int t)
+genId :: ArraysR t -> IdGen (ADLabelN Int t)
 genId = genId'
+
+genIdNodeSingle :: ArrayR t -> IdGen (ADLabelNS Int t)
+genIdNodeSingle = genId'
+
+genIds :: ArraysR t -> IdGen (Exists (A.ALeftHandSide t env), TupR (ADLabelNS Int) t)
+genIds TupRunit = return (Exists (A.LeftHandSideWildcard TupRunit), TupRunit)
+genIds (TupRsingle ty) = (Exists (A.LeftHandSideSingle ty),) . TupRsingle <$> genIdNodeSingle ty
+genIds (TupRpair t1 t2) = do
+    (Exists lhs1, ids1) <- genIds t1
+    (Exists lhs2, ids2) <- genIds t2
+    return (Exists (A.LeftHandSidePair lhs1 lhs2), TupRpair ids1 ids2)
 
 genSingleId :: ArrayR t -> IdGen (ADLabel Int t)
 genSingleId = genId'
 
-genSingleIds :: ArraysR t -> IdGen (Exists (A.LeftHandSide ArrayR t aenv), TupR (ADLabel Int) t)
+genSingleIds :: ArraysR t -> IdGen (Exists (A.ALeftHandSide t aenv), TupR (ADLabel Int) t)
 genSingleIds TupRunit = return (Exists (A.LeftHandSideWildcard TupRunit), TupRunit)
 genSingleIds (TupRsingle ty) = (Exists (A.LeftHandSideSingle ty),) . TupRsingle <$> genSingleId ty
 genSingleIds (TupRpair t1 t2) = do
@@ -75,13 +83,13 @@ genSingleIds (TupRpair t1 t2) = do
 
 
 -- TODO: make this a data definition, not a tuple
-type Exploded lab alab args res = (ADLabelT alab res, DMap (ADLabelT alab) (Acc lab alab args), DMap (A.Idx args) (ADLabelT alab))
+type Exploded lab alab args res = (ADLabelN alab res, DMap (ADLabelN alab) (Acc lab alab args), DMap (A.Idx args) (ADLabelN alab))
 
 showExploded :: (Ord alab, Show lab, Show alab) => Exploded lab alab args t -> String
 showExploded (endlab, nodemap, argmap) =
     "(" ++ showDLabel endlab ++ ", " ++ showNodemap nodemap ++ ", " ++ showArgmap argmap ++ ")"
 
-showNodemap :: (Ord alab, Show lab, Show alab) => DMap (ADLabelT alab) (Acc lab alab args) -> String
+showNodemap :: (Ord alab, Show lab, Show alab) => DMap (ADLabelN alab) (Acc lab alab args) -> String
 showNodemap nodemap =
     let tups = sortOn fst [(lab, (showDLabel dlab, show expr))
                           | dlab@(DLabel _ lab) :=> expr <- DMap.assocs nodemap]
@@ -89,7 +97,7 @@ showNodemap nodemap =
                              | (_, (dlabshow, exprshow)) <- tups]
     in "[" ++ s ++ "]"
 
-showArgmap :: Show alab => DMap (A.Idx args) (ADLabelT alab) -> String
+showArgmap :: Show alab => DMap (A.Idx args) (ADLabelN alab) -> String
 showArgmap argmap =
     let s = intercalate ", " ['A' : show (A.idxToInt argidx) ++ " :=> " ++ showDLabel dlab
                              | argidx :=> dlab <- DMap.assocs argmap]
@@ -172,7 +180,7 @@ reverseADA paramlhs expr
     -- TODO: produceGradient should take the ArrayVars value from BEFORE
     -- varsToArgs, not after. That eliminates the error case if the argument is
     -- not Nil/Pair/Arg.
-    produceGradient :: DMap (Idx args) (ADLabelT Int)
+    produceGradient :: DMap (Idx args) (ADLabelN Int)
                     -> AContext Int aenv
                     -> OpenAcc () unused1 unused2 args t
                     -> OpenAcc aenv unused3 (PDAcc Int) args' t
@@ -226,7 +234,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
 -- Map will NOT contain:
 -- - Let or Var
 -- - Label: the original expression should not have included Label
-explode :: ALabVal Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
+explode :: LabVal NodeLabel ArrayR Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
 explode labelenv e =
     trace ("acc explode: exploding " ++ showsAcc (ShowEnv (const "L?") (const "AL?") 0 () []) 9 e "") $
     explode' labelenv e
@@ -235,7 +243,7 @@ explode labelenv e =
 -- single-array typed. These labels end up in labelised expressions, which is
 -- the reason why array labels in expressions need to go through the bindmap
 -- before looking them up.
-explode' :: ALabVal Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
+explode' :: LabVal NodeLabel ArrayR Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
 explode' labelenv = \case
     e | trace ("acc explode': | " ++ showsAcc (ShowEnv (const "L?") (const "AL?") 0 () ['t' : show i | i <- [1::Int ..]]) 0 e "" ++ "   labelenv = " ++ showLabelenv labelenv) False -> undefined
     Aconst ty x -> do
@@ -351,7 +359,7 @@ explode' labelenv = \case
         return (lab, mp, argmp1)
     Alet lhs rhs body -> do
         (lab1, mp1, argmp1) <- explode' labelenv rhs
-        (_, labs) <- genSingleIds (atypeOf rhs)
+        (_, labs) <- genIds (atypeOf rhs)
         let (env', mpLHS) = lpushLHS_Get lhs labs labelenv (Alabel lab1)
         (lab2, mp2, argmp2) <- explode' env' body
         let mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mpLHS, mp2]
@@ -369,7 +377,7 @@ explode' labelenv = \case
     Scan _ _ _ _ _ -> error "explode: Unexpected Scan, can't do AD on Scan yet"
     Scan' _ _ _ _ _ -> error "explode: Unexpected Scan', can't do AD on Scan' yet"
   where
-    lpushLHS_Get :: A.ALeftHandSide t aenv aenv' -> TupR (ADLabel Int) t -> ALabVal Int aenv -> Acc lab Int args t -> (ALabVal Int aenv', DMap (ADLabelT Int) (Acc lab Int args))
+    lpushLHS_Get :: A.ALeftHandSide t aenv aenv' -> TupR (ADLabelNS Int) t -> LabVal NodeLabel ArrayR Int aenv -> Acc lab Int args t -> (LabVal NodeLabel ArrayR Int aenv', DMap (ADLabelN Int) (Acc lab Int args))
     lpushLHS_Get lhs labs labelenv' rhs = case (lhs, labs) of
         (A.LeftHandSidePair lhs1 lhs2, TupRpair labs1 labs2) ->
             let (labelenv1, mp1) = lpushLHS_Get lhs1 labs1 labelenv' (smartFst rhs)
@@ -379,19 +387,19 @@ explode' labelenv = \case
         (A.LeftHandSideWildcard _, _) -> (labelenv', mempty)
         _ -> error "lpushLHS_Get: impossible GADTs"
 
-computeLabelorder :: Exploded (PDExp Int) Int args t -> [AnyLabelT Int]
+computeLabelorder :: Exploded (PDExp Int) Int args t -> [AAnyLabelN Int]
 computeLabelorder (endlab, nodemap, _) =
     topsort' (\(AnyLabel l) -> labelLabel l)
              alllabels
              (\(AnyLabel l) -> parentmap Map.! labelLabel l)
   where
-    parentsOf :: AnyLabelT Int -> [AnyLabelT Int]
+    parentsOf :: AAnyLabelN Int -> [AAnyLabelN Int]
     parentsOf (AnyLabel lbl) = accLabelParents (nodemap `dmapFind` lbl)
 
-    alllabels :: [AnyLabelT Int]
+    alllabels :: [AAnyLabelN Int]
     alllabels = Set.toList $ floodfill (AnyLabel endlab) parentsOf mempty
 
-    parentmap :: Map Int [AnyLabelT Int]
+    parentmap :: Map Int [AAnyLabelN Int]
     parentmap = Map.fromList [(labelLabel numlbl, parentsOf l)
                              | l@(AnyLabel numlbl) <- alllabels]
 
@@ -404,15 +412,15 @@ primaldual exploded cont =
 
 -- Resulting computation will only use P, never D
 primal :: Exploded (PDExp Int) Int args res
-       -> [AnyLabelT Int]
+       -> [AAnyLabelN Int]
        -> (forall aenv. AContext Int aenv -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args t))
        -> IdGen (Acc (PDExp Int) (PDAcc Int) args t)
 primal (_, nodemap, _) labelorder = primal' nodemap labelorder (Context LEmpty mempty)
 
 -- TODO: can't primal' just return the created bindmap entry, so that it
 -- doesn't need to be looked up in the bindmap all the time?
-primal' :: DMap (ADLabelT Int) (Acc (PDExp Int) Int args)
-        -> [AnyLabelT Int]
+primal' :: DMap (ADLabelN Int) (Acc (PDExp Int) Int args)
+        -> [AAnyLabelN Int]
         -> AContext Int aenv
         -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PDExp Int) (PDAcc Int) args res))
         -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args res)
@@ -689,10 +697,8 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
 -- environment (and the bindmap) is needed.
 newtype AdjList lab alab args t = AdjList (forall aenv. AContext alab aenv -> [OpenAcc aenv lab (PDAcc alab) args t])
 
-type AnyLabelT = AnyLabel ArraysR
-
 dual :: Exploded (PDExp Int) Int args (Array () Float)
-     -> [AnyLabelT Int]
+     -> [AAnyLabelN Int]
      -> AContext Int aenv
      -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PDExp Int) (PDAcc Int) args t))
      -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args t)
@@ -707,10 +713,10 @@ dual (endlab, nodemap, _) labelorder context cont =
     in trace ("\nacc labelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
        dual' nodemap labelorder context contribmap cont
 
-dual' :: DMap (ADLabelT Int) (Acc (PDExp Int) Int args)
-      -> [AnyLabelT Int]
+dual' :: DMap (ADLabelN Int) (Acc (PDExp Int) Int args)
+      -> [AAnyLabelN Int]
       -> AContext Int aenv
-      -> DMap (ADLabelT (PDAcc Int)) (AdjList (PDExp Int) Int args)
+      -> DMap (ADLabelN (PDAcc Int)) (AdjList (PDExp Int) Int args)
       -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PDExp Int) (PDAcc Int) args res))
       -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args res)
 dual' _ [] context _ cont = cont context
@@ -1164,8 +1170,8 @@ tlmap f (x :@ xs) = f x :@ tlmap f xs
 
 data Contribution node args =
     forall parents labtups t.
-        Contribution (ADLabelT Int t)  -- to which label are we contributing an adjoint
-                     (TypedList (ADLabelT Int) parents)  -- labels you need the primary value of
+        Contribution (ADLabelN Int t)  -- to which label are we contributing an adjoint
+                     (TypedList (ADLabelN Int) parents)  -- labels you need the primary value of
                      (TypedList (TupR (ADLabel Int)) labtups)  -- scalar-level labels you need vars of
                      (forall aenv. A.ArrayVars aenv node                  -- current node's adjoint
                                 -> TypedList (A.ArrayVars aenv) parents   -- requested primal values
@@ -1182,10 +1188,10 @@ data Contribution node args =
 -- the typing of Contribution) removes the need of the branches of dual' to
 -- have a separate type signature, significantly simplifying the structure of
 -- the code.
-updateContribmap :: ADLabelT Int node
+updateContribmap :: ADLabelN Int node
                  -> [Contribution node args]
-                 -> DMap (ADLabelT (PDAcc Int)) (AdjList (PDExp Int) Int args)
-                 -> DMap (ADLabelT (PDAcc Int)) (AdjList (PDExp Int) Int args)
+                 -> DMap (ADLabelN (PDAcc Int)) (AdjList (PDExp Int) Int args)
+                 -> DMap (ADLabelN (PDAcc Int)) (AdjList (PDExp Int) Int args)
 updateContribmap lbl =
     flip . foldr $ \(Contribution lab parentlabs scalarlabss gen) ->
         addContribution (fmapLabel D lab) $ \(Context labelenv bindmap) ->
@@ -1196,7 +1202,7 @@ updateContribmap lbl =
                 (Just adjvars, parvars, scalvars) -> gen adjvars parvars scalvars labelenv
                 _ -> error $ "updateContribmap: node D " ++ show lbl ++ " was not computed"
   where
-    findAll :: AContext Int aenv -> TypedList (ADLabelT Int) parents -> TypedList (A.ArrayVars aenv) parents
+    findAll :: AContext Int aenv -> TypedList (ADLabelN Int) parents -> TypedList (A.ArrayVars aenv) parents
     findAll (Context labelenv bindmap) =
         tlmap $ \lab ->
             let labs = bindmap `dmapFind` fmapLabel P lab
@@ -1210,17 +1216,17 @@ updateContribmap lbl =
               error $ "updateContribmap(findAll'): arg " ++ showTupR show labs ++ " was not computed"
 
 addContribution :: Ord alab
-                => ADLabelT (PDAcc alab) t
+                => ADLabelN (PDAcc alab) t
                 -> (forall aenv. AContext alab aenv -> OpenAcc aenv lab (PDAcc alab) args t)
-                -> DMap (ADLabelT (PDAcc alab)) (AdjList lab alab args)
-                -> DMap (ADLabelT (PDAcc alab)) (AdjList lab alab args)
+                -> DMap (ADLabelN (PDAcc alab)) (AdjList lab alab args)
+                -> DMap (ADLabelN (PDAcc alab)) (AdjList lab alab args)
 addContribution lbl contribution =
     DMap.insertWith (\(AdjList f1) (AdjList f2) -> AdjList (\context -> f1 context ++ f2 context))
                     lbl
                     (AdjList (pure . contribution))
 
-collectAdjoint :: DMap (ADLabelT (PDAcc Int)) (AdjList lab Int args)
-               -> ADLabelT Int item
+collectAdjoint :: DMap (ADLabelN (PDAcc Int)) (AdjList lab Int args)
+               -> ADLabelN Int item
                -> AContext Int aenv
                -> OpenAcc aenv lab (PDAcc Int) args item
 collectAdjoint contribmap lbl (Context labelenv bindmap)
@@ -1230,8 +1236,8 @@ collectAdjoint contribmap lbl (Context labelenv bindmap)
         Nothing -> arraysSum (labelType lbl) pvars []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
 collectAdjoint _ _ _ = error "Impossible GADTs"
 
-lookupLambdaLabs :: DMap (DLabel (TupR ArrayR) (PDAcc Int)) (TupR (ADLabel Int))  -- bindmap
-                 -> TupR (ADLabel Int) t  -- free variable labels from SplitLambdaAD
+lookupLambdaLabs :: DMap (ADLabelN (PDAcc Int)) (TupR (ADLabel Int))  -- bindmap
+                 -> TupR (ADLabelNS Int) t  -- free variable labels from SplitLambdaAD
                  -> TupR (ADLabel Int) t  -- resolved labels pointing into the current labelenv
 lookupLambdaLabs bindmap' =
     fmapTupR $ \lamlab -> case bindmap' `dmapFind` fmapLabel P (tupleLabel lamlab) of
@@ -1246,7 +1252,7 @@ lookupLambdaLabs bindmap' =
 -- SplitLambdaAD.
 indexingContributions
     :: ADLabel Int (Array sh (t, idxadj))  -- ^ Single-label of the array of outputs of the dual split-lambda
-    -> DMap (ADLabel Int) (IndexInstantiators idxadj)  -- ^ The indexing instantiator map from SplitLambdaAD
+    -> DMap (ADLabelNS Int) (IndexInstantiators idxadj)  -- ^ The indexing instantiator map from SplitLambdaAD
     -> [Contribution node args]  -- ^ The contributions to indexed arrays in the lambda (the current @node@ is irrelevant)
 indexingContributions templab idxInstMap =
     let ArrayR shtype (TupRpair argelttype idxadjType) = labelType templab
@@ -1406,7 +1412,7 @@ sliceIndexTypeR (SliceAll sl)   = TupRpair (sliceIndexTypeR sl) TupRunit
 sliceIndexTypeR (SliceFixed sl) = TupRpair (sliceIndexTypeR sl) (TupRsingle scalarType)
 
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
-accLabelParents :: OpenAcc aenv lab alab args t -> [AnyLabelT alab]
+accLabelParents :: OpenAcc aenv lab alab args t -> [AAnyLabelN alab]
 accLabelParents = \case
     Aconst _ _ -> []
     Apair _ e1 e2 -> fromLabel e1 ++ fromLabel e2
@@ -1437,14 +1443,14 @@ accLabelParents = \case
     fromLabel (Alabel lab) = [AnyLabel lab]
     fromLabel _ = error "accLabelParents: Parent is not a label"
 
-    expLabels :: OpenExp env aenv lab alab args tenv t -> [AnyLabel ArraysR alab]
+    expLabels :: OpenExp env aenv lab alab args tenv t -> [AAnyLabelN alab]
     expLabels e = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expALabels e]
 
-    funLabels :: OpenFun env aenv lab alab tenv t -> [AnyLabel ArraysR alab]
+    funLabels :: OpenFun env aenv lab alab tenv t -> [AAnyLabelN alab]
     funLabels (Lam _ f) = funLabels f
     funLabels (Body e) = expLabels e
 
-    lamLabels :: ExpLambda1 aenv lab alab tenv sh t1 t2 -> [AnyLabel ArraysR alab]
+    lamLabels :: ExpLambda1 aenv lab alab tenv sh t1 t2 -> [AAnyLabelN alab]
     lamLabels (ELSplit (SplitLambdaAD _ _ fvtup _ _ instMap) _) =
         [AnyLabel (tupleLabel lab) | Some lab <- enumerateTupR fvtup ++ DMap.keys instMap]
     lamLabels (ELPlain fun) = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expFunALabels fun]
