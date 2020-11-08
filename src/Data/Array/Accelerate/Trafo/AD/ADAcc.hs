@@ -231,9 +231,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Aarg ty@ArrayR{} idx -> Avar (A.Var ty (argWeaken A.>:> idx))
         Alabel _ -> error "realiseArgs: unexpected Label"
 
--- Map will NOT contain:
--- - Let or Var
--- - Label: the original expression should not have included Label
+-- Map will NOT contain Let or Var. Note that it may contain Label due to Let-bindings.
 explode :: LabVal NodeLabel ArrayR Int aenv -> OpenAcc aenv unused1 unused2 args t -> IdGen (Exploded (PDExp Int) Int args t)
 explode labelenv e =
     trace ("acc explode: exploding " ++ showsAcc (ShowEnv (const "L?") (const "AL?") 0 () []) 9 e "") $
@@ -297,8 +295,9 @@ explode' labelenv = \case
     ZipWith _ ELSplit{} _ _ -> error "explode: Unexpected ZipWith SplitLambdaAD"
     Fold ty e me0 a -> do
         -- TODO: This does NOT split the lambda in Fold. This is because
-        -- currently, we do recompute-all for the Fold lambda, not store-all,
-        -- since where do we even store the temporaries?
+        -- currently, we do recompute-all for the Fold lambda, not store-all;
+        -- this is not because we can't, but because I haven't implemented that
+        -- yet. Also I think it may be better to not do it at all anyway.
         let e' = snd . labeliseFun labelenv . generaliseLabFunA . generaliseLabFun $ e
             me0' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab <$> me0
         (lab1, mp1, argmp1) <- explode' labelenv a
@@ -445,7 +444,7 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
               let labs = TupRpair (bindmap `dmapFind` fmapLabel P arglab1)
                                   (bindmap `dmapFind` fmapLabel P arglab2)
               in -- Note: We don't re-bind the constructed tuple into a new let
-                 -- binding with fresh labels here; we just point the tuple label
+                 -- binding with fresh labels here; we just point the node label
                  -- for this Pair expression node to the pre-existing scalar labels.
                  primal' nodemap restlabels
                          (Context labelenv
@@ -664,7 +663,7 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
           Aget _ path (Alabel arglab) ->
               let pickedlabs = pickTupR path (bindmap `dmapFind` fmapLabel P arglab)
               in -- Note: We don't re-bind the picked tuple into a new let binding
-                 -- with fresh labels here; we just point the tuple label for this
+                 -- with fresh labels here; we just point the node label for this
                  -- Get expression node to the pre-existing scalar labels.
                  primal' nodemap restlabels
                          (Context labelenv
@@ -682,7 +681,7 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
           Alabel arglab ->
               let arglabs = bindmap `dmapFind` fmapLabel P arglab
               in -- Note: We don't re-bind the labeled tuple into a new let binding
-                 -- with fresh labels here; we just point the tuple label for this
+                 -- with fresh labels here; we just point the node label for this
                  -- Label expression node to the pre-existing scalar labels.
                  primal' nodemap restlabels
                          (Context labelenv
@@ -1258,7 +1257,7 @@ indexingContributions templab idxInstMap =
     let ArrayR shtype (TupRpair argelttype idxadjType) = labelType templab
     in -- Note: 'tupleLabel' is warranted because array labels in expressions, being
        -- _variables_, originate from let-created variables in the original AST, and
-       -- thus their labels are tuple labels, despite being of single-label type.
+       -- thus their labels are node labels.
        [Contribution (tupleLabel backingLab) (tupleLabel backingLab :@ TLNil) (TupRsingle templab :@ TLNil) $
           \_ (TupRsingle backingPVar :@ TLNil) (TupRsingle tempVar :@ TLNil) _ ->
               Permute backingType
