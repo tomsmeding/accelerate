@@ -1124,7 +1124,7 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               contribmap'
                               (Let lhs adjoint)
 
-      expr -> trace ("\n!! " ++ show expr) undefined
+      expr -> error ("\n!! " ++ show expr)
 
 -- TODO: make a new abstraction after the refactor, possibly inspired by this function, which was the abstraction pre-refactor
 -- dualStoreAdjoint
