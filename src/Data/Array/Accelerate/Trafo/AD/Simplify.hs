@@ -12,10 +12,12 @@ import Data.Array.Accelerate.AST.LeftHandSide (LeftHandSide(..), Exists(..))
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Analysis.Match ((:~:)(Refl), matchArrayR, matchScalarType)
+import qualified Data.Array.Accelerate.Analysis.Match as A (matchOpenExp)
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
 import Data.Array.Accelerate.Trafo.AD.Acc
+import Data.Array.Accelerate.Trafo.AD.Additive
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Debug
 import Data.Array.Accelerate.Trafo.AD.Pretty
@@ -32,8 +34,10 @@ simplifyAcc a = let res = snd (goAcc a SNil)
 -- simplifyAcc = snd . flip goAcc SNil
 -- simplifyAcc = id
 
-simplifyExp :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv t
-simplifyExp = snd . flip goExp (SNil, SNil)
+simplifyExp :: (Show lab, Show alab) => OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv t
+simplifyExp a = let res = snd (goExp a (SNil, SNil))
+                in trace ("simplify result:\n" ++ prettyPrint res) res
+-- simplifyExp = snd . flip goExp (SNil, SNil)
 -- simplifyExp = id
 
 goAcc :: OpenAcc aenv lab alab args t -> Stats aenv -> (Stats aenv, OpenAcc aenv lab alab args t)
@@ -155,6 +159,21 @@ goExp = \case
         elimEmptyTI _ TIHere e' = e'
         elimEmptyTI ty' ti' e' = Get ty' ti' e'
 
+    -- Algebraic simplifications
+    PrimApp resty (A.PrimMul nty) (Pair pairty e1 e2) ->
+      \s -> case ((,) !$! goExp e1 !**! goExp e2) s of
+              (s', (e1', e2'))
+                | isNumConstant 0 e1' || isNumConstant 0 e2' -> (s', zeroForType nty)
+                | isNumConstant 1 e1' -> (s', e2')
+                | isNumConstant 1 e2' -> (s', e1')
+                | otherwise -> (s', PrimApp resty (A.PrimMul nty) (Pair pairty e1' e2'))
+    PrimApp resty (A.PrimAdd nty) (Pair pairty e1 e2) ->
+      \s -> case ((,) !$! goExp e1 !**! goExp e2) s of
+              (s', (e1', e2'))
+                | isNumConstant 0 e1' -> (s', e2')
+                | isNumConstant 0 e2' -> (s', e1')
+                | otherwise -> (s', PrimApp resty (A.PrimAdd nty) (Pair pairty e1' e2'))
+
     Const ty x -> returnS $ Const ty x
     PrimApp ty op e -> PrimApp ty op !$! goExp e
     PrimConst c -> returnS $ PrimConst c
@@ -172,6 +191,13 @@ goExp = \case
     Var var -> \s -> (second (statAddV var 1) s, Var var)
     FreeVar var -> returnS $ FreeVar var
     Label lab -> returnS $ Label lab
+  where
+    isNumConstant :: (forall a. Num a => a) -> OpenExp env aenv lab alab args tenv t -> Bool
+    isNumConstant cnst (Const ty val)
+      | Const _ val' <- zeroForType' cnst ty
+      , Just Refl <- A.matchOpenExp (A.Const ty val) (A.Const ty val')
+      = True
+    isNumConstant _ _ = False
 
 goVarOrLab :: Either (A.ArrayVar aenv t) (ADLabelNS lab t) -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), Either (A.ArrayVar aenv t) (ADLabelNS lab t))
 goVarOrLab (Left var) (sa, se) = ((statAddV var 2 sa, se), Left var)
