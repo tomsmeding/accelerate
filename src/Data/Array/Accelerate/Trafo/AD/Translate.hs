@@ -100,6 +100,7 @@ translateExp expr = case expr of
     A.Shape var -> D.Shape (Left var)
     A.Index var e -> D.Index (Left var) (translateExp e)
     A.ShapeSize sht e -> D.ShapeSize sht (translateExp e)
+    A.Undef ty -> D.Undef ty
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
 
 translateExpInPVal :: PartialVal ScalarType tenv env -> A.OpenExp env aenv t -> D.OpenExp env aenv lab alab args tenv t
@@ -117,6 +118,7 @@ translateExpInPVal pv expr = case expr of
     A.Shape var -> D.Shape (Left var)
     A.Index var e -> D.Index (Left var) (translateExpInPVal pv e)
     A.ShapeSize sht e -> D.ShapeSize sht (translateExpInPVal pv e)
+    A.Undef ty -> D.Undef ty
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
 
 data UntranslateResultE a env aenv t =
@@ -153,6 +155,7 @@ untranslateLHSboundExp toplhs topexpr topweak
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e w pv) body
+        D.Undef ty -> A.Undef ty
         D.Arg _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
         D.Label _ -> internalError "AD.untranslateLHSboundExp: Unexpected Label in untranslate!"
 
@@ -186,6 +189,7 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e pv) body
+        D.Undef ty -> A.Undef ty
         D.Arg _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
         D.Label _ -> internalError "AD.untranslateLHSboundExp: Unexpected Label in untranslate!"
 
