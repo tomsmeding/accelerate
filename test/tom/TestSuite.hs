@@ -8,6 +8,7 @@ module TestSuite (main) where
 
 import Control.Monad (when)
 import qualified Data.List as List
+import Data.String (fromString)
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import Hedgehog.Gen (sized)
@@ -76,7 +77,10 @@ compareAD func arg = checkApproxEqual (I.run1 (A.gradientA func) arg) (findiff f
 
 compareAD' :: (Show a, ADHelp.AFinDiff a, A.Arrays a)
            => Gen a -> (A.Acc a -> A.Acc (A.Scalar Float)) -> Property
-compareAD' gen func = withShrinks 10 $ property $ forAll gen >>= compareAD func
+compareAD' gen func = withShrinks 10 $ property $ do
+  arrs <- forAll gen
+  when False $ classify (fromString "totalSize > 5") (ADHelp.fdTotalSize arrs > 5)
+  compareAD func arrs
 
 
 prop_map :: Property
@@ -134,6 +138,23 @@ prop_acond_1 = compareAD' sized_vec $ \a ->
   let b = A.map (*2) a
       A.T2 a1 _ = A.acond (A.the (A.sum a) A.> 0) (A.T2 a b) (A.T2 b a)
   in A.sum (A.map (\x -> x * A.toFloating (A.indexHead (A.shape a1))) b)
+
+compareADE :: Gen (A.Vector Float) -> (A.Exp Float -> A.Exp Float) -> Property
+compareADE gen f = compareAD' gen $ \a -> A.sum (A.map f a)
+
+prop_cond_1 :: Property
+prop_cond_1 = compareADE sized_vec $ \x ->
+  let y = A.cond (x A.> 0) (A.sin (x * x)) (x * x * A.exp x)  -- derivative continuous at 0
+  in 2 * y
+
+prop_cond_2 :: Property
+prop_cond_2 = compareADE sized_vec $ \x ->
+  let fmod :: A.Exp Float -> A.Exp Float -> A.Exp Float
+      fmod a b = a - A.fromIntegral (A.floor (a / b) :: A.Exp Int) * b
+      y = A.cond (x `fmod` (2 * A.pi) A.< A.pi)  -- derivative continuous at all switching points
+                 (A.sin x)
+                 (A.pi / 12 * ((2 - 2 / A.pi * (x - A.pi / 2) `fmod` (2 * pi)) ^^ (6 :: Int) - 1))
+  in y * y
 
 
 {-# NOINLINE main #-}
