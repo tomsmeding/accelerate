@@ -723,9 +723,17 @@ primal' nodemap lbl (Context labelenv bindmap)
                 _ ->
                     error "primal: Cond arguments did not compute arguments"
             where
+              -- TODO: This function is a huge hack since it generates -1 for all Int-valued entries, and 0 for all others.
+              -- Why do we do that? We need all right arguments of an Index node to get -1 for the
+              -- whole shape in order for the array-index-induced Permute's to not do anything with
+              -- non-executed Index nodes. The easiest way to do that, which doesn't even involve
+              -- looking at what node we're dealing with, is to set _all_ Int-typed temps to -1.
+              -- Thus we do so.
+              -- TODO: We'd like to generate Undef for the non-Int entries, but currently the dual phase always executes both branches, meaning that arithmetic would be performed with Undef values, which is (probably) unsafe.
               undefsOfType :: TypeR t -> OpenExp env aenv lab alab args tenv t
               undefsOfType TupRunit = Nil
-              undefsOfType (TupRsingle ty) = zeroForType' (-1) ty  -- TODO: more Undef
+              undefsOfType (TupRsingle (SingleScalarType (NumSingleType (IntegralNumType TypeInt)))) = Const scalarType (-1)
+              undefsOfType (TupRsingle ty) = zeroForType ty
               undefsOfType (TupRpair t1 t2) = smartPair (undefsOfType t1) (undefsOfType t2)
 
           Shape ref -> do
