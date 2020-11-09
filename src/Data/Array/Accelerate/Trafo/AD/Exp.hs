@@ -47,6 +47,9 @@ data OpenExp env aenv lab alab args tenv t where
             -> OpenExp env aenv lab alab args tenv a
             -> OpenExp env aenv lab alab args tenv r
 
+    PrimConst :: A.PrimConst a
+              -> OpenExp env aenv lab alab args tenv a
+
     Pair    :: TypeR (a, b)
             -> OpenExp env aenv lab alab args tenv a
             -> OpenExp env aenv lab alab args tenv b
@@ -133,6 +136,7 @@ showsExp se d (PrimApp _ f e) =
         ops = prettyPrimFun Prefix f
     in showParen (d > prec) $
             showString (ops ++ " ") . showsExp se (prec+1) e
+showsExp _ _ (PrimConst c) = showString (show c)
 showsExp se _ (Pair _ e1 e2) =
     showString "(" . showsExp se 0 e1 . showString ", " .
         showsExp se 0 e2 . showString ")"
@@ -221,6 +225,7 @@ instance (Show lab, Show alab) => Show (OpenFun env aenv lab alab tenv t) where
 etypeOf :: OpenExp env aenv lab alab args tenv t -> TypeR t
 etypeOf (Const ty _) = TupRsingle ty
 etypeOf (PrimApp ty _ _) = ty
+etypeOf (PrimConst c) = TupRsingle (SingleScalarType (A.primConstType c))
 etypeOf (Pair ty _ _) = ty
 etypeOf Nil = TupRunit
 etypeOf (Cond ty _ _ _) = ty
@@ -331,6 +336,7 @@ evars = snd . evars'
 generaliseLab :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab' alab args tenv t
 generaliseLab (Const ty x) = Const ty x
 generaliseLab (PrimApp ty op ex) = PrimApp ty op (generaliseLab ex)
+generaliseLab (PrimConst c) = PrimConst c
 generaliseLab (Pair ty e1 e2) = Pair ty (generaliseLab e1) (generaliseLab e2)
 generaliseLab Nil = Nil
 generaliseLab (Cond ty e1 e2 e3) = Cond ty (generaliseLab e1) (generaliseLab e2) (generaliseLab e3)
@@ -350,6 +356,7 @@ generaliseLab (Label _) = error "generaliseLab: Label found"
 generaliseLabA :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab' args tenv t
 generaliseLabA (Const ty x) = Const ty x
 generaliseLabA (PrimApp ty op ex) = PrimApp ty op (generaliseLabA ex)
+generaliseLabA (PrimConst c) = PrimConst c
 generaliseLabA (Pair ty e1 e2) = Pair ty (generaliseLabA e1) (generaliseLabA e2)
 generaliseLabA Nil = Nil
 generaliseLabA (Cond ty e1 e2 e3) = Cond ty (generaliseLabA e1) (generaliseLabA e2) (generaliseLabA e3)
@@ -381,6 +388,7 @@ fmapAlabExp :: (forall ty. ADLabelNS alab ty -> ADLabelNS alab' ty)
 fmapAlabExp f ex = case ex of
     Const ty x -> Const ty x
     PrimApp ty op e -> PrimApp ty op (fmapAlabExp f e)
+    PrimConst c -> PrimConst c
     Pair ty e1 e2 -> Pair ty (fmapAlabExp f e1) (fmapAlabExp f e2)
     Nil -> Nil
     Cond ty e1 e2 e3 -> Cond ty (fmapAlabExp f e1) (fmapAlabExp f e2) (fmapAlabExp f e3)
@@ -442,6 +450,7 @@ elhsCopy (TupRpair t1 t2)
 sinkExp :: env A.:> env' -> OpenExp env aenv lab alab args tenv t -> OpenExp env' aenv lab alab args tenv t
 sinkExp _ (Const ty x) = Const ty x
 sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
+sinkExp _ (PrimConst c) = PrimConst c
 sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
 sinkExp _ Nil = Nil
 sinkExp k (Cond ty c t e) = Cond ty (sinkExp k c) (sinkExp k t) (sinkExp k e)
@@ -501,6 +510,7 @@ eCheckLocalP' match (A.Var sty (A.SuccIdx idx)) (PTPush tagval _)
 expALabels :: OpenExp env aenv lab alab args tenv t -> [AAnyLabelNS alab]
 expALabels (Const _ _) = []
 expALabels (PrimApp _ _ e) = expALabels e
+expALabels (PrimConst _) = []
 expALabels (Pair _ e1 e2) = expALabels e1 ++ expALabels e2
 expALabels Nil = []
 expALabels (Cond _ c t e) = expALabels c ++ expALabels t ++ expALabels e
@@ -521,6 +531,7 @@ expFunALabels (Body ex) = expALabels ex
 expHasIndex :: OpenExp env aenv lab alab args tenv t -> Bool
 expHasIndex (Const _ _) = False
 expHasIndex (PrimApp _ _ e) = expHasIndex e
+expHasIndex (PrimConst _) = False
 expHasIndex (Pair _ e1 e2) = expHasIndex e1 || expHasIndex e2
 expHasIndex Nil = False
 expHasIndex (Cond _ c t e) = expHasIndex c || expHasIndex t || expHasIndex e

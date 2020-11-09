@@ -91,6 +91,7 @@ translateExp :: A.OpenExp env aenv t -> D.OpenExp env aenv lab alab args tenv t
 translateExp expr = case expr of
     A.Const ty con -> D.Const ty con
     A.PrimApp f e -> D.PrimApp (A.expType expr) f (translateExp e)
+    A.PrimConst c -> D.PrimConst c
     A.Evar (A.Var rep idx) -> D.Var (A.Var rep idx)
     A.Let lhs def body -> D.Let lhs (translateExp def) (translateExp body)
     A.Nil -> D.Nil
@@ -105,6 +106,7 @@ translateExpInPVal :: PartialVal ScalarType tenv env -> A.OpenExp env aenv t -> 
 translateExpInPVal pv expr = case expr of
     A.Const ty con -> D.Const ty con
     A.PrimApp f e -> D.PrimApp (A.expType expr) f (translateExpInPVal pv e)
+    A.PrimConst c -> D.PrimConst c
     A.Evar var -> case D.eCheckLocalP matchScalarType var pv of
         Right var' -> D.Var var'
         Left topvar -> D.FreeVar topvar
@@ -132,6 +134,7 @@ untranslateLHSboundExp toplhs topexpr topweak
     go expr w pv = case expr of
         D.Const ty con -> A.Const ty con
         D.PrimApp _ f e -> A.PrimApp f (go e w pv)
+        D.PrimConst c -> A.PrimConst c
         D.Var var -> A.Evar (fromJust (D.eCheckLocalP' matchScalarType var pv))
         D.FreeVar var
           | Just w' <- w -> A.Evar (A.weaken w' var)
@@ -166,6 +169,7 @@ untranslateLHSboundExpA toplhs topexpr arrpv
     go expr pv = case expr of
         D.Const ty con -> A.Const ty con
         D.PrimApp _ f e -> A.PrimApp f (go e pv)
+        D.PrimConst c -> A.PrimConst c
         D.Var var -> A.Evar (fromJust (D.eCheckLocalP' matchScalarType var pv))
         D.FreeVar _ -> internalError "AD.untranslateLHSboundExpA: Unexpected free expression variable in array code"
         D.Let lhs def body

@@ -25,6 +25,7 @@ import Data.Array.Accelerate.Trafo.AD.Exp
 sinkExpAenv :: aenv A.:> aenv' -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv' lab alab args tenv t
 sinkExpAenv _ (Const ty x) = Const ty x
 sinkExpAenv k (PrimApp ty op e) = PrimApp ty op (sinkExpAenv k e)
+sinkExpAenv _ (PrimConst c) = PrimConst c
 sinkExpAenv k (Pair ty e1 e2) = Pair ty (sinkExpAenv k e1) (sinkExpAenv k e2)
 sinkExpAenv _ Nil = Nil
 sinkExpAenv k (Cond ty c t e) = Cond ty (sinkExpAenv k c) (sinkExpAenv k t) (sinkExpAenv k e)
@@ -92,6 +93,7 @@ eCheckClosedInTagval :: TagVal A.ScalarType env2 -> OpenExp env aenv lab alab ar
 eCheckClosedInTagval tv expr = case expr of
     Const ty x -> Just (Const ty x)
     PrimApp ty op e -> PrimApp ty op <$> eCheckClosedInTagval tv e
+    PrimConst c -> Just (PrimConst c)
     Pair ty e1 e2 -> Pair ty <$> eCheckClosedInTagval tv e1 <*> eCheckClosedInTagval tv e2
     Nil -> Just Nil
     Cond ty c t e -> Cond ty <$> eCheckClosedInTagval tv c <*> eCheckClosedInTagval tv t <*> eCheckClosedInTagval tv e
@@ -111,6 +113,7 @@ eCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenExp env aenv lab alab args
 eCheckAClosedInTagval tv expr = case expr of
     Const ty x -> Just (Const ty x)
     PrimApp ty op e -> PrimApp ty op <$> eCheckAClosedInTagval tv e
+    PrimConst c -> Just (PrimConst c)
     Pair ty e1 e2 -> Pair ty <$> eCheckAClosedInTagval tv e1 <*> eCheckAClosedInTagval tv e2
     Nil -> Just Nil
     Shape (Left var) -> Shape . Left <$> aCheckLocal var tv
