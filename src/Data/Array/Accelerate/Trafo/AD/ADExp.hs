@@ -47,7 +47,7 @@ import Data.Array.Accelerate.Trafo.AD.Debug
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
-import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weakenVars)
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
@@ -683,30 +683,43 @@ primal' nodemap lbl (Context labelenv bindmap)
                   Nothing ->
                       error "primal: App argument did not compute argument"
 
-          -- TODO: inlining of the produced halves into the branches of the
-          -- generated Cond operation, so that the halves are really only
-          -- computed if needed.
-          -- TODO: Also think about: what if the code contains:
-          --   (cond c t e) + (cond (not c) e t)
-          -- Because both t and e are shared, they cannot be inlined, and will
-          -- thus always be computed, even if in the end only one is needed in
-          -- all situations. But then, don't write code like that.
           Cond restype (Label condlab) (Label thenlab) (Label elselab) -> do
-              PrimalResult ctx1 f1 <- primal' nodemap condlab (Context labelenv bindmap)
-              PrimalResult ctx2 f2 <- primal' nodemap thenlab ctx1
-              PrimalResult (Context labelenv' bindmap') f3 <- primal' nodemap elselab ctx2
-              let condlabs = bindmap' `dmapFind` fmapLabel P condlab
-                  thenlabs = bindmap' `dmapFind` fmapLabel P thenlab
-                  elselabs = bindmap' `dmapFind` fmapLabel P elselab
-              case (elabValFinds labelenv' condlabs
-                   ,elabValFinds labelenv' thenlabs
-                   ,elabValFinds labelenv' elselabs) of
-                  (Just condvars, Just thenvars, Just elsevars) -> do
-                      (Exists lhs, labs) <- genSingleIds restype
-                      return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
-                                            (f1 . f2 . f3 . Let lhs (Cond restype (evars condvars) (evars thenvars) (evars elsevars)))
-                  _ ->
-                      error "primal: Cond arguments did not compute arguments"
+              PrimalResult ctxCond@(Context labelenv'Cond bindmap'Cond) fCond <- primal' nodemap condlab (Context labelenv bindmap)
+              PrimalResult ctxThen@(Context labelenv'Then bindmap'Then) f2Then <- primal' nodemap thenlab ctxCond
+              PrimalResult ctxElse@(Context labelenv'Else bindmap'Else) f2Else <- primal' nodemap elselab ctxCond
+              let condlabs = bindmap'Cond `dmapFind` fmapLabel P condlab
+                  thenlabs = bindmap'Then `dmapFind` fmapLabel P thenlab
+                  elselabs = bindmap'Else `dmapFind` fmapLabel P elselab
+              case (elabValFinds labelenv'Cond condlabs
+                   ,elabValFinds labelenv'Then thenlabs
+                   ,elabValFinds labelenv'Else elselabs) of
+                (Just condvars, Just thenvars, Just elsevars)
+                  | EnvCapture tmpvarsThen (EnvInstantiator instThen) <- captureEnvironmentSlice ctxCond ctxThen
+                  , EnvCapture tmpvarsElse (EnvInstantiator instElse) <- captureEnvironmentSlice ctxCond ctxElse
+                  , let tuptyThen = A.varsType tmpvarsThen
+                        tuptyElse = A.varsType tmpvarsElse
+                  , LetBoundExpE lhsResult _ <- elhsCopy restype
+                  , LetBoundExpE lhsThen lhsVarsThen <- elhsCopy tuptyThen
+                  , LetBoundExpE lhsElse lhsVarsElse <- elhsCopy tuptyElse
+                  -> do
+                    (_, labs) <- genSingleIds restype
+                    (_, tmplabsThen) <- genSingleIds tuptyThen
+                    (_, tmplabsElse) <- genSingleIds tuptyElse
+                    let bodyThen = f2Then (smartPair (evars thenvars) (smartPair (evars tmpvarsThen) (undefsOfType tuptyElse)))
+                        bodyElse = f2Else (smartPair (evars elsevars) (smartPair (undefsOfType tuptyThen) (evars tmpvarsElse)))
+                        labelenv' = lpushLabTup (lpushLabTup (lpushLabTup labelenv'Cond lhsResult labs) lhsThen tmplabsThen) lhsElse tmplabsElse
+                        bindmap'1 = instThen (Context labelenv' bindmap'Cond) (weakenVars (A.weakenWithLHS lhsElse) lhsVarsThen)
+                        bindmap'2 = instElse (Context labelenv' bindmap'1) lhsVarsElse
+                    return $ PrimalResult (Context labelenv' (DMap.insert (fmapLabel P lbl) labs bindmap'2))
+                                          (fCond . Let (A.LeftHandSidePair lhsResult (A.LeftHandSidePair lhsThen lhsElse))
+                                                       (Cond (TupRpair restype (TupRpair tuptyThen tuptyElse)) (evars condvars) bodyThen bodyElse))
+                _ ->
+                    error "primal: Cond arguments did not compute arguments"
+            where
+              undefsOfType :: TypeR t -> OpenExp env aenv lab alab args tenv t
+              undefsOfType TupRunit = Nil
+              undefsOfType (TupRsingle ty) = zeroForType' (-1) ty  -- TODO: more Undef
+              undefsOfType (TupRpair t1 t2) = smartPair (undefsOfType t1) (undefsOfType t2)
 
           Shape ref -> do
               (Exists lhs, labs) <- genSingleIds (labelType lbl)
