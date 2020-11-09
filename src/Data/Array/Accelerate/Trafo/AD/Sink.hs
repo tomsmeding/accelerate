@@ -35,6 +35,7 @@ sinkExpAenv k (Index (Left (A.Var sht idx)) e) = Index (Left (A.Var sht (k A.>:>
 sinkExpAenv k (Index (Right lab) e) = Index (Right lab) (sinkExpAenv k e)
 sinkExpAenv k (ShapeSize sht e) = ShapeSize sht (sinkExpAenv k e)
 sinkExpAenv k (Get ty ti e) = Get ty ti (sinkExpAenv k e)
+sinkExpAenv _ (Undef ty) = Undef ty
 sinkExpAenv k (Let lhs rhs e) = Let lhs (sinkExpAenv k rhs) (sinkExpAenv k e)
 sinkExpAenv _ (Var var) = Var var
 sinkExpAenv _ (FreeVar var) = FreeVar var
@@ -101,6 +102,7 @@ eCheckClosedInTagval tv expr = case expr of
     Index avar e -> Index avar <$> eCheckClosedInTagval tv e
     ShapeSize sht e -> ShapeSize sht <$> eCheckClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckClosedInTagval tv e
+    Undef ty -> Just (Undef ty)
     Let lhs rhs e
       | A.Exists lhs' <- rebuildLHS lhs ->
           Let lhs' <$> eCheckClosedInTagval tv rhs <*> eCheckClosedInTagval (valPushLHS lhs' tv) e
@@ -123,6 +125,7 @@ eCheckAClosedInTagval tv expr = case expr of
     ShapeSize sht e -> ShapeSize sht <$> eCheckAClosedInTagval tv e
     Cond ty c t e -> Cond ty <$> eCheckAClosedInTagval tv c <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckAClosedInTagval tv e
+    Undef ty -> Just (Undef ty)
     Let lhs rhs e -> Let lhs <$> eCheckAClosedInTagval tv rhs <*> eCheckAClosedInTagval tv e
     Var var -> Just (Var var)
     FreeVar var -> Just (FreeVar var)

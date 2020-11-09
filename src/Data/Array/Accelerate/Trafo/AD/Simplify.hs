@@ -183,6 +183,7 @@ goExp = \case
     Shape ref -> Shape !$! goVarOrLab ref
     Index ref e -> Index !$! goVarOrLab ref !**! goExp e
     ShapeSize sht e -> ShapeSize sht !$! goExp e
+    Undef ty -> returnS $ Undef ty  -- TODO: undef poisons, and can be propagated; however we currently don't generate code where that would help.
     Let lhs rhs e ->
       \s -> let ((s1a, s1e), rhs') = goExp rhs s
                 (s2, e') = goExp e (s1a, spushLHS0 s1e lhs)
@@ -270,6 +271,7 @@ inlineAE f = \case
     Index ref e -> Index (inlineAE_VarOrLab f ref) (inlineAE f e)
     ShapeSize sht e -> ShapeSize sht (inlineAE f e)
     Get ty ti e -> Get ty ti (inlineAE f e)
+    Undef ty -> Undef ty
     Let lhs rhs e -> Let lhs (inlineAE f rhs) (inlineAE f e)
     Arg ty idx -> Arg ty idx
     Var var -> Var var
@@ -315,6 +317,7 @@ inlineE f = \case
     Index ref e -> Index ref (inlineE f e)
     ShapeSize sht e -> ShapeSize sht (inlineE f e)
     Get ty ti e -> Get ty ti (inlineE f e)
+    Undef ty -> Undef ty
     Let lhs rhs e
       | Exists lhs' <- rebuildLHS lhs
       -> Let lhs' (inlineE f rhs) (inlineE (sinkInlinerELHS lhs lhs' f) e)

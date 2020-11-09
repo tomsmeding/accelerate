@@ -110,6 +110,7 @@ generaliseArgs (Shape ref) = Shape ref
 generaliseArgs (Index ref e) = Index ref (generaliseArgs e)
 generaliseArgs (ShapeSize sht e) = ShapeSize sht (generaliseArgs e)
 generaliseArgs (Get ty path ex) = Get ty path (generaliseArgs ex)
+generaliseArgs (Undef ty) = Undef ty
 generaliseArgs (Let lhs rhs ex) = Let lhs (generaliseArgs rhs) (generaliseArgs ex)
 generaliseArgs (Var v) = Var v
 generaliseArgs (FreeVar v) = FreeVar v
@@ -291,6 +292,7 @@ labeliseExp labelenv = \ex -> let (labs, ex') = go ex
       Index (Right _) _ -> error "Unexpected Index(Label) in labeliseExp"
       ShapeSize sht e -> ShapeSize sht <$> labeliseExp labelenv e
       Get ty ti e -> Get ty ti <$> labeliseExp labelenv e
+      Undef ty -> return (Undef ty)
       Let lhs rhs e -> Let lhs <$> labeliseExp labelenv rhs <*> labeliseExp labelenv e
       Arg ty idx -> return (Arg ty idx)
       Var var -> return (Var var)
@@ -464,6 +466,7 @@ inlineAvarLabels' f = \case
     Index (Right lab) ex -> Index (Left (f lab)) (inlineAvarLabels' f ex)
     Index (Left _) _ -> error "inlineAvarLabels': Array variable found in labelised expression (Index)"
     Get ty tidx ex -> Get ty tidx (inlineAvarLabels' f ex)
+    Undef ty -> Undef ty
     Let lhs rhs ex -> Let lhs (inlineAvarLabels' f rhs) (inlineAvarLabels' f ex)
     Var v -> Var v
     FreeVar v -> FreeVar v
@@ -487,6 +490,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Index ref e -> Index ref (go argWeaken varWeaken e)
         ShapeSize sht e -> ShapeSize sht (go argWeaken varWeaken e)
         Get ty tidx ex -> Get ty tidx (go argWeaken varWeaken ex)
+        Undef ty -> Undef ty
         Let lhs rhs ex
           | A.Exists lhs' <- rebuildLHS lhs ->
               Let lhs' (go argWeaken varWeaken rhs)
@@ -572,6 +576,9 @@ explode' env = \case
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
+    Undef ty -> do
+        lab <- genId (TupRsingle ty)
+        return (lab, DMap.singleton lab (Undef ty), mempty)
     Let lhs rhs body -> do
         (lab1, mp1, argmp1) <- explode' env rhs
         (_, labs) <- genIds (etypeOf rhs)
@@ -754,6 +761,11 @@ primal' nodemap lbl (Context labelenv bindmap)
               -- Get expression node to the pre-existing scalar labels.
               return $ PrimalResult (Context labelenv' (DMap.insert (fmapLabel P lbl) pickedlabs bindmap')) f1
 
+          Undef ty -> do
+              labS <- genSingleId ty
+              return $ PrimalResult (Context (LPush labelenv labS) (DMap.insert (fmapLabel P lbl) (TupRsingle labS) bindmap))
+                                    (Let (A.LeftHandSideSingle ty) (Undef ty))
+
           Arg ty idx -> do
               labS <- genSingleId ty
               return $ PrimalResult (Context (LPush labelenv labS) (DMap.insert (fmapLabel P lbl) (TupRsingle labS) bindmap))
@@ -829,9 +841,11 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
     -- trace ("dual': computing " ++ show lbl) $
     case nodemap `dmapFind` lbl of
       -- We aren't interested in the adjoint of constant nodes -- seeing as
-      -- they don't have any parents to contribute to.
+      -- they don't have any parents to contribute to, and their own adjoints
+      -- aren't used anywhere.
       Const _ _ -> return $ DualResult (Context labelenv bindmap) contribmap id
       PrimConst _ -> return $ DualResult (Context labelenv bindmap) contribmap id
+      Undef _ -> return $ DualResult (Context labelenv bindmap) contribmap id
 
       -- We also aren't interested in the adjoint of free variables.
       FreeVar _ ->
@@ -1240,6 +1254,7 @@ expLabelParents = \case
     Index _ e -> fromLabel e
     ShapeSize _ e -> fromLabel e
     Get _ _ e -> fromLabel e
+    Undef _ -> []
     FreeVar _ -> []
     Arg _ _ -> []
     Label lab -> [AnyLabel lab]

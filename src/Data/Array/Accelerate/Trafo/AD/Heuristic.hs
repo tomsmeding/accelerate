@@ -24,6 +24,7 @@ exprSize (Get ty (TILeft tidx) (Pair _ e _)) = exprSize (Get ty tidx e)
 exprSize (Get ty (TIRight tidx) (Pair _ _ e)) = exprSize (Get ty tidx e)
 exprSize (Get _ TIHere e) = exprSize e
 exprSize (Get _ _ e) = 1 + exprSize e
+exprSize (Undef _) = 0
 exprSize (Let _ e1 e2) = exprSize e1 + exprSize e2
 exprSize (Var _) = 0
 exprSize (FreeVar _) = 0

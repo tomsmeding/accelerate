@@ -152,6 +152,7 @@ layoutExp se d (Get _ ti e) = parenthesise (d > 10) $
     tiPrefix' TIHere = []
     tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
     tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
+layoutExp _ _ (Undef _) = string "undef"
 layoutExp se d (Let lhs rhs body) = parenthesise (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
         env' = descrs ++ seEnv se
