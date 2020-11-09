@@ -297,6 +297,7 @@ prettyPrimFun Prefix (A.PrimCos _) = "cos"
 prettyPrimFun Prefix (A.PrimFromIntegral _ _) = "fromIntegral"
 prettyPrimFun Prefix (A.PrimToFloating _ _) = "toFloating"
 prettyPrimFun Prefix (A.PrimRound _ _) = "round"
+prettyPrimFun Prefix (A.PrimFloor _ _) = "floor"
 prettyPrimFun Prefix (A.PrimMax _) = "max"
 prettyPrimFun Prefix op = '(' : prettyPrimFun Infix op ++ ")"
 prettyPrimFun fixity op =
