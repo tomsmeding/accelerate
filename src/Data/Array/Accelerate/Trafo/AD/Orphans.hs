@@ -6,6 +6,7 @@ module Data.Array.Accelerate.Trafo.AD.Orphans where
 import Data.GADT.Compare
 import Data.Type.Equality
 
+import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Array
@@ -183,3 +184,9 @@ instance GCompare s => GCompare (Var s env) where
                GLT -> GLT
                GGT -> GGT
                GEQ -> GEQ
+
+
+instance Show (PrimConst a) where
+  show (PrimPi _) = "pi"
+  show (PrimMinBound _) = "minBound"
+  show (PrimMaxBound _) = "maxBound"

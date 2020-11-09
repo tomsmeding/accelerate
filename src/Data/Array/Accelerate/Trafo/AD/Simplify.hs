@@ -157,6 +157,7 @@ goExp = \case
 
     Const ty x -> returnS $ Const ty x
     PrimApp ty op e -> PrimApp ty op !$! goExp e
+    PrimConst c -> returnS $ PrimConst c
     Pair ty e1 e2 -> Pair ty !$! goExp e1 !**! goExp e2
     Nil -> returnS Nil
     Cond ty e1 e2 e3 -> Cond ty !$! goExp e1 !**! goExp e2 !**! goExp e3
@@ -187,6 +188,7 @@ simplifyLam1 (ELPlain fun) = \s -> ELPlain <$> simplifyFun fun s
 noCostCopy :: OpenExp env aenv lab alab args tenv t -> Bool
 noCostCopy (Var _) = True
 noCostCopy (Const _ _) = True
+noCostCopy (PrimConst _) = True  -- TODO: depending on the backend this might not be true?
 noCostCopy _ = False
 
 data InlinerA aenv aenv' lab alab args =
@@ -234,6 +236,7 @@ inlineAE :: InlinerA aenv aenv' lab alab aargs -> OpenExp env aenv lab alab args
 inlineAE f = \case
     Const ty x -> Const ty x
     PrimApp ty op e -> PrimApp ty op (inlineAE f e)
+    PrimConst c -> PrimConst c
     Pair ty e1 e2 -> Pair ty (inlineAE f e1) (inlineAE f e2)
     Nil -> Nil
     Cond ty e1 e2 e3 -> Cond ty (inlineAE f e1) (inlineAE f e2) (inlineAE f e3)
@@ -278,6 +281,7 @@ inlineE :: InlinerE env env' aenv lab alab args tenv -> OpenExp env aenv lab ala
 inlineE f = \case
     Const ty x -> Const ty x
     PrimApp ty op e -> PrimApp ty op (inlineE f e)
+    PrimConst c -> PrimConst c
     Pair ty e1 e2 -> Pair ty (inlineE f e1) (inlineE f e2)
     Nil -> Nil
     Cond ty e1 e2 e3 -> Cond ty (inlineE f e1) (inlineE f e2) (inlineE f e3)

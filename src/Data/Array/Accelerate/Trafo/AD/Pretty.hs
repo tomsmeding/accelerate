@@ -109,6 +109,7 @@ layoutExp se d (PrimApp _ f e) =
         ops = prettyPrimFun Prefix f
     in parenthesise (d > prec) $
           lseq' [string ops, layoutExp se (prec+1) e]
+layoutExp _ _ (PrimConst c) = string (show c)
 layoutExp se _ (Pair _ e1 e2) =
     tuple [layoutExp se 0 e1, layoutExp se 0 e2]
 layoutExp _ _ Nil =

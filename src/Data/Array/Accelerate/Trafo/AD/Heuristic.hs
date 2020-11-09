@@ -13,6 +13,7 @@ functionSize (Body expr) = exprSize expr
 exprSize :: OpenExp env aenv lab alab args tenv t -> Int
 exprSize (Const _ _) = 1
 exprSize (PrimApp _ _ arg) = 1 + exprSize arg
+exprSize (PrimConst _) = 1
 exprSize (Pair _ e1 e2) = exprSize e1 + exprSize e2
 exprSize Nil = 0
 exprSize (Cond _ e1 e2 e3) = exprSize e1 + exprSize e2 + exprSize e3

@@ -102,6 +102,7 @@ showArgmap argmap =
 generaliseArgs :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args' tenv t
 generaliseArgs (Const ty x) = Const ty x
 generaliseArgs (PrimApp ty op ex) = PrimApp ty op (generaliseArgs ex)
+generaliseArgs (PrimConst c) = PrimConst c
 generaliseArgs (Pair ty e1 e2) = Pair ty (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs Nil = Nil
 generaliseArgs (Cond ty e1 e2 e3) = Cond ty (generaliseArgs e1) (generaliseArgs e2) (generaliseArgs e3)
@@ -274,6 +275,7 @@ labeliseExp labelenv = \ex -> let (labs, ex') = go ex
     go ex = case ex of
       Const ty x -> return (Const ty x)
       PrimApp ty op e -> PrimApp ty op <$> labeliseExp labelenv e
+      PrimConst c -> return (PrimConst c)
       Pair ty e1 e2 -> Pair ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2
       Nil -> return Nil
       Cond ty e1 e2 e3 -> Cond ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2 <*> labeliseExp labelenv e3
@@ -452,6 +454,7 @@ inlineAvarLabels' :: (forall t'. ADLabelNS alab t' -> A.ArrayVar aenv' t')
 inlineAvarLabels' f = \case
     Const ty x -> Const ty x
     PrimApp ty op ex -> PrimApp ty op (inlineAvarLabels' f ex)
+    PrimConst c -> PrimConst c
     Pair ty e1 e2 -> Pair ty (inlineAvarLabels' f e1) (inlineAvarLabels' f e2)
     Nil -> Nil
     Cond ty e1 e2 e3 -> Cond ty (inlineAvarLabels' f e1) (inlineAvarLabels' f e2) (inlineAvarLabels' f e3)
@@ -476,6 +479,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
     go argWeaken varWeaken expr = case expr of
         Const ty x -> Const ty x
         PrimApp ty op ex -> PrimApp ty op (go argWeaken varWeaken ex)
+        PrimConst c -> PrimConst c
         Pair ty e1 e2 -> Pair ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
         Nil -> Nil
         Cond ty e1 e2 e3 -> Cond ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
@@ -516,6 +520,9 @@ explode' env = \case
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping arg's") mp1 itemmp
         return (lab, mp, argmp)
+    PrimConst c -> do
+        lab <- genId (TupRsingle (SingleScalarType (A.primConstType c)))
+        return (lab, DMap.singleton lab (PrimConst c), mempty)
     Pair ty e1 e2 -> do
         (lab1, mp1, argmp1) <- explode' env e1
         (lab2, mp2, argmp2) <- explode' env e2
@@ -637,6 +644,12 @@ primal' nodemap lbl (Context labelenv bindmap)
               lblS <- genSingleId ty
               return $ PrimalResult (Context (LPush labelenv lblS) (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
                                     (Let (A.LeftHandSideSingle ty) (Const ty value))
+
+          PrimConst c -> do
+              let TupRsingle ty = labelType lbl
+              lblS <- genSingleId ty
+              return $ PrimalResult (Context (LPush labelenv lblS) (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
+                                    (Let (A.LeftHandSideSingle ty) (PrimConst c))
 
           FreeVar var@(A.Var ty _) -> do
               lblS <- genSingleId ty
@@ -804,8 +817,8 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
     case nodemap `dmapFind` lbl of
       -- We aren't interested in the adjoint of constant nodes -- seeing as
       -- they don't have any parents to contribute to.
-      Const _ _ ->
-          return $ DualResult (Context labelenv bindmap) contribmap id
+      Const _ _ -> return $ DualResult (Context labelenv bindmap) contribmap id
+      PrimConst _ -> return $ DualResult (Context labelenv bindmap) contribmap id
 
       -- We also aren't interested in the adjoint of free variables.
       FreeVar _ ->
@@ -1206,6 +1219,7 @@ expLabelParents :: OpenExp env aenv lab alab args tenv t -> [EAnyLabelN lab]
 expLabelParents = \case
     Const _ _ -> []
     PrimApp _ _ e -> fromLabel e
+    PrimConst _ -> []
     Pair _ e1 e2 -> fromLabel e1 ++ fromLabel e2
     Nil -> []
     Cond _ e1 e2 e3 -> fromLabel e1 ++ fromLabel e2 ++ fromLabel e3
