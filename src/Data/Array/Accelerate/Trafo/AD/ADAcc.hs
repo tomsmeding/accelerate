@@ -1082,7 +1082,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
                          contribmap' cont
 
-      expr -> trace ("\n!! " ++ show expr) undefined
+      expr -> error ("\n!! " ++ show expr)
   where
     smartZipWith :: Fun aenv lab alab () ((e1, e2) -> e)
                  -> OpenAcc aenv lab alab args (Array sh e1)
