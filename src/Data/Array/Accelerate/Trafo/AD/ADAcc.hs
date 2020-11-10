@@ -829,7 +829,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                                 let lhs' = A.LeftHandSidePair lhs
                                                               (A.LeftHandSideWildcard (TupRsingle scalarType))
                                                 in Generate argtypeS (Shape (Left pvar))
-                                                            (ELPlain (Lam lhs' (Body (Index (Left adjvar) (evars shvars)))))]
+                                                            (ELPlain (Lam lhs' (Body (Index (Left adjvar) (Left (evars shvars))))))]
                                 contribmap
           lab <- genSingleId restype
           Alet (A.LeftHandSideSingle restype) adjoint
@@ -1143,9 +1143,9 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                  (Body (Cond elttype
                                              (smartGt singleType (Var (A.Var scalarType ZeroIdx)) (Const scalarType 0))
                                              (Index (Left (A.Var ty ZeroIdx))
-                                                    (smartPair
-                                                        (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
-                                                        (smartSub numType (Var (A.Var scalarType ZeroIdx)) (Const scalarType 1))))
+                                                    (Left (smartPair
+                                                            (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                                                            (smartSub numType (Var (A.Var scalarType ZeroIdx)) (Const scalarType 1)))))
                                              prefix)))))
     smartCons _ _ = error "impossible GADTs"
 
@@ -1271,7 +1271,7 @@ indexingContributions templab idxInstMap =
                                     (smartSnd $  -- Choose the index item from the (adj, idx) tuple
                                       instantiator $
                                         smartSnd $
-                                          Index (Left tempVar) (evars vars))
+                                          Index (Left tempVar) (Left (evars vars)))
                                     (condHeadIsNegative (evars idxvars)  -- if we know for sure the index is negative (i.e. Index wasn't executed in the primal), return Nothing
                                         (mkNothing backingShapeT)
                                         (mkJust (evars idxvars))))
@@ -1406,7 +1406,7 @@ sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
       Let slicelhs (sinkExp (A.weakenWithLHS indexlhs) slexpr) $
           Cond eltty
                (genCond slix indexvars slicevars)
-               (Index (Left adjvar) (evars (indexSlice slix indexvars)))
+               (Index (Left adjvar) (Left (evars (indexSlice slix indexvars))))
                (zeroForType eltty)
   where
     indexSlice :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env sl

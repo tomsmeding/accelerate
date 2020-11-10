@@ -181,7 +181,7 @@ goExp = \case
     Nil -> returnS Nil
     Cond ty e1 e2 e3 -> Cond ty !$! goExp e1 !**! goExp e2 !**! goExp e3
     Shape ref -> Shape !$! goVarOrLab ref
-    Index ref e -> Index !$! goVarOrLab ref !**! goExp e
+    Index ref idx -> Index !$! goVarOrLab ref !**! either (\e -> Left !$! goExp e) (returnS . Right) idx
     ShapeSize sht e -> ShapeSize sht !$! goExp e
     Undef ty -> returnS $ Undef ty  -- TODO: undef poisons, and can be propagated; however we currently don't generate code where that would help.
     Let lhs rhs e ->
@@ -268,7 +268,7 @@ inlineAE f = \case
     Nil -> Nil
     Cond ty e1 e2 e3 -> Cond ty (inlineAE f e1) (inlineAE f e2) (inlineAE f e3)
     Shape ref -> Shape (inlineAE_VarOrLab f ref)
-    Index ref e -> Index (inlineAE_VarOrLab f ref) (inlineAE f e)
+    Index ref idx -> Index (inlineAE_VarOrLab f ref) (either (Left . inlineAE f) Right idx)
     ShapeSize sht e -> ShapeSize sht (inlineAE f e)
     Get ty ti e -> Get ty ti (inlineAE f e)
     Undef ty -> Undef ty
@@ -314,7 +314,7 @@ inlineE f = \case
     Nil -> Nil
     Cond ty e1 e2 e3 -> Cond ty (inlineE f e1) (inlineE f e2) (inlineE f e3)
     Shape ref -> Shape ref
-    Index ref e -> Index ref (inlineE f e)
+    Index ref idx -> Index ref (either (Left . inlineE f) Right idx)
     ShapeSize sht e -> ShapeSize sht (inlineE f e)
     Get ty ti e -> Get ty ti (inlineE f e)
     Undef ty -> Undef ty

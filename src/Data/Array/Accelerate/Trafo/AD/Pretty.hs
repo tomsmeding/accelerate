@@ -129,16 +129,21 @@ layoutExp se d (Shape (Left (A.Var _ idx))) =
 layoutExp se d (Shape (Right lab)) =
     parenthesise (d > 10) $
         string $ "shape (L" ++ seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab) ++ ")"
-layoutExp se d (Index (Left (A.Var _ idx)) e) =
+layoutExp se d (Index subj e) =
     parenthesise (d > 10) $ lseq'
-        [case drop (idxToInt idx) (seAenv se) of
-            descr : _ -> string descr
-            [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
-        ,string "!", layoutExp se 11 e]
-layoutExp se d (Index (Right lab) e) =
-    parenthesise (d > 10) $ lseq'
-        [string ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
-        ,string "!", layoutExp se 11 e]
+        [case subj of
+           Left (A.Var _ idx) ->
+              case drop (idxToInt idx) (seAenv se) of
+                  descr : _ -> string descr
+                  [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
+           Right lab ->
+              string ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
+        ,string "!"
+        ,case e of
+           Left e' -> layoutExp se 11 e'
+           Right (lab, bklab) ->
+              let showLabel = ($ "") . showsExp se 0 . Label
+              in string ("(" ++ showLabel lab ++ " backup->" ++ showLabel bklab ++ ")")]
 layoutExp se d (ShapeSize _ e) =
     parenthesise (d > 10) $
         lprefix "shapeSize " (layoutExp se 11 e)

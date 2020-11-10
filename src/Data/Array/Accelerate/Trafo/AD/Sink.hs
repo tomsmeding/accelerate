@@ -31,8 +31,8 @@ sinkExpAenv _ Nil = Nil
 sinkExpAenv k (Cond ty c t e) = Cond ty (sinkExpAenv k c) (sinkExpAenv k t) (sinkExpAenv k e)
 sinkExpAenv k (Shape (Left (A.Var sht idx))) = Shape (Left (A.Var sht (k A.>:> idx)))
 sinkExpAenv _ (Shape (Right lab)) = Shape (Right lab)
-sinkExpAenv k (Index (Left (A.Var sht idx)) e) = Index (Left (A.Var sht (k A.>:> idx))) (sinkExpAenv k e)
-sinkExpAenv k (Index (Right lab) e) = Index (Right lab) (sinkExpAenv k e)
+sinkExpAenv k (Index (Left (A.Var sht idx)) idxe) = Index (Left (A.Var sht (k A.>:> idx))) (either (Left . sinkExpAenv k) Right idxe)
+sinkExpAenv k (Index (Right lab) idx) = Index (Right lab) (either (Left . sinkExpAenv k) Right idx)
 sinkExpAenv k (ShapeSize sht e) = ShapeSize sht (sinkExpAenv k e)
 sinkExpAenv k (Get ty ti e) = Get ty ti (sinkExpAenv k e)
 sinkExpAenv _ (Undef ty) = Undef ty
@@ -99,7 +99,8 @@ eCheckClosedInTagval tv expr = case expr of
     Nil -> Just Nil
     Cond ty c t e -> Cond ty <$> eCheckClosedInTagval tv c <*> eCheckClosedInTagval tv t <*> eCheckClosedInTagval tv e
     Shape avar -> Just (Shape avar)
-    Index avar e -> Index avar <$> eCheckClosedInTagval tv e
+    Index avar (Right ls) -> Just (Index avar (Right ls))
+    Index avar (Left e) -> Index avar . Left <$> eCheckClosedInTagval tv e
     ShapeSize sht e -> ShapeSize sht <$> eCheckClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckClosedInTagval tv e
     Undef ty -> Just (Undef ty)
@@ -120,7 +121,7 @@ eCheckAClosedInTagval tv expr = case expr of
     Nil -> Just Nil
     Shape (Left var) -> Shape . Left <$> aCheckLocal var tv
     Shape (Right _) -> error "Exp with label in arrayvar position (Shape) is not closed, todo?"
-    Index (Left var) e -> Index <$> (Left <$> aCheckLocal var tv) <*> eCheckAClosedInTagval tv e
+    Index (Left var) idx -> Index <$> (Left <$> aCheckLocal var tv) <*> either (fmap Left . eCheckAClosedInTagval tv) (Just . Right) idx
     Index (Right _) _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
     ShapeSize sht e -> ShapeSize sht <$> eCheckAClosedInTagval tv e
     Cond ty c t e -> Cond ty <$> eCheckAClosedInTagval tv c <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e

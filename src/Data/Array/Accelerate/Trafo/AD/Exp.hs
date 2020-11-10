@@ -67,9 +67,30 @@ data OpenExp env aenv lab alab args tenv t where
                       (ADLabelNS alab (Array sh e))
             -> OpenExp env aenv lab alab args tenv sh
 
+    -- The second argument is there in order for conditionally executing an
+    -- Index node to work properly. In tree form (before explosion and after
+    -- rebuilding) the second argument is Left, and works as usual. In graph
+    -- form, the second argument is Right and contains two labels.
+    -- - The first label is the usual argument label; normally this is
+    --   indicated with a subexpression with head Label.
+    -- - The second label is an additional intermediate store for the value of
+    --   the index argument. The primal transformation MUST first store the
+    --   index argument at the second label, before using that stored value for
+    --   the actual indexing operation. This ensures that there is a copy of
+    --   the index value available in the same conditional branch as the Index
+    --   node itself, which can then safely be used in the dual pass to permute
+    --   the adjoint to the right place.
+    -- An example where this is necessary, and the dual phase cannot just take
+    -- the normal argument label (fmap'ed with P) as the index to permute to,
+    -- is if the index argument is computed outside a Cond, and then used
+    -- without modification inside a Cond. If the Permute in the dual phase
+    -- just used that argument, it would not be -1 as required if the branch
+    -- containing the Index is not taken.
     Index   :: Either (A.ArrayVar aenv (Array sh e))
                       (ADLabelNS alab (Array sh e))
-            -> OpenExp env aenv lab alab args tenv sh
+            -> Either (OpenExp env aenv lab alab args tenv sh)
+                      (EDLabelN lab sh   -- The index argument
+                      ,EDLabelN lab sh)  -- Backup location of the index argument
             -> OpenExp env aenv lab alab args tenv e
 
     ShapeSize :: ShapeR dim
@@ -161,16 +182,22 @@ showsExp se d (Shape (Right lab)) =
     showParen (d > 10) $
         showString "shape " .
         showString ("(L" ++ seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab) ++ ")")
-showsExp se d (Index (Left (A.Var _ idx)) e) =
+showsExp se d (Index subj e) =
     showParen (d > 10) $
-        (case drop (idxToInt idx) (seAenv se) of
-            descr : _ -> showString descr
-            [] -> showString ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))))
-        . showString " ! " . showsExp se 11 e
-showsExp se d (Index (Right lab) e) =
-    showParen (d > 10) $
-        showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
-        . showString " ! " . showsExp se 11 e
+        (case subj of
+           Left (A.Var _ idx) ->
+              case drop (idxToInt idx) (seAenv se) of
+                  descr : _ -> showString descr
+                  [] -> showString ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
+           Right lab ->
+              showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab)))
+        . showString " ! "
+        . (case e of
+             Left e' -> showsExp se 11 e'
+             Right (lab, bklab) ->
+                let showLabel = showsExp se 0 . Label
+                in showString "(" . showLabel lab . showString " backup->"
+                       . showLabel bklab . showString ")")
 showsExp se d (ShapeSize _ e) =
     showParen (d > 10) $
         showString "shapeSize " .
@@ -351,10 +378,9 @@ generaliseLab (PrimConst c) = PrimConst c
 generaliseLab (Pair ty e1 e2) = Pair ty (generaliseLab e1) (generaliseLab e2)
 generaliseLab Nil = Nil
 generaliseLab (Cond ty e1 e2 e3) = Cond ty (generaliseLab e1) (generaliseLab e2) (generaliseLab e3)
-generaliseLab (Shape (Left avar)) = Shape (Left avar)
-generaliseLab (Shape (Right alab)) = Shape (Right alab)
-generaliseLab (Index (Left avar) e) = Index (Left avar) (generaliseLab e)
-generaliseLab (Index (Right alab) e) = Index (Right alab) (generaliseLab e)
+generaliseLab (Shape ref) = Shape ref
+generaliseLab (Index ref (Left e)) = Index ref (Left (generaliseLab e))
+generaliseLab (Index _ (Right _)) = error "generaliseLab: Index with label index found"
 generaliseLab (ShapeSize sht e) = ShapeSize sht (generaliseLab e)
 generaliseLab (Get ty path ex) = Get ty path (generaliseLab ex)
 generaliseLab (Undef ty) = Undef ty
@@ -374,7 +400,7 @@ generaliseLabA Nil = Nil
 generaliseLabA (Cond ty e1 e2 e3) = Cond ty (generaliseLabA e1) (generaliseLabA e2) (generaliseLabA e3)
 generaliseLabA (Shape (Left avar)) = Shape (Left avar)
 generaliseLabA (Shape (Right _)) = error "generaliseLabA: Shape with label found"
-generaliseLabA (Index (Left avar) e) = Index (Left avar) (generaliseLabA e)
+generaliseLabA (Index (Left avar) e) = Index (Left avar) (either (Left . generaliseLabA) Right e)
 generaliseLabA (Index (Right _) _) = error "generaliseLabA: Index with label found"
 generaliseLabA (ShapeSize sht e) = ShapeSize sht (generaliseLabA e)
 generaliseLabA (Get ty path ex) = Get ty path (generaliseLabA ex)
@@ -442,7 +468,7 @@ sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
 sinkExp _ Nil = Nil
 sinkExp k (Cond ty c t e) = Cond ty (sinkExp k c) (sinkExp k t) (sinkExp k e)
 sinkExp _ (Shape var) = Shape var
-sinkExp k (Index var e) = Index var (sinkExp k e)
+sinkExp k (Index var idx) = Index var (either (Left . sinkExp k) Right idx)
 sinkExp k (ShapeSize sht e) = ShapeSize sht (sinkExp k e)
 sinkExp k (Get ty ti e) = Get ty ti (sinkExp k e)
 sinkExp _ (Undef ty) = Undef ty
@@ -503,7 +529,7 @@ expALabels (Pair _ e1 e2) = expALabels e1 ++ expALabels e2
 expALabels Nil = []
 expALabels (Cond _ c t e) = expALabels c ++ expALabels t ++ expALabels e
 expALabels (Shape var) = either (const []) (pure . AnyLabel) var
-expALabels (Index var e) = either (const []) (pure . AnyLabel) var ++ expALabels e
+expALabels (Index var idx) = either (const []) (pure . AnyLabel) var ++ either expALabels (const []) idx
 expALabels (ShapeSize _ e) = expALabels e
 expALabels (Get _ _ e) = expALabels e
 expALabels (Undef _) = []

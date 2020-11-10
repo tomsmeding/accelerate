@@ -107,7 +107,7 @@ generaliseArgs (Pair ty e1 e2) = Pair ty (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs Nil = Nil
 generaliseArgs (Cond ty e1 e2 e3) = Cond ty (generaliseArgs e1) (generaliseArgs e2) (generaliseArgs e3)
 generaliseArgs (Shape ref) = Shape ref
-generaliseArgs (Index ref e) = Index ref (generaliseArgs e)
+generaliseArgs (Index ref idx) = Index ref (either (Left . generaliseArgs) Right idx)
 generaliseArgs (ShapeSize sht e) = ShapeSize sht (generaliseArgs e)
 generaliseArgs (Get ty path ex) = Get ty path (generaliseArgs ex)
 generaliseArgs (Undef ty) = Undef ty
@@ -280,10 +280,10 @@ labeliseExp labelenv = \ex -> let (labs, ex') = go ex
           W.tell [AnyLabel lab]
           return (Shape (Right lab))
       Shape (Right _) -> error "Unexpected Shape(Label) in labeliseExp"
-      Index (Left (A.Var _ idx)) she -> do
+      Index (Left (A.Var _ idx)) idxe -> do
           let lab = prjL idx labelenv
           W.tell [AnyLabel lab]
-          Index (Right lab) <$> labeliseExp labelenv she
+          Index (Right lab) <$> either (fmap Left . labeliseExp labelenv) (return . Right) idxe
       Index (Right _) _ -> error "Unexpected Index(Label) in labeliseExp"
       ShapeSize sht e -> ShapeSize sht <$> labeliseExp labelenv e
       Get ty ti e -> Get ty ti <$> labeliseExp labelenv e
@@ -342,7 +342,10 @@ collectIndexed (Context labelenv bindmap) nodemap =
                  | nodelab :=> Index ref idxarg <- DMap.toList nodemap
                  , let alab = either (error "Non-labelised nodemap in collectIndexed") id ref
                        idxlab = case idxarg of
-                                  Label l -> l
+                                  -- Here we take the backup label, not the actual argument label, because only that
+                                  -- one is known to be bound in the same conditional branch as the Index itself.
+                                  -- See Index in Exp.hs.
+                                  Right (_, l) -> l
                                   _ -> error "Index argument not Label in collectIndexed"]
     in tuplify labels
   where
@@ -458,7 +461,7 @@ inlineAvarLabels' f = \case
     Shape (Right lab) -> Shape (Left (f lab))
     Shape (Left _) -> error "inlineAvarLabels': Array variable found in labelised expression (Shape)"
     ShapeSize sht e -> ShapeSize sht (inlineAvarLabels' f e)
-    Index (Right lab) ex -> Index (Left (f lab)) (inlineAvarLabels' f ex)
+    Index (Right lab) idxe -> Index (Left (f lab)) (either (Left . inlineAvarLabels' f) Right idxe)
     Index (Left _) _ -> error "inlineAvarLabels': Array variable found in labelised expression (Index)"
     Get ty tidx ex -> Get ty tidx (inlineAvarLabels' f ex)
     Undef ty -> Undef ty
@@ -482,7 +485,7 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
         Nil -> Nil
         Cond ty e1 e2 e3 -> Cond ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
         Shape ref -> Shape ref
-        Index ref e -> Index ref (go argWeaken varWeaken e)
+        Index ref idxe -> Index ref (either (Left . go argWeaken varWeaken) Right idxe)
         ShapeSize sht e -> ShapeSize sht (go argWeaken varWeaken e)
         Get ty tidx ex -> Get ty tidx (go argWeaken varWeaken ex)
         Undef ty -> Undef ty
@@ -550,20 +553,23 @@ explode' env = \case
     Shape (Right alab@(DLabel (ArrayR sht _) _)) -> do
         lab <- genId (shapeType sht)
         return (lab, DMap.singleton lab (Shape (Right alab)), mempty)
-    Index (Left avar@(A.Var (ArrayR _ ty) _)) she -> do
+    Index (Left avar@(A.Var (ArrayR _ ty) _)) (Left she) -> do
         (lab1, mp1, argmp1) <- explode' env she
         lab <- genId ty
-        let pruned = Index (Left avar) (Label lab1)
+        backuplab <- genId (etypeOf she)
+        let pruned = Index (Left avar) (Right (lab1, backuplab))
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
-    Index (Right alab@(DLabel (ArrayR _ ty) _)) she -> do
+    Index (Right alab@(DLabel (ArrayR _ ty) _)) (Left she) -> do
         (lab1, mp1, argmp1) <- explode' env she
         lab <- genId ty
-        let pruned = Index (Right alab) (Label lab1)
+        backuplab <- genId (etypeOf she)
+        let pruned = Index (Right alab) (Right (lab1, backuplab))
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
+    Index _ (Right _) -> error "explode: Unexpected exp-labelised Index"
     ShapeSize sht e -> do
         (lab1, mp1, argmp1) <- explode' env e
         lab <- genId (TupRsingle scalarType)
@@ -736,14 +742,23 @@ primal' nodemap lbl (Context labelenv bindmap)
               return $ PrimalResult (Context (lpushLabTup labelenv lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap))
                                     (Let lhs (Shape ref))
 
-          Index ref (Label arglab) -> do
+          Index ref (Right (arglab, backuplab)) -> do
               PrimalResult (Context labelenv' bindmap') f1 <- primal' nodemap arglab (Context labelenv bindmap)
               let arglabs = bindmap' `dmapFind` fmapLabel P arglab
-              case elabValFinds labelenv' arglabs of
-                  Just vars -> do
+              -- We have to take the argument and first make a copy at
+              -- 'backuplab', and then use that copy instead of the value from
+              -- the argument. This is to ensure a copy is available directly
+              -- adjacent to the Index node; see Index in Exp.hs.
+              case (elabValFinds labelenv' arglabs, elhsCopy (labelType backuplab)) of
+                  (Just vars, LetBoundExpE lhs2 vars2) -> do
                       (Exists lhs, labs) <- genSingleIds (labelType lbl)
-                      return $ PrimalResult (Context (lpushLabTup labelenv' lhs labs) (DMap.insert (fmapLabel P lbl) labs bindmap'))
-                                            (f1 . Let lhs (Index ref (evars vars)))
+                      (_, labs2) <- genSingleIds (labelType backuplab)
+                      let labelenv'' = lpushLabTup (lpushLabTup labelenv' lhs2 labs2) lhs labs
+                          bindmap'' = DMap.insert (fmapLabel P lbl) labs $
+                                      DMap.insert (fmapLabel P backuplab) labs2 $
+                                      bindmap'
+                      return $ PrimalResult (Context labelenv'' (DMap.insert (fmapLabel P lbl) labs bindmap''))
+                                            (f1 . Let lhs2 (evars vars) . Let lhs (Index ref (Left (evars vars2))))
                   _ -> error "primal: Index arguments did not compute arguments"
 
           ShapeSize sht (Label arglab) -> do
@@ -1085,7 +1100,7 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
           return $ DualResult (Context labelenv bindmap) contribmap id
 
       -- Argument (the index) is an integral type, which takes no
-      -- contributions. Note that more needs to be done on the array level with
+      -- contributions. Note that more needs to be done in splitLambdaAD with
       -- lambdas that contain Index nodes, but here all is still simple.
       Index _ _ -> do
           let TupRsingle restypeS = labelType lbl
@@ -1254,7 +1269,8 @@ expLabelParents = \case
     Nil -> []
     Cond _ e1 e2 e3 -> fromLabel e1 ++ fromLabel e2 ++ fromLabel e3
     Shape _ -> []
-    Index _ e -> fromLabel e
+    Index _ (Left e) -> fromLabel e
+    Index _ (Right (lab, _)) -> [AnyLabel lab]
     ShapeSize _ e -> fromLabel e
     Get _ _ e -> fromLabel e
     Undef _ -> []
