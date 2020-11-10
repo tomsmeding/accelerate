@@ -395,33 +395,6 @@ generaliseLabFunA :: OpenFun env aenv lab alab tenv t -> OpenFun env aenv lab al
 generaliseLabFunA (Lam lhs fun) = Lam lhs (generaliseLabFunA fun)
 generaliseLabFunA (Body ex) = Body (generaliseLabA ex)
 
-fmapAlabExp :: (forall ty. ADLabelNS alab ty -> ADLabelNS alab' ty)
-            -> OpenExp env aenv lab alab args tenv t
-            -> OpenExp env aenv lab alab' args tenv t
-fmapAlabExp f ex = case ex of
-    Const ty x -> Const ty x
-    PrimApp ty op e -> PrimApp ty op (fmapAlabExp f e)
-    PrimConst c -> PrimConst c
-    Pair ty e1 e2 -> Pair ty (fmapAlabExp f e1) (fmapAlabExp f e2)
-    Nil -> Nil
-    Cond ty e1 e2 e3 -> Cond ty (fmapAlabExp f e1) (fmapAlabExp f e2) (fmapAlabExp f e3)
-    Shape ref -> Shape (f <$> ref)
-    Index ref e -> Index (f <$> ref) (fmapAlabExp f e)
-    ShapeSize sht e -> ShapeSize sht (fmapAlabExp f e)
-    Get ty ti e -> Get ty ti (fmapAlabExp f e)
-    Undef ty -> Undef ty
-    Let lhs rhs e -> Let lhs (fmapAlabExp f rhs) (fmapAlabExp f e)
-    Arg ty idx -> Arg ty idx
-    Var var -> Var var
-    FreeVar var -> FreeVar var
-    Label lab -> Label lab
-
-fmapAlabFun :: (forall ty. ADLabelNS alab ty -> ADLabelNS alab' ty)
-            -> OpenFun env aenv lab alab tenv t
-            -> OpenFun env aenv lab alab' tenv t
-fmapAlabFun f (Lam lhs fun) = Lam lhs (fmapAlabFun f fun)
-fmapAlabFun f (Body ex) = Body (fmapAlabExp f ex)
-
 -- TODO: These IndexInstantiators need some documentation
 newtype IndexInstantiator idxadj sh t =
     IndexInstantiator
