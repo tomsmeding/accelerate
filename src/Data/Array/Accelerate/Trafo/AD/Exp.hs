@@ -338,6 +338,11 @@ evars = snd . evars'
             (t2, e2) = evars' vars2
         in (TupRpair t1 t2, Pair (TupRpair t1 t2) e1 e2)
 
+untupleExps :: TupR (OpenExp env aenv lab alab args tenv) t -> OpenExp env aenv lab alab args tenv t
+untupleExps TupRunit = Nil
+untupleExps (TupRsingle e) = e
+untupleExps (TupRpair t1 t2) = smartPair (untupleExps t1) (untupleExps t2)
+
 -- Assumes the expression does not contain Label
 generaliseLab :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab' alab args tenv t
 generaliseLab (Const ty x) = Const ty x
@@ -561,8 +566,7 @@ expHasIndex (Label _) = False
 mkJust :: forall env aenv lab alab args tenv t. OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv (A.PrimMaybe t)
 mkJust ex
   | [tag] <- [tag | ("Just", tag) <- A.tags @(Maybe t)] =
-      let sndty = TupRpair TupRunit (etypeOf ex)
-      in Pair (TupRpair (TupRsingle scalarType) sndty) (Const scalarType tag) (Pair sndty Nil ex)
+      smartPair (Const scalarType tag) (smartPair Nil ex)
   | otherwise = error "Maybe does not have a Just constructor?"
 
 mkBool :: Bool -> OpenExp env aenv lab alab args tenv A.PrimBool
