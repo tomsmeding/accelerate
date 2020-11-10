@@ -161,27 +161,22 @@ reverseAD paramlhs expr
           ReverseADResE paramlhs' (realiseArgs transformedExp paramlhs')
 
 varsToArgs :: A.ExpVars env t -> OpenExp env' aenv lab alab env tenv t
-varsToArgs TupRunit = Nil
-varsToArgs (TupRsingle (A.Var ty idx)) = Arg ty idx
-varsToArgs (TupRpair vars1 vars2) = smartPair (varsToArgs vars1) (varsToArgs vars2)
+varsToArgs = untupleExps . fmapTupR (\(A.Var ty idx) -> Arg ty idx)
 
 produceGradient :: DMap (Idx args) (EDLabelN Int)
                 -> EContext Int env
                 -> A.ExpVars args t
                 -> OpenExp env aenv (PDExp Int) alab args' tenv t
-produceGradient argLabelMap context@(Context labelenv bindmap) argstup = case argstup of
-    TupRunit -> Nil
-    TupRpair vars1 vars2 ->
-        smartPair (produceGradient argLabelMap context vars1)
-                  (produceGradient argLabelMap context vars2)
-    TupRsingle (A.Var ty idx)
-      | Just lab <- DMap.lookup idx argLabelMap
-      , Just labs <- DMap.lookup (fmapLabel D lab) bindmap
-      , Just vars <- elabValFinds labelenv labs
+produceGradient argLabelMap (Context labelenv bindmap) =
+    untupleExps . fmapTupR (\(A.Var ty idx) ->
+      case DMap.lookup idx argLabelMap of
+        Just lab
+          | Just labs <- DMap.lookup (fmapLabel D lab) bindmap
+          , Just vars <- elabValFinds labelenv labs
           -> evars vars
-      | otherwise
+        _
           -> error $ "produceGradient: Adjoint of Arg (" ++ show ty ++ ") " ++
-                        'A' : show (A.idxToInt idx) ++ " not computed"
+                        'A' : show (A.idxToInt idx) ++ " not computed")
 
 splitLambdaAD :: forall aenv t t' unused unused2 tenv.
                  LabVal NodeLabel ArrayR Int aenv

@@ -70,7 +70,7 @@ newtype OpenExpEnv aenv lab alab args tenv env t =
 
 instance ExprLike ScalarType (OpenExpEnv aenv lab alab args tenv) where
   nil = OpenExpEnv Nil
-  pair (OpenExpEnv e1) (OpenExpEnv e2) = OpenExpEnv (Pair (TupRpair (etypeOf e1) (etypeOf e2)) e1 e2)
+  pair (OpenExpEnv e1) (OpenExpEnv e2) = OpenExpEnv (smartPair e1 e2)
   var = OpenExpEnv . Var
   let_ lhs (OpenExpEnv e1) (OpenExpEnv e2) = OpenExpEnv (Let lhs e1 e2)
   fromPair (OpenExpEnv (Pair _ e1 e2)) = Just (OpenExpEnv e1, OpenExpEnv e2)
