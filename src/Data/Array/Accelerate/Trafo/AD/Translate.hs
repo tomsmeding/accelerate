@@ -98,7 +98,7 @@ translateExp expr = case expr of
     A.Cond c t e -> D.Cond (A.expType t) (translateExp c) (translateExp t) (translateExp e)
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
     A.Shape var -> D.Shape (Left var)
-    A.Index var e -> D.Index (Left var) (translateExp e)
+    A.Index var e -> D.Index (Left var) (Left (translateExp e))
     A.ShapeSize sht e -> D.ShapeSize sht (translateExp e)
     A.Undef ty -> D.Undef ty
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
@@ -116,7 +116,7 @@ translateExpInPVal pv expr = case expr of
     A.Cond c t e -> D.Cond (A.expType t) (translateExpInPVal pv c) (translateExpInPVal pv t) (translateExpInPVal pv e)
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExpInPVal pv e1) (translateExpInPVal pv e2)
     A.Shape var -> D.Shape (Left var)
-    A.Index var e -> D.Index (Left var) (translateExpInPVal pv e)
+    A.Index var e -> D.Index (Left var) (Left (translateExpInPVal pv e))
     A.ShapeSize sht e -> D.ShapeSize sht (translateExpInPVal pv e)
     A.Undef ty -> D.Undef ty
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
@@ -148,9 +148,10 @@ untranslateLHSboundExp toplhs topexpr topweak
         D.Pair _ e1 e2 -> A.Pair (go e1 w pv) (go e2 w pv)
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 w pv) (go e2 w pv) (go e3 w pv)
         D.Shape (Left avar) -> A.Shape avar
-        D.Shape (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label in array var position"
-        D.Index (Left avar) e -> A.Index avar (go e w pv)
-        D.Index (Right _) _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label in array var position"
+        D.Shape (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Shape) in array var position"
+        D.Index (Left avar) (Left e) -> A.Index avar (go e w pv)
+        D.Index (Right _) _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position"
+        D.Index _ (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label in Index index"
         D.ShapeSize sht e -> A.ShapeSize sht (go e w pv)
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
@@ -183,8 +184,9 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
         D.Shape (Left avar) -> A.Shape (fromJust (D.eCheckLocalP' matchArrayR avar arrpv))
         D.Shape (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
-        D.Index (Left avar) e -> A.Index (fromJust (D.eCheckLocalP' matchArrayR avar arrpv)) (go e pv)
+        D.Index (Left avar) (Left e) -> A.Index (fromJust (D.eCheckLocalP' matchArrayR avar arrpv)) (go e pv)
         D.Index (Right _) _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
+        D.Index _ (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label in Index index"
         D.ShapeSize sht e -> A.ShapeSize sht (go e pv)
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
