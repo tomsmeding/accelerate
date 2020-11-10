@@ -563,6 +563,12 @@ expHasIndex (Arg _ _) = False
 expHasIndex (Label _) = False
 
 
+mkNothing :: forall env aenv lab alab args tenv t. TypeR t -> OpenExp env aenv lab alab args tenv (A.PrimMaybe t)
+mkNothing ty
+  | [tag] <- [tag | ("Nothing", tag) <- A.tags @(Maybe t)] =
+      smartPair (Const scalarType tag) (smartPair Nil (untupleExps (fmapTupR Undef ty)))
+  | otherwise = error "Maybe does not have a Just constructor?"
+
 mkJust :: forall env aenv lab alab args tenv t. OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv (A.PrimMaybe t)
 mkJust ex
   | [tag] <- [tag | ("Just", tag) <- A.tags @(Maybe t)] =

@@ -1263,25 +1263,43 @@ indexingContributions templab idxInstMap =
               Permute backingType
                       (plusLam backingEltType)
                       (generateConstantArray backingType (Shape (Left backingPVar)))
-                      (case elhsCopy (shapeType shtype) of
-                        LetBoundExpE lhs vars ->
-                          Lam lhs $ Body $ mkJust $
-                            Get backingShapeT (TIRight TIHere) $
-                              instantiator $
-                                Get idxadjType (TIRight TIHere) $
-                                  Index (Left tempVar) (evars vars))
-                      (Map (ArrayR shtype backingEltType)
+                      (case elhsCopy (shapeType shtype) of  -- Lambda: map use-point index to backing index
+                        LetBoundExpE lhs vars
+                          | LetBoundExpE idxlhs idxvars <- elhsCopy backingShapeT ->
+                              Lam lhs $ Body $
+                                Let idxlhs
+                                    (Get backingShapeT (TIRight TIHere) $  -- Choose the index item from the (adj, idx) tuple
+                                      instantiator $
+                                        Get idxadjType (TIRight TIHere) $
+                                          Index (Left tempVar) (evars vars))
+                                    (condHeadIsNegative (evars idxvars)  -- if we know for sure the index is negative (i.e. Index wasn't executed in the primal), return Nothing
+                                        (mkNothing backingShapeT)
+                                        (mkJust (evars idxvars))))
+                      (Map (ArrayR shtype backingEltType)  -- Map: obtain the array of adjoints to be permuted
                            (ELPlain $
                               case elhsCopy idxadjType of
                                 LetBoundExpE lhs vars ->
                                   Lam (A.LeftHandSidePair (A.LeftHandSideWildcard argelttype) lhs) $ Body $
-                                    Get backingEltType (TILeft TIHere) $
+                                    Get backingEltType (TILeft TIHere) $  -- Choose the adjoint item from the (adj, idx) tuple
                                       instantiator (evars vars))
                            (Avar tempVar))
        | backingLab :=> IndexInstantiators insts <- DMap.toList idxInstMap
        , IndexInstantiator instantiator <- insts
        , let backingType@(ArrayR backingSht backingEltType) = labelType backingLab
              backingShapeT = shapeType backingSht]
+  where
+    -- If there is a head and it's negative, produce @e1@, otherwise @e2@.
+    condHeadIsNegative :: OpenExp env aenv lab alab args tenv t
+                       -> OpenExp env aenv lab alab args tenv a
+                       -> OpenExp env aenv lab alab args tenv a
+                       -> OpenExp env aenv lab alab args tenv a
+    condHeadIsNegative subject e1 e2 = case etypeOf subject of
+        TupRpair _ ty@(TupRsingle (SingleScalarType sty)) ->
+          Cond (etypeOf e1)
+               (PrimApp (TupRsingle scalarType) (A.PrimLt sty)
+                        (smartPair (Get ty (TIRight TIHere) subject) (zeroForType ty)))
+               e1 e2
+        _ -> e2  -- if there is no head, then it certainly isn't negative
 
 arrayPlus :: OpenAcc aenv lab alab args (Array sh t)
           -> OpenAcc aenv lab alab args (Array sh t)
