@@ -2,24 +2,32 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeOperators #-}
 module TestSuite (main) where
 
 import Control.Monad (when)
 import qualified Data.List as List
+import qualified Data.List.NonEmpty as NonEmpty
+import Data.List.NonEmpty (NonEmpty(..))
 import Data.String (fromString)
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import Hedgehog.Gen (sized)
 import qualified Hedgehog.Range as Range
-import System.Exit (exitSuccess, exitFailure)
+import Hedgehog.Internal.Property (unPropertyName)
+import System.Environment (getArgs, lookupEnv)
+import System.Exit (exitSuccess, exitFailure, die)
 
 import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Interpreter as I
 
 import qualified ADHelp
 
+
+-- Auxiliary functions and types
+-- -----------------------------
 
 data ShapeType sh where
   SZ :: ShapeType A.Z
@@ -82,6 +90,12 @@ compareAD' gen func = withShrinks 10 $ property $ do
   when False $ classify (fromString "totalSize > 5") (ADHelp.fdTotalSize arrs > 5)
   compareAD func arrs
 
+compareADE :: Gen (A.Vector Float) -> (A.Exp Float -> A.Exp Float) -> Property
+compareADE gen f = compareAD' gen $ \a -> A.sum (A.map f a)
+
+
+-- Array tests
+-- -----------
 
 prop_map :: Property
 prop_map = compareAD' sized_vec $ \a -> A.sum (A.map (*3) a)
@@ -130,6 +144,7 @@ prop_replicate_4 = compareAD' (Gen.small sized_vec) $ \a ->
     . A.replicate (A.I2 (A.constant A.All) (2 :: A.Exp Int))
     $ a
 
+-- TODO: unit tests for the other combinators!
 -- prop_reshape :: Property
 -- prop_reshape = compareAD' sized_vec
 
@@ -139,8 +154,33 @@ prop_acond_1 = compareAD' sized_vec $ \a ->
       A.T2 a1 _ = A.acond (A.the (A.sum a) A.> 0) (A.T2 a b) (A.T2 b a)
   in A.sum (A.map (\x -> x * A.toFloating (A.indexHead (A.shape a1))) b)
 
-compareADE :: Gen (A.Vector Float) -> (A.Exp Float -> A.Exp Float) -> Property
-compareADE gen f = compareAD' gen $ \a -> A.sum (A.map f a)
+prop_aindex_generate_1 :: Property
+prop_aindex_generate_1 = compareAD' sized_vec $ \a ->
+  let A.I1 n = A.shape a
+  in A.sum (A.generate (A.I1 (n `div` 2))
+                       (\(A.I1 i) -> a A.! A.I1 (2 * i)))
+
+prop_aindex_generate_2 :: Property
+prop_aindex_generate_2 = compareAD' sized_vec $ \a ->
+  let A.I1 n = A.shape a
+  in A.sum (A.generate (A.I1 (2 * n))
+                       (\(A.I1 i) -> a A.! A.I1 (i `div` 2) + a A.! A.I1 (min (i `mod` 2) (n - 1))))
+
+prop_aindex_generate_3 :: Property
+prop_aindex_generate_3 = compareAD' sized_vec $ \a ->
+  let A.I1 n = A.shape a
+  in A.sum (A.generate (A.I1 (2 * n))
+                       (\(A.I1 i) -> A.cond (i A.< 5) (a A.! A.I1 (i `div` 2)) 42))
+
+prop_aindex_generate_4 :: Property
+prop_aindex_generate_4 = compareAD' sized_vec $ \a ->
+  let A.I1 n = A.shape a
+  in A.sum (A.generate (A.I1 (2 * n))
+                       (\(A.I1 i) -> A.cond (i A.< n) (a A.! A.I1 i) (a A.! A.I1 (i - n))))
+
+
+-- Expression tests
+-- ----------------
 
 prop_cond_1 :: Property
 prop_cond_1 = compareADE sized_vec $ \x ->
@@ -157,8 +197,58 @@ prop_cond_2 = compareADE sized_vec $ \x ->
   in y * y
 
 
+-- Main and driver
+-- ---------------
+
+splitOn :: Eq a => a -> [a] -> NonEmpty [a]
+splitOn _ [] = [] :| []
+splitOn c (x:xs) =
+  let r :| rs = splitOn c xs
+  in if x == c then [] :| (r : rs) else (x:r) :| rs
+
+data Pattern = Pattern String [String]
+
+parsePattern :: String -> Pattern
+parsePattern s =
+  let p :| ps = splitOn '*' s
+  in Pattern p ps
+
+match :: Pattern -> PropertyName -> Bool
+match (Pattern prefix segments) prop =
+    let (pre, post) = splitAt (length prefix) (unPropertyName prop)
+    in if pre == prefix then go segments post else False
+  where
+    go :: [String] -> String -> Bool
+    go [] [] = True
+    go [] _ = False
+    go (seg:segs) s' =
+        any (\tl -> let (pre, post) = splitAt (length seg) tl
+                    in pre == seg && go segs post)
+            (List.tails s')
+
 {-# NOINLINE main #-}
 main :: IO ()
 main = do
-  result <- checkParallel $$(discover)
+  let Group gname props = $$(discover)
+
+  -- Command-line arguments have precedence, but if none given an environment variable is checked.
+  args <- getArgs >>= \case
+    ["-h"] -> die "When given no parameters, runs full test suite. With parameters, or alternatively the ACCELERATE_AD_TEST_PROPS environment variable (in which patterns are separated with ','), only matching properties will be run. Patterns support * wildcards."
+
+    [] -> lookupEnv "ACCELERATE_AD_TEST_PROPS" >>= \case
+            Just s -> return (NonEmpty.toList (splitOn ',' s))
+            Nothing -> return []
+
+    l -> return l
+
+  props' <- case args of
+    [] -> return props
+
+    testnames ->
+      let pats = map parsePattern (testnames ++ map ("prop_" ++) testnames)
+      in case List.filter (\(prop, _) -> any (`match` prop) pats) props of
+           [] -> die "No matching properties found"
+           props' -> return props'
+
+  result <- checkParallel (Group gname props')
   if result then exitSuccess else exitFailure
