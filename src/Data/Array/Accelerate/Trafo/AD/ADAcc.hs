@@ -379,8 +379,8 @@ explode' labelenv = \case
     lpushLHS_Get :: A.ALeftHandSide t aenv aenv' -> TupR (ADLabelNS Int) t -> LabVal NodeLabel ArrayR Int aenv -> Acc lab Int args t -> (LabVal NodeLabel ArrayR Int aenv', DMap (ADLabelN Int) (Acc lab Int args))
     lpushLHS_Get lhs labs labelenv' rhs = case (lhs, labs) of
         (A.LeftHandSidePair lhs1 lhs2, TupRpair labs1 labs2) ->
-            let (labelenv1, mp1) = lpushLHS_Get lhs1 labs1 labelenv' (smartFst rhs)
-                (labelenv2, mp2) = lpushLHS_Get lhs2 labs2 labelenv1 (smartSnd rhs)
+            let (labelenv1, mp1) = lpushLHS_Get lhs1 labs1 labelenv' (smartFstA rhs)
+                (labelenv2, mp2) = lpushLHS_Get lhs2 labs2 labelenv1 (smartSndA rhs)
             in (labelenv2, DMap.unionWithKey (error "lpushLHS_Get: Overlapping id's") mp1 mp2)
         (A.LeftHandSideSingle _, TupRsingle lab) -> (LPush labelenv' lab, DMap.singleton (tupleLabel lab) rhs)
         (A.LeftHandSideWildcard _, _) -> (labelenv', mempty)
@@ -869,8 +869,8 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                               -- let sc = init (scanl f x0 a)
                               -- in zipWith (*) (zipWith D₂f sc a)
                               --                (tail (scanr (*) 1 (zipWith D₁f sc a)))
-                              let d1f = Lam lambdalhs' (Body (Get (etypeOf lambdabody) (TILeft TIHere) dualbody))
-                                  d2f = Lam lambdalhs' (Body (Get (etypeOf lambdabody) (TIRight TIHere) dualbody))
+                              let d1f = Lam lambdalhs' (Body (smartFst dualbody))
+                                  d2f = Lam lambdalhs' (Body (smartSnd dualbody))
                                   weaken1 = A.weakenSucc' A.weakenId
                                   argvar' = weaken weaken1 argvar
                                   (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
@@ -923,8 +923,8 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                               -- let sc = init (scanl1 f a)
                               -- in zipWith (*) ([1] ++ zipWith D₂f sc (tail l))
                               --                (scanr (*) 1 (zipWith D₁f sc (tail l)))
-                              let d1f = Lam lambdalhs' (Body (Get (etypeOf lambdabody) (TILeft TIHere) dualbody))
-                                  d2f = Lam lambdalhs' (Body (Get (etypeOf lambdabody) (TIRight TIHere) dualbody))
+                              let d1f = Lam lambdalhs' (Body (smartFst dualbody))
+                                  d2f = Lam lambdalhs' (Body (smartSnd dualbody))
                                   weaken1 = A.weakenSucc' A.weakenId
                                   argvar' = weaken weaken1 argvar
                                   (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
@@ -950,7 +950,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
       Generate restype@(ArrayR shtype _) _ (ELSplit (SplitLambdaAD _ lambdaDual lambdaLabs lambdaTmpType idxadjType idxInstMap) lambdaTmpLab) -> do
           let lambdaLabs' = lookupLambdaLabs bindmap lambdaLabs
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
-              -- The argument type of the lambda is the shape type the output array.
+              -- The argument type of the lambda is the shape type of the output array.
               pairArrType = ArrayR shtype (TupRpair (shapeType shtype) idxadjType)
           templab <- genSingleId pairArrType
           let contribmap' = updateContribmap lbl
@@ -1268,9 +1268,9 @@ indexingContributions templab idxInstMap =
                           | LetBoundExpE idxlhs idxvars <- elhsCopy backingShapeT ->
                               Lam lhs $ Body $
                                 Let idxlhs
-                                    (Get backingShapeT (TIRight TIHere) $  -- Choose the index item from the (adj, idx) tuple
+                                    (smartSnd $  -- Choose the index item from the (adj, idx) tuple
                                       instantiator $
-                                        Get idxadjType (TIRight TIHere) $
+                                        smartSnd $
                                           Index (Left tempVar) (evars vars))
                                     (condHeadIsNegative (evars idxvars)  -- if we know for sure the index is negative (i.e. Index wasn't executed in the primal), return Nothing
                                         (mkNothing backingShapeT)
@@ -1280,7 +1280,7 @@ indexingContributions templab idxInstMap =
                               case elhsCopy idxadjType of
                                 LetBoundExpE lhs vars ->
                                   Lam (A.LeftHandSidePair (A.LeftHandSideWildcard argelttype) lhs) $ Body $
-                                    Get backingEltType (TILeft TIHere) $  -- Choose the adjoint item from the (adj, idx) tuple
+                                    smartFst $  -- Choose the adjoint item from the (adj, idx) tuple
                                       instantiator (evars vars))
                            (Avar tempVar))
        | backingLab :=> IndexInstantiators insts <- DMap.toList idxInstMap
@@ -1297,7 +1297,7 @@ indexingContributions templab idxInstMap =
         TupRpair _ ty@(TupRsingle (SingleScalarType sty)) ->
           Cond (etypeOf e1)
                (PrimApp (TupRsingle scalarType) (A.PrimLt sty)
-                        (smartPair (Get ty (TIRight TIHere) subject) (zeroForType ty)))
+                        (smartPair (smartSnd subject) (zeroForType ty)))
                e1 e2
         _ -> e2  -- if there is no head, then it certainly isn't negative
 
@@ -1498,30 +1498,30 @@ dmapFind mp elt = case DMap.lookup elt mp of
                     Just res -> res
                     Nothing -> error "dmapFind: not found"
 
--- TODO: make smartFst and smartSnd non-quadratic (should be easy)
-smartFst :: OpenAcc aenv lab alab args (t1, t2) -> OpenAcc aenv lab alab args t1
-smartFst (Apair _ ex _) = ex
-smartFst (Aget (TupRpair t1 _) tidx ex) = Aget t1 (insertFst tidx) ex
+-- TODO: make smartFstA and smartSndA non-quadratic (should be easy)
+smartFstA :: OpenAcc aenv lab alab args (t1, t2) -> OpenAcc aenv lab alab args t1
+smartFstA (Apair _ ex _) = ex
+smartFstA (Aget (TupRpair t1 _) tidx ex) = Aget t1 (insertFst tidx) ex
   where insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
         insertFst TIHere = TILeft TIHere
         insertFst (TILeft ti) = TILeft (insertFst ti)
         insertFst (TIRight ti) = TIRight (insertFst ti)
-smartFst ex
+smartFstA ex
   | TupRpair t1 _ <- atypeOf ex
   = Aget t1 (TILeft TIHere) ex
-smartFst _ = error "smartFst: impossible GADTs"
+smartFstA _ = error "smartFstA: impossible GADTs"
 
-smartSnd :: OpenAcc aenv lab alab args (t1, t2) -> OpenAcc aenv lab alab args t2
-smartSnd (Apair _ _ ex) = ex
-smartSnd (Aget (TupRpair _ t2) tidx ex) = Aget t2 (insertSnd tidx) ex
+smartSndA :: OpenAcc aenv lab alab args (t1, t2) -> OpenAcc aenv lab alab args t2
+smartSndA (Apair _ _ ex) = ex
+smartSndA (Aget (TupRpair _ t2) tidx ex) = Aget t2 (insertSnd tidx) ex
   where insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
         insertSnd TIHere = TIRight TIHere
         insertSnd (TILeft ti) = TILeft (insertSnd ti)
         insertSnd (TIRight ti) = TIRight (insertSnd ti)
-smartSnd ex
+smartSndA ex
   | TupRpair _ t2 <- atypeOf ex
   = Aget t2 (TIRight TIHere) ex
-smartSnd _ = error "smartSnd: impossible GADTs"
+smartSndA _ = error "smartSndA: impossible GADTs"
 
 smartPairA :: OpenAcc aenv lab alab args a -> OpenAcc aenv lab alab args b -> OpenAcc aenv lab alab args (a, b)
 smartPairA a b = Apair (TupRpair (atypeOf a) (atypeOf b)) a b
