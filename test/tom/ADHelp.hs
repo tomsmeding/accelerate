@@ -6,6 +6,7 @@
 {-# LANGUAGE ViewPatterns #-}
 module ADHelp where
 
+import Data.Functor.Identity
 import Data.List (intercalate)
 import qualified Data.List as List
 
@@ -53,6 +54,10 @@ class (A.Arrays a, Show a) => AFinDiff a where
   -- | All arrays must have the same shape. Summarises many arrays in a single
   -- array elementwise.
   fdfmap :: ([Float] -> Float) -> [a] -> a
+  fdfmap f l = runIdentity (fdfmap' (Identity . f) l)
+
+  -- | Same as fdfmap, except the function may be effectful.
+  fdfmap' :: Applicative f => ([Float] -> f Float) -> [a] -> f a
 
   -- | List of all values in all arrays in the tuple.
   fdtoList :: a -> [Float]
@@ -72,11 +77,10 @@ instance A.Shape sh => AFinDiff (A.Array sh Float) where
               subs' = A.use (A.fromList (A.arrayShape x) subs)
               the' = (`A.indexArray` Z)]
 
-  fdfmap f xs@(x0:_) =
-    A.fromList (A.arrayShape x0)
-        [f (map (`A.linearIndexArray` i) xs)
-        | i <- [0 .. A.arraySize x0 - 1]]
-  fdfmap _ _ = error "fdfmap: Cannot extract shape from empty list of arrays"
+  fdfmap' f xs@(x0:_) =
+    A.fromList (A.arrayShape x0) <$>
+        traverse f [map (`A.linearIndexArray` i) xs | i <- [0 .. A.arraySize x0 - 1]]
+  fdfmap' _ _ = error "fdfmap: Cannot extract shape from empty list of arrays"
 
   fdtoList = A.toList
   fdTotalSize = A.arraySize
@@ -85,7 +89,7 @@ instance (AFinDiff a, AFinDiff b) => AFinDiff (a, b) where
   ahfindiff h f (x, y) =
     (ahfindiff h (\x' -> f (A.T2 x' (A.use y))) x, ahfindiff h (\y' -> f (A.T2 (A.use x) y')) y)
 
-  fdfmap f xs = (fdfmap f (map fst xs), fdfmap f (map snd xs))
+  fdfmap' f xs = (,) <$> fdfmap' f (map fst xs) <*> fdfmap' f (map snd xs)
 
   fdtoList (x, y) = fdtoList x ++ fdtoList y
   fdTotalSize (x, y) = fdTotalSize x + fdTotalSize y
@@ -94,7 +98,7 @@ data AFinDiffRes a = AFinDiffRes [Float] [a]
 
 afindiffPerform :: AFinDiff a => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> AFinDiffRes a
 afindiffPerform facc x =
-  let pollxs = [2.0 ** (-ex) | ex <- [2..7]]
+  let pollxs = [2.0 ** (-ex) | ex <- [4..7]]
       result = [ahfindiff pollx facc x | pollx <- pollxs]
   in length (show result) `seq` AFinDiffRes pollxs result
 
@@ -104,12 +108,22 @@ afdrSamples (AFinDiffRes pollxs samples) = zip pollxs samples
 afdrRichardson :: AFinDiff a => AFinDiffRes a -> a
 afdrRichardson (AFinDiffRes pollxs samples) = fdfmap (\ys -> lagrangeInterp (zip pollxs ys) 0) samples
 
-afdrOLS :: AFinDiff a => AFinDiffRes a -> a
-afdrOLS (AFinDiffRes pollxs samples) =
+afdrOLS' :: AFinDiff a => AFinDiffRes a -> ((String, Float), a)
+afdrOLS' (AFinDiffRes pollxs samples) =
   let zipList = zipWith (\a b -> [a, b])
-  in fdfmap (\ys -> let [_, b] = olsRegression (zipList pollxs (repeat 1)) ys
-                    in b)
-            samples
+      (errors, res) =
+          fdfmap' (\ys -> let xmat = zipList pollxs (repeat 1)
+                              params@[_, b] = olsRegression xmat ys
+                              errs = olsErrors params xmat ys
+                          in ([errs], b))
+                  samples
+  in ((unlines ["ols errors: " ++ show errors
+               ,"poll xs: " ++ show pollxs
+               ,"samples: " ++ show samples], if null errors then 0 else maximum errors)
+     ,res)
+
+afdrOLS :: AFinDiff a => AFinDiffRes a -> a
+afdrOLS = snd . afdrOLS'
 
 -- f applied at pointwise mutations, g at all other entries
 mutations :: (a -> b) -> (a -> b) -> [a] -> [[b]]
@@ -143,16 +157,27 @@ lagrangeInterp points evalx =
                     , j /= i]
       | (i, (xi, yi)) <- zip [0::Int ..] points]
 
--- Ordinary least squares regression
+-- Ordinary least squares regression; computes β such that Xβ ~= Y
 olsRegression :: Fractional a => [[a]] -> [a] -> [a]
 olsRegression xmat yvec =
   let xmat' = List.transpose xmat
-      matmul x y = [[sum (zipWith (*) xrow ycol) | ycol <- List.transpose y] | xrow <- x]
-      matvec x y = [sum (zipWith (*) xrow y) | xrow <- x]
-      matinv [[a,b],[c,d]] = let discr = a * d - b * c
-                             in [[d/discr, -b/discr], [-c/discr, a/discr]]
-      matinv _ = error "olsRegression not implemented for more than 2 parameters"
   in matinv (xmat' `matmul` xmat) `matvec` (xmat' `matvec` yvec)
+
+-- Given (β, X, Y), returns the sum-of-squares error between Xβ and Y.
+olsErrors :: Fractional a => [a] -> [[a]] -> [a] -> a
+olsErrors params xmat yvec =
+  sum (zipWith (\x y -> (x - y) * (x - y)) (xmat `matvec` params) yvec)
+
+matmul :: Num a => [[a]] -> [[a]] -> [[a]]
+matmul x y = [[sum (zipWith (*) xrow ycol) | ycol <- List.transpose y] | xrow <- x]
+
+matvec :: Num a => [[a]] -> [a] -> [a]
+matvec x y = [sum (zipWith (*) xrow y) | xrow <- x]
+
+matinv :: Fractional a => [[a]] -> [[a]]
+matinv [[a,b],[c,d]] = let discr = a * d - b * c
+                       in [[d/discr, -b/discr], [-c/discr, a/discr]]
+matinv _ = error "olsRegression not implemented for more than 2 parameters"
 
 
 class A.Shape sh => InnerDim sh where
