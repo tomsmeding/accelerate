@@ -21,6 +21,7 @@ import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitSuccess, exitFailure, die)
 
 import qualified Data.Array.Accelerate as A
+import qualified Data.Array.Accelerate.Data.Bits as A
 import qualified Data.Array.Accelerate.Interpreter as I
 
 import qualified ADHelp
@@ -55,7 +56,7 @@ genFloat :: Gen Float
 genFloat = Gen.float (Range.linearFrac (-10) 10)
 
 vec :: Size -> Gen (A.Vector Float)
-vec (Size n) = genArray (Gen.float (Range.linearFrac (-10) 10)) (A.Z A.:. n)
+vec (Size n) = genArray (Gen.float (Range.linearFracFrom 0 (-10) 10)) (A.Z A.:. n)
 
 sized_vec :: Gen (A.Vector Float)
 sized_vec = Gen.scale (min 20) (sized vec)
@@ -67,9 +68,14 @@ uniqueMax :: (A.Elt a, Ord a, Fractional a) => A.Vector a -> Bool
 uniqueMax v = let m = maximum (A.toList v)
               in sum (map (fromEnum . (>= m - 0.5)) (A.toList v)) <= 1
 
+allNiceRound :: (A.Elt a, RealFrac a) => A.Vector a -> Bool
+allNiceRound =
+  all (\x -> let x' = x - fromIntegral (round x :: Int) in -0.4 < x' && x' < 0.4)
+    . A.toList
 
-findiff :: ADHelp.AFinDiff a => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> a
-findiff func = ADHelp.afdrOLS . ADHelp.afindiffPerform func
+
+findiff :: ADHelp.AFinDiff a => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> ((String, Float), a)
+findiff func = ADHelp.afdrOLS' . ADHelp.afindiffPerform func
 
 -- Relative difference (abs (x - y) / max (abs x) (abs y)) is allowed to be at
 -- most 0.1; except if x and y are both small, then the absolute difference is
@@ -78,17 +84,27 @@ checkApproxEqual :: (MonadTest m, ADHelp.AFinDiff a) => a -> a -> m ()
 checkApproxEqual aGrad aFD =
   let diffs = ADHelp.fdfmap (\[x,y] -> abs (x - y) / max 1 (max (abs x) (abs y))) [aGrad, aFD]
       correct = List.foldl' max 0 (ADHelp.fdtoList diffs) < 0.1
-  in when (not correct) $ diff aGrad (\_ _ -> False) aFD >> failure
+  in do footnote ("approx-equality diffs: " ++ show diffs)
+        when (not correct) $ diff aGrad (\_ _ -> False) aFD >> failure
 
-compareAD :: (MonadTest m, ADHelp.AFinDiff a) => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> m ()
-compareAD func arg = checkApproxEqual (I.run1 (A.gradientA func) arg) (findiff func arg)
+compareAD :: (Monad m, ADHelp.AFinDiff a) => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> PropertyT m ()
+compareAD func arg =
+  let ((errmsg, maxerr), findiffResult) = findiff func arg
+  in do when (maxerr >= 1.0) discard
+        footnote errmsg
+        checkApproxEqual (I.run1 (A.gradientA func) arg) findiffResult
 
 compareAD' :: (Show a, ADHelp.AFinDiff a, A.Arrays a)
            => Gen a -> (A.Acc a -> A.Acc (A.Scalar Float)) -> Property
-compareAD' gen func = withShrinks 10 $ property $ do
+compareAD' gen func = compareAD'' (return ()) gen (const func)
+
+compareAD'' :: (Show a, ADHelp.AFinDiff a, A.Arrays a, Show e)
+            => Gen e -> Gen a -> (e -> A.Acc a -> A.Acc (A.Scalar Float)) -> Property
+compareAD'' egen gen func = withTests 30 $ withShrinks 10 $ property $ do
   arrs <- forAll gen
+  expval <- forAll egen
   when False $ classify (fromString "totalSize > 5") (ADHelp.fdTotalSize arrs > 5)
-  compareAD func arrs
+  compareAD (func expval) arrs
 
 compareADE :: Gen (A.Vector Float) -> (A.Exp Float -> A.Exp Float) -> Property
 compareADE gen f = compareAD' gen $ \a -> A.sum (A.map f a)
@@ -96,6 +112,12 @@ compareADE gen f = compareAD' gen $ \a -> A.sum (A.map f a)
 
 -- Array tests
 -- -----------
+
+prop_acond_1 :: Property
+prop_acond_1 = compareAD' sized_vec $ \a ->
+  let b = A.map (*2) a
+      A.T2 a1 _ = A.acond (A.the (A.sum a) A.> 0) (A.T2 a b) (A.T2 b a)
+  in A.sum (A.map (\x -> x * A.toFloating (A.indexHead (A.shape a1))) b)
 
 prop_map :: Property
 prop_map = compareAD' sized_vec $ \a -> A.sum (A.map (*3) a)
@@ -144,15 +166,64 @@ prop_replicate_4 = compareAD' (Gen.small sized_vec) $ \a ->
     . A.replicate (A.I2 (A.constant A.All) (2 :: A.Exp Int))
     $ a
 
--- TODO: unit tests for the other combinators!
--- prop_reshape :: Property
--- prop_reshape = compareAD' sized_vec
+prop_slice_1 :: Property
+prop_slice_1 = compareAD' sized_vec $ \a ->
+  let A.I1 n = A.shape a
+      m = n `div` 4 + 3
+      a1 = A.replicate (A.I3 m m cAll) a
+  in A.sum (A.slice a1 (A.I3 (2 :: A.Exp Int) (1 :: A.Exp Int) cAll))
+  where cAll = A.constant A.All
 
-prop_acond_1 :: Property
-prop_acond_1 = compareAD' sized_vec $ \a ->
-  let b = A.map (*2) a
-      A.T2 a1 _ = A.acond (A.the (A.sum a) A.> 0) (A.T2 a b) (A.T2 b a)
-  in A.sum (A.map (\x -> x * A.toFloating (A.indexHead (A.shape a1))) b)
+prop_slice_2 :: Property
+prop_slice_2 = compareAD'' (t2_ intgen intgen) (Gen.small sized_vec) $ \(p1, p2) a ->
+  let A.I1 n = A.shape a
+      a1 = A.backpermute (A.I3 n n (n+1))
+                         (\(A.I3 i j k) -> A.I1 ((i + j + k) `mod` n))
+                         a
+  in A.sum (A.slice a1 (A.I3 (A.constant p1 `mod` n) (A.constant p2 `mod` n) cAll))
+  where cAll = A.constant A.All
+        intgen = Gen.int (Range.linear 0 100)
+
+prop_reshape_1 :: Property
+prop_reshape_1 = compareAD' (Gen.filter (even . A.arraySize) sized_vec) $ \a ->
+  let A.I1 n = A.shape a
+      b = A.reshape (A.I2 2 (n `div` 2)) a
+  in A.product (A.sum b)
+
+prop_reshape_2 :: Property
+prop_reshape_2 = compareAD' (Gen.filter (even . A.arraySize) sized_vec) $ \a ->
+  let A.I1 n = A.shape a
+      b = A.reshape (A.I2 (2 :: A.Exp Int) (n `div` 2)) a
+      c = A.reshape (A.I2 n 1) b
+  in A.sum (A.product c)
+
+prop_backpermute_1 :: Property
+prop_backpermute_1 =
+  compareAD'' (Gen.int (Range.linear 5 15))
+              (Gen.filter ((> 0) . A.arraySize) sized_vec)
+  $ \m a ->
+    let A.I1 n = A.shape a
+        b = A.backpermute (A.I2 (A.constant m) (2 * A.constant m))
+                          (\(A.I2 i j) -> A.I1 ((i + j) `mod` n))
+                          a
+    in A.fold1All (+) b
+
+prop_backpermute_2 :: Property
+prop_backpermute_2 =
+  compareAD'' (Gen.int (Range.linear 5 15))
+              (Gen.filter ((> 0) . A.arraySize) sized_vec)
+  $ \m a ->
+    let A.I1 n = A.shape a
+        b = A.backpermute (A.I2 (A.constant m) (2 * A.constant m))
+                          (\(A.I2 i j) -> A.I1 ((i + j) `mod` n))
+                          a
+        c = A.sum b
+        d = A.backpermute (A.I3 (2 :: A.Exp Int) (3 :: A.Exp Int) (A.constant m))
+                          (\(A.I3 _ i j) -> A.I1 (min (A.constant m - 1) (i * j)))
+                          c
+        e = A.map (/2) d
+        f = A.slice e (A.I3 (A.constant A.All) (A.constant A.All) (2 :: A.Exp Int))
+    in A.fold1All (+) f
 
 prop_aindex_generate_1 :: Property
 prop_aindex_generate_1 = compareAD' sized_vec $ \a ->
@@ -177,6 +248,30 @@ prop_aindex_generate_4 = compareAD' sized_vec $ \a ->
   let A.I1 n = A.shape a
   in A.sum (A.generate (A.I1 (2 * n))
                        (\(A.I1 i) -> A.cond (i A.< n) (a A.! A.I1 i) (a A.! A.I1 (i - n))))
+
+prop_aindex_map_1 :: Property
+prop_aindex_map_1 = compareAD' (Gen.filter ((>= 3) . A.arraySize) sized_vec) $ \a ->
+  A.sum (A.map (\x -> x + a A.! A.I1 2) a)
+
+prop_aindex_map_2 :: Property
+prop_aindex_map_2 = compareAD' (Gen.filter allNiceRound sized_vec) $ \a ->
+  let A.I1 n = A.shape a
+  in A.sum (A.map (\x -> x + a A.! A.I1 (A.abs (A.round x) `mod` n)) a)
+
+prop_aindex_map_3 :: Property
+prop_aindex_map_3 = compareAD' (Gen.filter (\v -> allNiceRound v && uniqueMax v) sized_vec) $ \a ->
+  let A.I1 n = A.shape a
+      b = A.fold max (-20)
+                 (A.backpermute (A.I2 n n) (\(A.I2 i j) -> A.I1 (i A..&. j)) a)
+  in A.sum (A.map (\x -> x * b A.! A.I1 (A.abs (A.round x) `mod` n)) a)
+
+prop_aindex_map_4 :: Property
+prop_aindex_map_4 = compareAD' (Gen.filter allNiceRound sized_vec) $ \a ->
+  let A.I1 n = A.shape a
+      b = A.sum (A.backpermute (A.I2 n n)
+                               (\(A.I2 i j) -> A.I1 (min (i `A.xor` j) (n-1)))
+                               a)
+  in A.sum (A.map (\x -> x * a A.! A.I1 (A.abs (A.round x) `mod` n)) b)
 
 
 -- Expression tests
