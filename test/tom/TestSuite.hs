@@ -328,9 +328,9 @@ main = do
 
   -- Command-line arguments have precedence, but if none given an environment variable is checked.
   args <- getArgs >>= \case
-    ["-h"] -> die "When given no parameters, runs full test suite. With parameters, or alternatively the ACCELERATE_AD_TEST_PROPS environment variable (in which patterns are separated with ','), only matching properties will be run. Patterns support * wildcards."
+    ["-h"] -> die "When given no parameters, runs full test suite. With parameters, or alternatively the ACCELERATE_ADTEST_PROPS environment variable (in which patterns are separated with ','), only matching properties will be run. Patterns support * wildcards."
 
-    [] -> lookupEnv "ACCELERATE_AD_TEST_PROPS" >>= \case
+    [] -> lookupEnv "ACCELERATE_ADTEST_PROPS" >>= \case
             Just s -> return (NonEmpty.toList (splitOn ',' s))
             Nothing -> return []
 
