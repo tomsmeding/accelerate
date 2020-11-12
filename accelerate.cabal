@@ -324,6 +324,9 @@ library
         Data.Array.Accelerate.Data.Ratio
         Data.Array.Accelerate.Unsafe
 
+        -- Forward automatic differentiation
+        Data.Array.Accelerate.ForwardAD
+
         -- For backend development (hidden)
         Data.Array.Accelerate.AST
         Data.Array.Accelerate.AST.Environment
