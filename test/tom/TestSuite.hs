@@ -13,6 +13,7 @@ import Control.Monad (when)
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.List.NonEmpty (NonEmpty(..))
+import Data.String (fromString)
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
 import Hedgehog.Gen (sized)
@@ -130,12 +131,16 @@ findiff func = ADHelp.afdrOLS' . ADHelp.afindiffPerform func
 -- Relative difference (abs (x - y) / max (abs x) (abs y)) is allowed to be at
 -- most 0.1; except if x and y are both small, then the absolute difference is
 -- allowed to be at most 0.1.
+isApproxEqual :: ADHelp.AFinDiff a => a -> a -> (a, Bool)
+isApproxEqual a1 a2 =
+  let diffs = ADHelp.fdfmap (\[x,y] -> abs (x - y) / max 1 (max (abs x) (abs y))) [a1, a2]
+  in (diffs, List.foldl' max 0 (ADHelp.fdtoList diffs) < 0.1)
+
 checkApproxEqual :: (MonadTest m, ADHelp.AFinDiff a) => a -> a -> m ()
-checkApproxEqual aGrad aFD =
-  let diffs = ADHelp.fdfmap (\[x,y] -> abs (x - y) / max 1 (max (abs x) (abs y))) [aGrad, aFD]
-      correct = List.foldl' max 0 (ADHelp.fdtoList diffs) < 0.1
+checkApproxEqual aGrad aControl =
+  let (diffs, correct) = isApproxEqual aControl aGrad
   in do footnote ("approx-equality diffs: " ++ show diffs)
-        when (not correct) $ diff aGrad (\_ _ -> False) aFD >> failure
+        when (not correct) $ diff aControl (\_ _ -> False) aGrad >> failure
 
 compareADE :: Gen (A.Vector Float) -> (forall a. ADF.ADFClasses a => A.Exp a -> A.Exp a) -> Property
 compareADE gen f = compareAD' nil gen $ \() a -> A.sum (A.map f a)
@@ -146,21 +151,29 @@ compareAD' egen gen func = withShrinks 10 $ property $ do
   arr <- forAll gen
   let revadResult = I.run1 (A.gradientA (func expval)) arr
       fwdadResult = gradientFwdAD arr (func expval)
+      (_, fdResult) = findiff (func expval) arr
   checkApproxEqual revadResult fwdadResult
+  if snd (isApproxEqual fdResult fwdadResult)
+      then checkApproxEqual revadResult fdResult
+      else label (fromString "Warning: FD and forward AD do not agree")
 
 compareAD'2 :: (Show e, Shape sh1, Shape sh2)
-             => Gen e
-             -> Gen (A.Array sh1 Float)
-             -> Gen (A.Array sh2 Float)
-             -> (forall a. ADF.ADFClasses a => e -> A.Acc (A.Array sh1 a) -> A.Acc (A.Array sh2 a) -> A.Acc (A.Scalar a))
-             -> Property
+            => Gen e
+            -> Gen (A.Array sh1 Float)
+            -> Gen (A.Array sh2 Float)
+            -> (forall a. ADF.ADFClasses a => e -> A.Acc (A.Array sh1 a) -> A.Acc (A.Array sh2 a) -> A.Acc (A.Scalar a))
+            -> Property
 compareAD'2 egen gen1 gen2 func = withShrinks 10 $ property $ do
   expval <- forAll egen
   arr1 <- forAll gen1
   arr2 <- forAll gen2
   let revadResult = I.runN (A.gradientA (\(A.T2 a1 a2) -> func expval a1 a2)) (arr1, arr2)
       fwdadResult = gradientFwdAD2 (arr1, arr2) (func expval)
+      (_, fdResult) = findiff (\(A.T2 a1 a2) -> func expval a1 a2) (arr1, arr2)
   checkApproxEqual revadResult fwdadResult
+  if snd (isApproxEqual fdResult fwdadResult)
+      then checkApproxEqual revadResult fdResult
+      else label (fromString "Warning: FD and forward AD do not agree")
 
 
 -- Array tests
