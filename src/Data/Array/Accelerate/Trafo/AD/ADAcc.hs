@@ -20,6 +20,7 @@ import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import Data.Maybe
 import qualified Data.Set as Set
+import Data.Set (Set)
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
@@ -387,16 +388,23 @@ explode' labelenv = \case
         _ -> error "lpushLHS_Get: impossible GADTs"
 
 computeLabelorder :: Exploded (PDExp Int) Int args t -> [AAnyLabelN Int]
-computeLabelorder (endlab, nodemap, _) =
+computeLabelorder (endlab, nodemap, argmap) =
     topsort' (\(AnyLabel l) -> labelLabel l)
              alllabels
              (\(AnyLabel l) -> parentmap Map.! labelLabel l)
   where
+    argLabels :: Set (AAnyLabelN Int)
+    argLabels = Set.fromList [AnyLabel lab | _ :=> lab <- DMap.toList argmap]
+
     parentsOf :: AAnyLabelN Int -> [AAnyLabelN Int]
     parentsOf (AnyLabel lbl) = accLabelParents (nodemap `dmapFind` lbl)
 
+    -- Add the labels corresponding to argument nodes if they're not already
+    -- found by the floodfill. If an argument is unused, we still want to visit
+    -- it (if only to store 0 for the adjoint because there are no
+    -- contributions).
     alllabels :: [AAnyLabelN Int]
-    alllabels = Set.toList $ floodfill (AnyLabel endlab) parentsOf mempty
+    alllabels = Set.toList $ floodfill (AnyLabel endlab) parentsOf mempty <> argLabels
 
     parentmap :: Map Int [AAnyLabelN Int]
     parentmap = Map.fromList [(labelLabel numlbl, parentsOf l)

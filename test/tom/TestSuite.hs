@@ -16,7 +16,6 @@ import Data.List.NonEmpty (NonEmpty(..))
 import Data.String (fromString)
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
-import Hedgehog.Gen (sized)
 import qualified Hedgehog.Range as Range
 import Hedgehog.Internal.Property (unPropertyName)
 import System.Environment (getArgs, lookupEnv)
@@ -72,7 +71,7 @@ vec :: Size -> Gen (A.Vector Float)
 vec (Size n) = genArray (Gen.float (Range.linearFracFrom 0 (-10) 10)) (A.Z A.:. n)
 
 sized_vec :: Gen (A.Vector Float)
-sized_vec = Gen.scale (min 20) (sized vec)
+sized_vec = Gen.scale (min 20) (Gen.sized vec)
 
 nil :: Gen ()
 nil = return ()
@@ -339,6 +338,9 @@ prop_aindex_map_4 = compareAD' nil sized_vec $ \() a ->
                                a)
   in A.sum (A.map (\x -> x * a A.! A.I1 (A.abs (A.round x) `mod` n)) b)
 
+prop_a_ignore_argument :: Property
+prop_a_ignore_argument = compareAD' nil sized_vec $ \() _ -> A.generate A.I0 (\_ -> 42.0)
+
 
 -- Expression tests
 -- ----------------
@@ -355,6 +357,9 @@ prop_cond_2 = compareADE sized_vec $ \x ->
                  (A.sin x)
                  (A.pi / 12 * ((2 - 2 / A.pi * (x - A.pi / 2) `fmod` (2 * pi)) ^^ (6 :: Int) - 1))
   in y * y
+
+prop_ignore_argument :: Property
+prop_ignore_argument = compareADE sized_vec $ \_ -> 42.0
 
 
 -- Main and driver

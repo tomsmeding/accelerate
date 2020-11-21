@@ -23,6 +23,7 @@ import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import Data.Maybe
 import qualified Data.Set as Set
+import Data.Set (Set)
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
@@ -817,16 +818,23 @@ dual :: Show alab
      -> (forall env'. EContext Int env' -> OpenExp env' aenv (PDExp Int) alab args tenv t)
      -> EContext Int env
      -> IdGen (DualResult env aenv alab args tenv)
-dual (endlab, nodemap, _) endadjoint context =
+dual (endlab, nodemap, argmap) endadjoint context =
     trace ("\nexp labelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
     let contribmap = DMap.singleton (fmapLabel D endlab) (AdjList (pure . endadjoint))
     in dual's nodemap labelorder context contribmap
   where
+    argLabels :: Set (EAnyLabelN Int)
+    argLabels = Set.fromList [AnyLabel lab | _ :=> lab <- DMap.toList argmap]
+
     parentsOf :: EAnyLabelN Int -> [EAnyLabelN Int]
     parentsOf (AnyLabel lbl) = expLabelParents (nodemap `dmapFind` lbl)
 
+    -- Add the labels corresponding to argument nodes if they're not already
+    -- found by the floodfill. If an argument is unused, we still want to visit
+    -- it (if only to store 0 for the adjoint because there are no
+    -- contributions).
     alllabels :: [EAnyLabelN Int]
-    alllabels = Set.toList $ floodfill (AnyLabel endlab) parentsOf mempty
+    alllabels = Set.toList $ floodfill (AnyLabel endlab) parentsOf mempty <> argLabels
 
     parentmap :: Map Int [EAnyLabelN Int]
     parentmap = Map.fromList [(labelLabel numlbl, parentsOf l)
