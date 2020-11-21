@@ -338,6 +338,19 @@ prop_aindex_map_4 = compareAD' nil sized_vec $ \() a ->
                                a)
   in A.sum (A.map (\x -> x * a A.! A.I1 (A.abs (A.round x) `mod` n)) b)
 
+prop_aindex_acond_1 :: Property
+prop_aindex_acond_1 = compareAD' nil sized_vec $ \() a ->
+  let A.I1 n = A.shape a
+      s = A.round (A.the (A.sum a))
+  in A.sum (A.acond (0 A.<= s A.&& s A.< n)
+                    (A.generate (A.I1 1) (\(A.I1 _) -> a A.! A.I1 s))
+                    (A.generate (A.I1 1) (\(A.I1 _) -> 0)))
+
+prop_aindex_only :: Property
+prop_aindex_only = compareAD' nil sized_vec $ \() a ->
+  let A.I1 n = A.shape a
+  in A.sum (A.generate (A.I1 5) (\(A.I1 i) -> a A.! A.I1 (i `mod` n)))
+
 prop_a_ignore_argument :: Property
 prop_a_ignore_argument = compareAD' nil sized_vec $ \() _ -> A.generate A.I0 (\_ -> 42.0)
 
