@@ -354,6 +354,11 @@ prop_aindex_only = compareAD' nil sized_vec $ \() a ->
 prop_a_ignore_argument :: Property
 prop_a_ignore_argument = compareAD' nil sized_vec $ \() _ -> A.generate A.I0 (\_ -> 42.0)
 
+prop_nonfloat_lambda :: Property
+prop_nonfloat_lambda = compareAD' nil sized_vec $ \() a ->
+  let b = A.map (\x -> A.T2 (A.round x :: A.Exp Int) (A.sin x)) a
+  in A.sum (A.map (\(A.T2 i x) -> A.toFloating i * x) b)
+
 
 -- Expression tests
 -- ----------------
