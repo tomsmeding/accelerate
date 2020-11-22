@@ -203,6 +203,9 @@ prop_fold1_1 = compareAD' nil sized_vec $ \() a -> A.fold1 (*) a
 prop_fold1_2 :: Property
 prop_fold1_2 = compareAD' nil sized_vec $ \() a -> A.fold1 A.max a
 
+prop_fold1_2_friendly :: Property
+prop_fold1_2_friendly = compareAD' nil (Gen.filter uniqueMax sized_vec) $ \() a -> A.fold1 A.max a
+
 prop_replicate_1 :: Property
 prop_replicate_1 = compareAD' nil sized_vec $ \() a ->
   A.product . A.sum
@@ -323,8 +326,20 @@ prop_aindex_map_2 = compareAD' nil sized_vec $ \() a ->
   let A.I1 n = A.shape a
   in A.sum (A.map (\x -> x + a A.! A.I1 (A.abs (A.round x) `mod` n)) a)
 
+prop_aindex_map_2_friendly :: Property
+prop_aindex_map_2_friendly = compareAD' nil (Gen.filter allNiceRound sized_vec) $ \() a ->
+  let A.I1 n = A.shape a
+  in A.sum (A.map (\x -> x + a A.! A.I1 (A.abs (A.round x) `mod` n)) a)
+
 prop_aindex_map_3 :: Property
 prop_aindex_map_3 = compareAD' nil sized_vec $ \() a ->
+  let A.I1 n = A.shape a
+      b = A.fold max (-20)
+                 (A.backpermute (A.I2 n n) (\(A.I2 i j) -> A.I1 (i A..&. j)) a)
+  in A.sum (A.map (\x -> x * b A.! A.I1 (A.abs (A.round x) `mod` n)) a)
+
+prop_aindex_map_3_friendly :: Property
+prop_aindex_map_3_friendly = withDiscards 1000 $ compareAD' nil (Gen.filter (\a -> allNiceRound a && uniqueMax a) sized_vec) $ \() a ->
   let A.I1 n = A.shape a
       b = A.fold max (-20)
                  (A.backpermute (A.I2 n n) (\(A.I2 i j) -> A.I1 (i A..&. j)) a)
@@ -356,6 +371,11 @@ prop_a_ignore_argument = compareAD' nil sized_vec $ \() _ -> A.generate A.I0 (\_
 
 prop_nonfloat_lambda :: Property
 prop_nonfloat_lambda = compareAD' nil sized_vec $ \() a ->
+  let b = A.map (\x -> A.T2 (A.round x :: A.Exp Int) (A.sin x)) a
+  in A.sum (A.map (\(A.T2 i x) -> A.toFloating i * x) b)
+
+prop_nonfloat_lambda_friendly :: Property
+prop_nonfloat_lambda_friendly = compareAD' nil (Gen.filter allNiceRound sized_vec) $ \() a ->
   let b = A.map (\x -> A.T2 (A.round x :: A.Exp Int) (A.sin x)) a
   in A.sum (A.map (\(A.T2 i x) -> A.toFloating i * x) b)
 
