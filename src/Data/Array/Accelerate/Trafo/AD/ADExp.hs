@@ -184,9 +184,8 @@ splitLambdaAD :: forall aenv t t' unused unused2 tenv.
               -> Fun aenv unused unused2 tenv (t -> t')
               -> SomeSplitLambdaAD t t' (PDExp Int) Int tenv
 splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
-  | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- etypeOf expr  -- Float result type assertion
-  , TupRsingle exprtypeS <- etypeOf expr
-  , let argtype = A.lhsToTupR paramlhs
+  | let exprtype = etypeOf expr
+        argtype = A.lhsToTupR paramlhs
   , ExpandLHS paramlhs' paramWeaken <- expandLHS paramlhs
   , DeclareVars paramlhs'2 _ varsgen <- declareVars argtype
   , Refl <- sameLHSsameEnv paramlhs' paramlhs'2
@@ -204,22 +203,24 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
         let reslabs = bindmap DMap.! fmapLabel P reslab
         case elabValFinds labelenv reslabs of
             Just resultvars
-              | EnvCapture tmpvars (EnvInstantiator instantiator) <- captureEnvironmentSlice (Context LEmpty mempty) context
-              , LetBoundExpE tmpRestoreLHS tmpRestoreVars <- elhsCopy (A.varsType tmpvars) -> do
+              | EnvCapture tmpvars (EnvInstantiator instantiator) <- captureEnvironmentSlice (Context LEmpty mempty) context -> do
                   let primalBody = builder (evars (TupRpair resultvars tmpvars))
 
-                  adjlab <- genSingleId scalarType
-                  (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpRestoreVars)
-                  -- The type of the labelenv here is (((), adjoint), ...temporaries). This is the
-                  -- type of the argument of the dual lambda.
-                  let dualLabelenv = lpushLabTup (LPush LEmpty adjlab) tmpRestoreLHS tmpRestoreLabs
+                  (Exists adjlhs, adjlabs) <- genSingleIds exprtype
+                  -- TODO: is there a neater way to unwrap the existential?
+                  LetBoundExpE tmpRestoreLHS tmpRestoreVars <- return (elhsCopy (A.varsType tmpvars))
+                  (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpvars)
+                  -- The type of the labelenv here is () |> adjoint... |> temporaries...,
+                  -- where a |> b = (a, b), infixr |>. This nested tuple is the type of
+                  -- the argument of the dual lambda.
+                  let dualLabelenv = lpushLabTup (lpushLabTup LEmpty adjlhs adjlabs) tmpRestoreLHS tmpRestoreLabs
                       dualBindmap = instantiator (Context dualLabelenv mempty) tmpRestoreVars
                       dualInstCtx = Context dualLabelenv dualBindmap
                   traceM $ "invoking exp dual with context: " ++ showContext dualInstCtx
                   let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args tenv t'
                       adjointProducer (Context labelenv' _) =
-                        case elabValFind labelenv' adjlab of
-                            Just idx -> Var (A.Var exprtypeS idx)
+                        case elabValFinds labelenv' adjlabs of
+                            Just vars -> evars vars
                             Nothing -> error "splitLambdaAD: end-node adjoint label not put in labelenv?"
                   DualResult ctx' _ builder' <- dual exploded adjointProducer dualInstCtx
                   case collectIndexed ctx' nodemap of
@@ -234,7 +235,7 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
                                                            (inlineAvarLabels fvlabs fvavars primalBody)
                                                            paramlhs')))
                                           (\fvavars ->
-                                               Lam (A.LeftHandSidePair (A.LeftHandSideSingle scalarType) tmpRestoreLHS)
+                                               Lam (A.LeftHandSidePair adjlhs tmpRestoreLHS)
                                                    (Body (generaliseArgs
                                                              (inlineAvarLabels fvlabs fvavars dualBody))))
                                           fvlabs
