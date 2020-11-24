@@ -27,6 +27,7 @@ import qualified Data.Array.Accelerate.Interpreter as I
 import qualified Data.Array.Accelerate.ForwardAD as ADF
 
 import qualified ADHelp
+import TestSuite.Util
 
 
 -- Auxiliary functions and types
@@ -34,32 +35,6 @@ import qualified ADHelp
 
 disjointUnion :: [a] -> [b] -> [Either a b]
 disjointUnion as bs = map Left as ++ map Right bs
-
-data ShapeType sh where
-  SZ :: ShapeType A.Z
-  SCons :: ShapeType sh -> ShapeType (sh A.:. Int)
-
-class (Eq sh, A.Shape sh) => Shape sh where
-  magicShapeType :: ShapeType sh
-
-instance Shape A.Z where
-  magicShapeType = SZ
-
-instance Shape sh => Shape (sh A.:. Int) where
-  magicShapeType = SCons magicShapeType
-
-shapeSize :: Shape sh => sh -> Int
-shapeSize = go magicShapeType
-  where go :: ShapeType sh -> sh -> Int
-        go SZ _ = 1
-        go (SCons st) (sh A.:. n) = n * go st sh
-
-enumShape :: Shape sh => sh -> [sh]
-enumShape = go magicShapeType
-  where
-    go :: ShapeType sh -> sh -> [sh]
-    go SZ A.Z = [A.Z]
-    go (SCons sht) (sh A.:. n) = [idx A.:. i | idx <- go sht sh, i <- [0 .. n-1]]
 
 genArray :: (A.Elt e, Shape sh) => Gen e -> sh -> Gen (A.Array sh e)
 genArray genElt shape = A.fromList shape <$> sequence (replicate (shapeSize shape) genElt)
