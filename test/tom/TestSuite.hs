@@ -396,6 +396,18 @@ prop_cond_2 = compareADE sized_vec $ \x ->
                  (A.pi / 12 * ((2 - 2 / A.pi * (x - A.pi / 2) `fmod` (2 * pi)) ^^ (6 :: Int) - 1))
   in y * y
 
+prop_cond_3a :: Property
+prop_cond_3a = compareADE sized_vec $ \x ->
+  let a = 2 * x
+      y = A.cond (x A.<= 2) (a + 1) (2 * a - 1)
+  in a * y
+
+prop_cond_3b :: Property
+prop_cond_3b = compareADE sized_vec $ \x ->
+  let a = 2 * x
+      y = A.cond (x A.<= 2) (a + 1) (2 * a - 1)
+  in y * a
+
 prop_ignore_argument :: Property
 prop_ignore_argument = compareADE sized_vec $ \_ -> 42.0
 

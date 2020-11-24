@@ -211,6 +211,14 @@ adtest3 = do
                        (A.use (A.fromList (Z :. (11 :: Int)) [-5..5])))
   print . I.run . A.unit $ A.gradientE (\(A.T2 x i) -> x * A.toFloating (i `div` 2)) (A.T2 (42 :: A.Exp Float) (3 :: A.Exp Int))
 
+adtest4 :: IO ()
+adtest4 = do
+  let prog = A.gradientE @Float (\x -> let a = 2 * x
+                                           y = A.cond (x A.<= 2) (a + 1) (2 * a - 1)
+                                       in y * a)
+                                3
+  print prog
+
 adtestFree :: IO ()
 adtestFree = do
   print $ I.run (A.map (let c = 1.0 in (c +) . A.gradientE @Float (\x -> c * x))
@@ -332,6 +340,7 @@ main = do
   -- adtest
   -- adtest2
   -- adtest3
+  -- adtest4
   -- adtestFree
   -- adtuple1
   -- adtuple2
