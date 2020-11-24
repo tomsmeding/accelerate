@@ -630,13 +630,14 @@ test-suite tom-test
   main-is:              Main.hs
   other-modules:        ADHelp, Logistic, Optimise, Neural, LSTM, ConvNet,
                         Playground.Neural, Playground.Fusion, Neural.Help,
-                        TestSuite
+                        TestSuite, TestSuite.Util, TestSuite.AccGen
 
   build-depends:
           base                          >= 4.10
         , accelerate
         , random
         , hedgehog
+        , some
 
   ghc-options:
         -O2
