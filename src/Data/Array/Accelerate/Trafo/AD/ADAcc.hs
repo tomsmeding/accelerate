@@ -388,14 +388,11 @@ explode' labelenv = \case
         _ -> error "lpushLHS_Get: impossible GADTs"
 
 computeLabelorder :: Exploded (PDExp Int) Int args t -> [AAnyLabelN Int]
-computeLabelorder (endlab, nodemap, argmap) =
+computeLabelorder exploded@(endlab, nodemap, _) =
     topsort' (\(AnyLabel l) -> labelLabel l)
              alllabels
              (\(AnyLabel l) -> parentmap Map.! labelLabel l)
   where
-    argLabels :: Set (AAnyLabelN Int)
-    argLabels = Set.fromList [AnyLabel lab | _ :=> lab <- DMap.toList argmap]
-
     parentsOf :: AAnyLabelN Int -> [AAnyLabelN Int]
     parentsOf (AnyLabel lbl) = accLabelParents (nodemap `dmapFind` lbl)
 
@@ -404,7 +401,7 @@ computeLabelorder (endlab, nodemap, argmap) =
     -- it (if only to store 0 for the adjoint because there are no
     -- contributions).
     alllabels :: [AAnyLabelN Int]
-    alllabels = Set.toList $ floodfill (AnyLabel endlab) parentsOf mempty <> argLabels
+    alllabels = Set.toList $ floodfill (AnyLabel endlab) parentsOf mempty <> collectArgLabels exploded
 
     parentmap :: Map Int [AAnyLabelN Int]
     parentmap = Map.fromList [(labelLabel numlbl, parentsOf l)
@@ -414,58 +411,63 @@ primaldual :: Exploded (PDExp Int) Int args (Array () Float)
            -> (forall aenv. AContext Int aenv -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args t))
            -> IdGen (Acc (PDExp Int) (PDAcc Int) args t)
 primaldual exploded cont =
-    let labelorder = computeLabelorder exploded
-    in primal exploded (reverse labelorder) (\ctx -> dual exploded labelorder ctx cont)
+    primal exploded (\ctx -> dual exploded (computeLabelorder exploded) ctx cont)
 
 -- Resulting computation will only use P, never D
 primal :: Exploded (PDExp Int) Int args res
-       -> [AAnyLabelN Int]
        -> (forall aenv. AContext Int aenv -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args t))
        -> IdGen (Acc (PDExp Int) (PDAcc Int) args t)
-primal (_, nodemap, _) labelorder = primal' nodemap labelorder (Context LEmpty mempty)
+primal exploded@(endlab, nodemap, _) cont =
+    primal' nodemap endlab (Context LEmpty mempty) $ \ctx1 ->
+        primalAll nodemap (Set.toList (collectArgLabels exploded)) ctx1 cont
+
+primalAll :: DMap (ADLabelN Int) (Acc (PDExp Int) Int args)
+          -> [AAnyLabelN Int]
+          -> AContext Int aenv
+          -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PDExp Int) (PDAcc Int) args res))
+          -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args res)
+primalAll _ [] ctx cont = cont ctx
+primalAll nodemap (AnyLabel lbl : labs) ctx cont =
+    primal' nodemap lbl ctx (\ctx' -> primalAll nodemap labs ctx' cont)
 
 -- TODO: can't primal' just return the created bindmap entry, so that it
 -- doesn't need to be looked up in the bindmap all the time?
 primal' :: DMap (ADLabelN Int) (Acc (PDExp Int) Int args)
-        -> [AAnyLabelN Int]
+        -> ADLabelN Int t
         -> AContext Int aenv
         -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' (PDExp Int) (PDAcc Int) args res))
         -> IdGen (OpenAcc aenv (PDExp Int) (PDAcc Int) args res)
-primal' _ [] context cont = cont context
-primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
+primal' nodemap lbl ctx cont
   | trace ("primal': computing " ++ show lbl) False = undefined
-  | fmapLabel P lbl `DMap.member` bindmap =
-      cont (Context labelenv bindmap)
-  | not (uniqueLabVal labelenv) =  -- TODO: remove this check
+  | fmapLabel P lbl `DMap.member` (let Context _ bindmap = ctx in bindmap) =
+      cont ctx
+  | not (uniqueLabVal (let Context labelenv _ = ctx in labelenv)) =  -- TODO: remove this check
       error "Non-unique label valuation in primal'!"
   | otherwise =
       case nodemap `dmapFind` lbl of
           Aconst ty value -> do
+              let Context labelenv bindmap = ctx
               lblS <- genSingleId ty
               Alet (A.LeftHandSideSingle ty) (Aconst ty value)
-                   <$> primal' nodemap restlabels
-                               (Context (LPush labelenv lblS)
-                                        (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
-                               cont
+                   <$> cont (Context (LPush labelenv lblS)
+                                     (DMap.insert (fmapLabel P lbl) (TupRsingle lblS) bindmap))
 
           Apair _ (Alabel arglab1) (Alabel arglab2) ->
+            primalAll nodemap [AnyLabel arglab1, AnyLabel arglab2] ctx $ \(Context labelenv bindmap) ->
+              -- Note: We don't re-bind the constructed tuple into a new let
+              -- binding with fresh labels here; we just point the node label
+              -- for this Pair expression node to the pre-existing scalar labels.
               let labs = TupRpair (bindmap `dmapFind` fmapLabel P arglab1)
                                   (bindmap `dmapFind` fmapLabel P arglab2)
-              in -- Note: We don't re-bind the constructed tuple into a new let
-                 -- binding with fresh labels here; we just point the node label
-                 -- for this Pair expression node to the pre-existing scalar labels.
-                 primal' nodemap restlabels
-                         (Context labelenv
-                                  (DMap.insert (fmapLabel P lbl) labs bindmap))
-                         cont
+              in cont (Context labelenv
+                               (DMap.insert (fmapLabel P lbl) labs bindmap))
 
           Anil ->
               -- No scalar labels are allocated for a Nil node, but we should still
               -- record that empty set of labels.
-              primal' nodemap restlabels
-                      (Context labelenv
+              let Context labelenv bindmap = ctx
+              in cont (Context labelenv
                                (DMap.insert (fmapLabel P lbl) TupRunit bindmap))
-                      cont
 
           -- TODO: inlining of the produced halves into the branches of the
           -- generated Cond operation, so that the halves are really only
@@ -476,6 +478,7 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
           -- thus always be computed, even if in the end only one is needed in
           -- all situations. But then, don't write code like that.
           Acond restype condexpr (Alabel thenlab) (Alabel elselab) ->
+            primalAll nodemap (expAParents condexpr ++ [AnyLabel thenlab, AnyLabel elselab]) ctx $ \(Context labelenv bindmap) ->
               let thenlabs = bindmap `dmapFind` fmapLabel P thenlab
                   elselabs = bindmap `dmapFind` fmapLabel P elselab
               in case (alabValFinds labelenv thenlabs
@@ -484,14 +487,13 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                       (Exists lhs, labs) <- genSingleIds restype
                       Alet lhs (Acond restype (resolveAlabs (Context labelenv bindmap) condexpr)
                                               (avars thenvars) (avars elsevars))
-                           <$> primal' nodemap restlabels
-                                       (Context (lpushLabTup labelenv lhs labs)
-                                                (DMap.insert (fmapLabel P lbl) labs bindmap))
-                                       cont
+                           <$> cont (Context (lpushLabTup labelenv lhs labs)
+                                             (DMap.insert (fmapLabel P lbl) labs bindmap))
                   _ ->
                       error "primal: Acond arguments did not compute arguments"
 
-          Map restype@(ArrayR resshape reselty) (ELSplit (SplitLambdaAD lambdaPrimal _ lambdaLabs lambdaTmpType _ _) lambdaTmpLab) (Alabel arglab) ->
+          Map restype@(ArrayR resshape reselty) lambda@(ELSplit (SplitLambdaAD lambdaPrimal _ lambdaLabs lambdaTmpType _ _) lambdaTmpLab) (Alabel arglab) ->
+            primalAll nodemap (lamAParents lambda ++ [AnyLabel arglab]) ctx $ \(Context labelenv bindmap) ->
               let lambdaLabs' = lookupLambdaLabs bindmap lambdaLabs
                   TupRsingle arglabS@(DLabel argtypeS _) = bindmap `dmapFind` fmapLabel P arglab
               in case (alabValFind labelenv arglabS, alabValFinds labelenv lambdaLabs') of
@@ -514,14 +516,13 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                                     in smartPairA (mapFst var) (mapSnd var))
                       Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
                            producer
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush (LPush labelenv lab) lambdaTmpLab)
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush (LPush labelenv lab) lambdaTmpLab)
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                   _ ->
                       error $ "primal: Map arguments did not compute arguments: lbl = " ++ showDLabel lbl ++ "; arglab = " ++ showDLabel arglab ++ "; arglabS = " ++ showDLabel arglabS ++ "; lambdaLabs = " ++ showTupR show lambdaLabs ++ "; lambdaLabs' = " ++ showTupR show lambdaLabs' ++ "; CONTEXT = " ++ showContext (Context labelenv bindmap)
 
-          ZipWith restype@(ArrayR resshape reselty) (ELSplit (SplitLambdaAD lambdaPrimal _ lambdaLabs lambdaTmpType _ _) lambdaTmpLab) (Alabel arglab1) (Alabel arglab2) ->
+          ZipWith restype@(ArrayR resshape reselty) lambda@(ELSplit (SplitLambdaAD lambdaPrimal _ lambdaLabs lambdaTmpType _ _) lambdaTmpLab) (Alabel arglab1) (Alabel arglab2) ->
+            primalAll nodemap (lamAParents lambda ++ [AnyLabel arglab1, AnyLabel arglab2]) ctx $ \(Context labelenv bindmap) ->
               let lambdaLabs' = lookupLambdaLabs bindmap lambdaLabs
                   TupRsingle arglab1S = bindmap `dmapFind` fmapLabel P arglab1
                   TupRsingle arglab2S = bindmap `dmapFind` fmapLabel P arglab2
@@ -545,14 +546,13 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                                     in smartPairA (mapFst var) (mapSnd var))
                       Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
                            producer
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush (LPush labelenv lab) lambdaTmpLab )
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush (LPush labelenv lab) lambdaTmpLab )
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                   _ ->
                       error "primal: ZipWith arguments did not compute arguments"
 
           Fold restype combfun e0expr (Alabel arglab) ->
+            primalAll nodemap (funAParents combfun ++ maybe [] expAParents e0expr ++ [AnyLabel arglab]) ctx $ \(Context labelenv bindmap) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
                   Just argidx -> do
@@ -561,28 +561,26 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                            (Fold restype (resolveAlabsFun (Context labelenv bindmap) combfun)
                                          (resolveAlabs (Context labelenv bindmap) <$> e0expr)
                                          (Avar (A.Var argtype argidx)))
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush labelenv lab)
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush labelenv lab)
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                   _ ->
                       error "primal: Fold arguments did not compute arguments"
 
           Sum restype (Alabel arglab) ->
+            primal' nodemap arglab ctx $ \(Context labelenv bindmap) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
                   Just argidx -> do
                       lab <- genSingleId restype
                       Alet (A.LeftHandSideSingle restype)
                            (Sum restype (Avar (A.Var argtype argidx)))
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush labelenv lab)
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush labelenv lab)
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                   _ ->
                       error "primal: Sum arguments did not compute arguments"
 
-          Generate restype@(ArrayR resshape reselty) shexp (ELSplit (SplitLambdaAD lambdaPrimal _ lambdaLabs lambdaTmpType _ _) lambdaTmpLab) ->
+          Generate restype@(ArrayR resshape reselty) shexp lambda@(ELSplit (SplitLambdaAD lambdaPrimal _ lambdaLabs lambdaTmpType _ _) lambdaTmpLab) ->
+            primalAll nodemap (expAParents shexp ++ lamAParents lambda) ctx $ \(Context labelenv bindmap) ->
               let lambdaLabs' = lookupLambdaLabs bindmap lambdaLabs
               in case alabValFinds labelenv lambdaLabs' of
                   Just lambdaVars -> do
@@ -603,56 +601,52 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                                     in smartPairA (mapFst var) (mapSnd var))
                       Alet (A.LeftHandSidePair (A.LeftHandSideSingle restype) (A.LeftHandSideSingle tmpArrType))
                            producer
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush (LPush labelenv lab) lambdaTmpLab)
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush (LPush labelenv lab) lambdaTmpLab)
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                   _ ->
                       error $ "primal: Generate arguments did not compute arguments"
 
           Replicate restype shtype shexp (Alabel arglab) ->
+            primalAll nodemap (expAParents shexp ++ [AnyLabel arglab]) ctx $ \(Context labelenv bindmap) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
                    Just argidx -> do
                       lab <- genSingleId restype
                       Alet (A.LeftHandSideSingle restype)
                            (Replicate restype shtype (resolveAlabs (Context labelenv bindmap) shexp) (Avar (A.Var argtype argidx)))
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush labelenv lab)
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush labelenv lab)
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                    _ ->
                       error "primal: Replicate arguments did not compute arguments"
 
           Slice restype shtype (Alabel arglab) shexp ->
+            primalAll nodemap (expAParents shexp ++ [AnyLabel arglab]) ctx $ \(Context labelenv bindmap) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
                    Just argidx -> do
                       lab <- genSingleId restype
                       Alet (A.LeftHandSideSingle restype)
                            (Slice restype shtype (Avar (A.Var argtype argidx)) (resolveAlabs (Context labelenv bindmap) shexp))
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush labelenv lab)
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush labelenv lab)
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                    _ ->
                       error "primal: Slice arguments did not compute arguments"
 
           Reshape restype shexp (Alabel arglab) ->
+            primalAll nodemap (expAParents shexp ++ [AnyLabel arglab]) ctx $ \(Context labelenv bindmap) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
                    Just argidx -> do
                       lab <- genSingleId restype
                       Alet (A.LeftHandSideSingle restype)
                            (Reshape restype (resolveAlabs (Context labelenv bindmap) shexp) (Avar (A.Var argtype argidx)))
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush labelenv lab)
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush labelenv lab)
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                    _ ->
                       error "primal: Reshape arguments did not compute arguments"
 
           Backpermute restype shexp indexfunc (Alabel arglab) ->
+            primalAll nodemap (expAParents shexp ++ funAParents indexfunc ++ [AnyLabel arglab]) ctx $ \(Context labelenv bindmap) ->
               let TupRsingle arglabS@(DLabel argtype _) = bindmap `dmapFind` fmapLabel P arglab
               in case alabValFind labelenv arglabS of
                    Just argidx -> do
@@ -661,40 +655,35 @@ primal' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) cont
                            (Backpermute restype (resolveAlabs (Context labelenv bindmap) shexp)
                                                 (resolveAlabsFun (Context labelenv bindmap) indexfunc)
                                                 (Avar (A.Var argtype argidx)))
-                           <$> primal' nodemap restlabels
-                                       (Context (LPush labelenv lab)
-                                                (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
-                                       cont
+                           <$> cont (Context (LPush labelenv lab)
+                                             (DMap.insert (fmapLabel P lbl) (TupRsingle lab) bindmap))
                    _ ->
                       error "primal: Backpermute arguments did not compute arguments"
 
           Aget _ path (Alabel arglab) ->
+            primal' nodemap arglab ctx $ \(Context labelenv bindmap) ->
               let pickedlabs = pickTupR path (bindmap `dmapFind` fmapLabel P arglab)
               in -- Note: We don't re-bind the picked tuple into a new let binding
                  -- with fresh labels here; we just point the node label for this
                  -- Get expression node to the pre-existing scalar labels.
-                 primal' nodemap restlabels
-                         (Context labelenv
-                                  (DMap.insert (fmapLabel P lbl) pickedlabs bindmap))
-                         cont
+                 cont (Context labelenv
+                               (DMap.insert (fmapLabel P lbl) pickedlabs bindmap))
 
           Aarg ty idx -> do
+              let Context labelenv bindmap = ctx
               labS <- genSingleId ty
               Alet (A.LeftHandSideSingle ty) (Aarg ty idx)
-                   <$> primal' nodemap restlabels
-                               (Context (LPush labelenv labS)
-                                        (DMap.insert (fmapLabel P lbl) (TupRsingle labS) bindmap))
-                               cont
+                   <$> cont (Context (LPush labelenv labS)
+                                     (DMap.insert (fmapLabel P lbl) (TupRsingle labS) bindmap))
 
           Alabel arglab ->
+            primal' nodemap arglab ctx $ \(Context labelenv bindmap) ->
               let arglabs = bindmap `dmapFind` fmapLabel P arglab
               in -- Note: We don't re-bind the labeled tuple into a new let binding
                  -- with fresh labels here; we just point the node label for this
                  -- Label expression node to the pre-existing scalar labels.
-                 primal' nodemap restlabels
-                         (Context labelenv
-                                  (DMap.insert (fmapLabel P lbl) arglabs bindmap))
-                         cont
+                 cont (Context labelenv
+                               (DMap.insert (fmapLabel P lbl) arglabs bindmap))
 
           _ ->
               error "primal: Unexpected node shape in Exploded"
@@ -1448,18 +1437,18 @@ accLabelParents = \case
     Aconst _ _ -> []
     Apair _ e1 e2 -> fromLabel e1 ++ fromLabel e2
     Anil -> []
-    Acond _ ce e1 e2 -> expLabels ce ++ fromLabel e1 ++ fromLabel e2
-    Map _ lam e -> fromLabel e ++ lamLabels lam
-    ZipWith _ lam e1 e2 -> fromLabel e1 ++ fromLabel e2 ++ lamLabels lam
-    Generate _ e lam -> expLabels e ++ lamLabels lam
-    Fold _ f me0 e -> funLabels f ++ maybe [] expLabels me0 ++ fromLabel e
-    Scan _ _ f me0 e -> funLabels f ++ maybe [] expLabels me0 ++ fromLabel e
-    Scan' _ _ f e0 e -> funLabels f ++ expLabels e0 ++ fromLabel e
+    Acond _ ce e1 e2 -> expAParents ce ++ fromLabel e1 ++ fromLabel e2
+    Map _ lam e -> fromLabel e ++ lamAParents lam
+    ZipWith _ lam e1 e2 -> fromLabel e1 ++ fromLabel e2 ++ lamAParents lam
+    Generate _ e lam -> expAParents e ++ lamAParents lam
+    Fold _ f me0 e -> funAParents f ++ maybe [] expAParents me0 ++ fromLabel e
+    Scan _ _ f me0 e -> funAParents f ++ maybe [] expAParents me0 ++ fromLabel e
+    Scan' _ _ f e0 e -> funAParents f ++ expAParents e0 ++ fromLabel e
     Sum _ e -> fromLabel e
-    Replicate _ _ she e -> expLabels she ++ fromLabel e
-    Slice _ _ e she -> fromLabel e ++ expLabels she
-    Reshape _ she e -> expLabels she ++ fromLabel e
-    Backpermute _ she f e -> expLabels she ++ funLabels f ++ fromLabel e
+    Replicate _ _ she e -> expAParents she ++ fromLabel e
+    Slice _ _ e she -> fromLabel e ++ expAParents she
+    Reshape _ she e -> expAParents she ++ fromLabel e
+    Backpermute _ she f e -> expAParents she ++ funAParents f ++ fromLabel e
     Aget _ _ e -> fromLabel e
     Aarg _ _ -> []
     Alabel lab -> [AnyLabel lab]
@@ -1474,17 +1463,16 @@ accLabelParents = \case
     fromLabel (Alabel lab) = [AnyLabel lab]
     fromLabel _ = error "accLabelParents: Parent is not a label"
 
-    expLabels :: OpenExp env aenv lab alab args tenv t -> [AAnyLabelN alab]
-    expLabels e = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expALabels e]
+expAParents :: OpenExp env aenv lab alab args tenv t -> [AAnyLabelN alab]
+expAParents e = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expALabels e]
 
-    funLabels :: OpenFun env aenv lab alab tenv t -> [AAnyLabelN alab]
-    funLabels (Lam _ f) = funLabels f
-    funLabels (Body e) = expLabels e
+funAParents :: OpenFun env aenv lab alab tenv t -> [AAnyLabelN alab]
+funAParents fun = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expFunALabels fun]
 
-    lamLabels :: ExpLambda1 aenv lab alab tenv sh t1 t2 -> [AAnyLabelN alab]
-    lamLabels (ELSplit (SplitLambdaAD _ _ fvtup _ _ instMap) _) =
-        [AnyLabel (tupleLabel lab) | Some lab <- enumerateTupR fvtup ++ DMap.keys instMap]
-    lamLabels (ELPlain fun) = [AnyLabel (tupleLabel lab) | AnyLabel lab <- expFunALabels fun]
+lamAParents :: ExpLambda1 aenv lab alab tenv sh t1 t2 -> [AAnyLabelN alab]
+lamAParents (ELSplit (SplitLambdaAD _ _ fvtup _ _ instMap) _) =
+    [AnyLabel (tupleLabel lab) | Some lab <- enumerateTupR fvtup ++ DMap.keys instMap]
+lamAParents (ELPlain fun) = funAParents fun
 
 resolveAlabs :: (HasCallStack, Ord alab, Show alab)
              => AContext alab aenv
@@ -1504,6 +1492,9 @@ resolveAlabsFun :: (Ord alab, Show alab)
                 -> OpenFun env aenv lab alab' tenv t
 resolveAlabsFun ctx (Lam lhs fun) = Lam lhs (resolveAlabsFun ctx fun)
 resolveAlabsFun ctx (Body e) = Body (resolveAlabs ctx e)
+
+collectArgLabels :: Ord alab => Exploded lab alab args t -> Set (AAnyLabelN alab)
+collectArgLabels (_, _, argmap) = Set.fromList [AnyLabel lab | _ :=> lab <- DMap.toList argmap]
 
 dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
 dmapFind mp elt = case DMap.lookup elt mp of
