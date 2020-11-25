@@ -23,54 +23,52 @@ import Data.Array.Accelerate.Trafo.AD.Exp
 
 
 sinkExpAenv :: aenv A.:> aenv' -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv' lab alab args tenv t
-sinkExpAenv _ (Const ty x) = Const ty x
-sinkExpAenv k (PrimApp ty op e) = PrimApp ty op (sinkExpAenv k e)
-sinkExpAenv _ (PrimConst c) = PrimConst c
+sinkExpAenv _ (Const lab x) = Const lab x
+sinkExpAenv k (PrimApp lab op e) = PrimApp lab op (sinkExpAenv k e)
+sinkExpAenv _ (PrimConst lab c) = PrimConst lab c
 sinkExpAenv k (Pair ty e1 e2) = Pair ty (sinkExpAenv k e1) (sinkExpAenv k e2)
-sinkExpAenv _ Nil = Nil
-sinkExpAenv k (Cond ty c nst t nse e) = Cond ty (sinkExpAenv k c) nst (sinkExpAenv k t) nse (sinkExpAenv k e)
-sinkExpAenv k (Shape (Left (A.Var sht idx))) = Shape (Left (A.Var sht (k A.>:> idx)))
-sinkExpAenv _ (Shape (Right lab)) = Shape (Right lab)
-sinkExpAenv k (Index (Left (A.Var sht idx)) idxe) = Index (Left (A.Var sht (k A.>:> idx))) (either (Left . sinkExpAenv k) Right idxe)
-sinkExpAenv k (Index (Right lab) idx) = Index (Right lab) (either (Left . sinkExpAenv k) Right idx)
-sinkExpAenv k (ShapeSize sht e) = ShapeSize sht (sinkExpAenv k e)
-sinkExpAenv k (Get ty ti e) = Get ty ti (sinkExpAenv k e)
-sinkExpAenv _ (Undef ty) = Undef ty
+sinkExpAenv _ (Nil lab) = Nil lab
+sinkExpAenv k (Cond lab c t e) = Cond lab (sinkExpAenv k c) (sinkExpAenv k t) (sinkExpAenv k e)
+sinkExpAenv k (Shape lab (Left (A.Var sht idx))) = Shape lab (Left (A.Var sht (k A.>:> idx)))
+sinkExpAenv _ (Shape lab (Right alab)) = Shape lab (Right alab)
+sinkExpAenv k (Index lab (Left (A.Var sht idx)) idxe) = Index lab (Left (A.Var sht (k A.>:> idx))) (sinkExpAenv k idxe)
+sinkExpAenv k (Index lab (Right alab) idxe) = Index lab (Right alab) (sinkExpAenv k idxe)
+sinkExpAenv k (ShapeSize lab sht e) = ShapeSize lab sht (sinkExpAenv k e)
+sinkExpAenv k (Get lab ti e) = Get lab ti (sinkExpAenv k e)
+sinkExpAenv _ (Undef lab) = Undef lab
 sinkExpAenv k (Let lhs rhs e) = Let lhs (sinkExpAenv k rhs) (sinkExpAenv k e)
-sinkExpAenv _ (Var var) = Var var
-sinkExpAenv _ (FreeVar var) = FreeVar var
-sinkExpAenv _ (Arg ty idx) = Arg ty idx
-sinkExpAenv _ (Label lab) = Label lab
+sinkExpAenv _ (Var lab var referLab) = Var lab var referLab
+sinkExpAenv _ (FreeVar lab var) = FreeVar lab var
+sinkExpAenv _ (Arg lab idx) = Arg lab idx
 
 sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab alab tenv t -> OpenFun env aenv' lab alab tenv t
 sinkFunAenv k (Lam lhs fun) = Lam lhs (sinkFunAenv k fun)
 sinkFunAenv k (Body e) = Body (sinkExpAenv k e)
 
 sinkAcc :: env A.:> env' -> OpenAcc env lab alab args t -> OpenAcc env' lab alab args t
-sinkAcc _ (Aconst ty x) = Aconst ty x
-sinkAcc k (Apair ty e1 e2) = Apair ty (sinkAcc k e1) (sinkAcc k e2)
-sinkAcc _ Anil = Anil
-sinkAcc k (Acond ty c t e) = Acond ty (sinkExpAenv k c) (sinkAcc k t) (sinkAcc k e)
-sinkAcc k (Map ty f e) = Map ty (fmapPlain (sinkFunAenv k) f) (sinkAcc k e)
-sinkAcc k (ZipWith ty f e1 e2) = ZipWith ty (fmapPlain (sinkFunAenv k) f) (sinkAcc k e1) (sinkAcc k e2)
-sinkAcc k (Fold ty f me0 e) = Fold ty (sinkFunAenv k f) (sinkExpAenv k <$> me0) (sinkAcc k e)
-sinkAcc k (Scan ty dir f me0 e) = Scan ty dir (sinkFunAenv k f) (sinkExpAenv k <$> me0) (sinkAcc k e)
-sinkAcc k (Scan' ty dir f e0 e) = Scan' ty dir (sinkFunAenv k f) (sinkExpAenv k e0) (sinkAcc k e)
-sinkAcc k (Backpermute ty dim f e) = Backpermute ty (sinkExpAenv k dim) (sinkFunAenv k f) (sinkAcc k e)
-sinkAcc k (Permute ty comb def pf e) = Permute ty (sinkFunAenv k comb) (sinkAcc k def) (sinkFunAenv k pf) (sinkAcc k e)
-sinkAcc k (Sum ty e) = Sum ty (sinkAcc k e)
-sinkAcc k (Generate ty e f) = Generate ty (sinkExpAenv k e) (fmapPlain (sinkFunAenv k) f)
-sinkAcc k (Replicate ty slt sle e) = Replicate ty slt (sinkExpAenv k sle) (sinkAcc k e)
-sinkAcc k (Slice ty slt e sle) = Slice ty slt (sinkAcc k e) (sinkExpAenv k sle)
-sinkAcc k (Reduce ty slt f e) = Reduce ty slt (sinkFunAenv k f) (sinkAcc k e)
-sinkAcc k (Reshape ty sle e) = Reshape ty (sinkExpAenv k sle) (sinkAcc k e)
-sinkAcc k (Aget ty ti e) = Aget ty ti (sinkAcc k e)
+sinkAcc _ (Aconst lab x) = Aconst lab x
+sinkAcc k (Apair lab e1 e2) = Apair lab (sinkAcc k e1) (sinkAcc k e2)
+sinkAcc _ (Anil lab) = Anil lab
+sinkAcc k (Acond lab c t e) = Acond lab (sinkExpAenv k c) (sinkAcc k t) (sinkAcc k e)
+sinkAcc k (Map lab f e) = Map lab (fmapPlain (sinkFunAenv k) f) (sinkAcc k e)
+sinkAcc k (ZipWith lab f e1 e2) = ZipWith lab (fmapPlain (sinkFunAenv k) f) (sinkAcc k e1) (sinkAcc k e2)
+sinkAcc k (Fold lab f me0 e) = Fold lab (sinkFunAenv k f) (sinkExpAenv k <$> me0) (sinkAcc k e)
+sinkAcc k (Scan lab dir f me0 e) = Scan lab dir (sinkFunAenv k f) (sinkExpAenv k <$> me0) (sinkAcc k e)
+sinkAcc k (Scan' lab dir f e0 e) = Scan' lab dir (sinkFunAenv k f) (sinkExpAenv k e0) (sinkAcc k e)
+sinkAcc k (Backpermute lab dim f e) = Backpermute lab (sinkExpAenv k dim) (sinkFunAenv k f) (sinkAcc k e)
+sinkAcc k (Permute lab comb def pf e) = Permute lab (sinkFunAenv k comb) (sinkAcc k def) (sinkFunAenv k pf) (sinkAcc k e)
+sinkAcc k (Sum lab e) = Sum lab (sinkAcc k e)
+sinkAcc k (Generate lab e f) = Generate lab (sinkExpAenv k e) (fmapPlain (sinkFunAenv k) f)
+sinkAcc k (Replicate lab slt sle e) = Replicate lab slt (sinkExpAenv k sle) (sinkAcc k e)
+sinkAcc k (Slice lab slt e sle) = Slice lab slt (sinkAcc k e) (sinkExpAenv k sle)
+sinkAcc k (Reduce lab slt f e) = Reduce lab slt (sinkFunAenv k f) (sinkAcc k e)
+sinkAcc k (Reshape lab sle e) = Reshape lab (sinkExpAenv k sle) (sinkAcc k e)
+sinkAcc k (Aget lab ti e) = Aget lab ti (sinkAcc k e)
 sinkAcc k (Alet lhs rhs e)
   | A.Exists lhs' <- rebuildLHS lhs =
       Alet lhs' (sinkAcc k rhs) (sinkAcc (A.sinkWithLHS lhs lhs' k) e)
-sinkAcc k (Avar (A.Var sty idx)) = Avar (A.Var sty (k A.>:> idx))
-sinkAcc _ (Aarg ty idx) = Aarg ty idx
-sinkAcc _ (Alabel lab) = Alabel lab
+sinkAcc k (Avar lab (A.Var sty idx) referLab) = Avar lab (A.Var sty (k A.>:> idx)) referLab
+sinkAcc _ (Aarg lab idx) = Aarg lab idx
 
 aCheckLocal :: A.ArrayVar env t -> TagVal A.ArrayR env2 -> Maybe (A.ArrayVar env2 t)
 aCheckLocal _ TEmpty = Nothing
@@ -92,46 +90,43 @@ eCheckClosedInLHS lhs expr = eCheckClosedInTagval (valPushLHS lhs TEmpty) expr
 
 eCheckClosedInTagval :: TagVal A.ScalarType env2 -> OpenExp env aenv lab alab args tenv t -> Maybe (OpenExp env2 aenv lab alab args tenv t)
 eCheckClosedInTagval tv expr = case expr of
-    Const ty x -> Just (Const ty x)
-    PrimApp ty op e -> PrimApp ty op <$> eCheckClosedInTagval tv e
-    PrimConst c -> Just (PrimConst c)
-    Pair ty e1 e2 -> Pair ty <$> eCheckClosedInTagval tv e1 <*> eCheckClosedInTagval tv e2
-    Nil -> Just Nil
-    Cond ty c nst t nse e -> Cond ty <$> eCheckClosedInTagval tv c <*> return nst <*> eCheckClosedInTagval tv t <*> return nse <*> eCheckClosedInTagval tv e
-    Shape avar -> Just (Shape avar)
-    Index avar (Right ls) -> Just (Index avar (Right ls))
-    Index avar (Left e) -> Index avar . Left <$> eCheckClosedInTagval tv e
-    ShapeSize sht e -> ShapeSize sht <$> eCheckClosedInTagval tv e
-    Get ty ti e -> Get ty ti <$> eCheckClosedInTagval tv e
-    Undef ty -> Just (Undef ty)
+    Const lab x -> Just (Const lab x)
+    PrimApp lab op e -> PrimApp lab op <$> eCheckClosedInTagval tv e
+    PrimConst lab c -> Just (PrimConst lab c)
+    Pair lab e1 e2 -> Pair lab <$> eCheckClosedInTagval tv e1 <*> eCheckClosedInTagval tv e2
+    Nil lab -> Just (Nil lab)
+    Cond lab c t e -> Cond lab <$> eCheckClosedInTagval tv c  <*> eCheckClosedInTagval tv t  <*> eCheckClosedInTagval tv e
+    Shape lab avar -> Just (Shape lab avar)
+    Index lab avar e -> Index lab avar <$> eCheckClosedInTagval tv e
+    ShapeSize lab sht e -> ShapeSize lab sht <$> eCheckClosedInTagval tv e
+    Get lab ti e -> Get lab ti <$> eCheckClosedInTagval tv e
+    Undef lab -> Just (Undef lab)
     Let lhs rhs e
       | A.Exists lhs' <- rebuildLHS lhs ->
           Let lhs' <$> eCheckClosedInTagval tv rhs <*> eCheckClosedInTagval (valPushLHS lhs' tv) e
-    Var var -> Var <$> eCheckLocalT matchScalarType var tv
-    FreeVar var -> Just (FreeVar var)
-    Arg ty idx -> Just (Arg ty idx)
-    Label lab -> Just (Label lab)
+    Var lab var referLab -> Var lab <$> eCheckLocalT matchScalarType var tv <*> return referLab
+    FreeVar lab var -> Just (FreeVar lab var)
+    Arg lab idx -> Just (Arg lab idx)
 
 eCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenExp env aenv lab alab args tenv t -> Maybe (OpenExp env aenv2 lab alab args tenv t)
 eCheckAClosedInTagval tv expr = case expr of
-    Const ty x -> Just (Const ty x)
-    PrimApp ty op e -> PrimApp ty op <$> eCheckAClosedInTagval tv e
-    PrimConst c -> Just (PrimConst c)
-    Pair ty e1 e2 -> Pair ty <$> eCheckAClosedInTagval tv e1 <*> eCheckAClosedInTagval tv e2
-    Nil -> Just Nil
-    Shape (Left var) -> Shape . Left <$> aCheckLocal var tv
-    Shape (Right _) -> error "Exp with label in arrayvar position (Shape) is not closed, todo?"
-    Index (Left var) idx -> Index <$> (Left <$> aCheckLocal var tv) <*> either (fmap Left . eCheckAClosedInTagval tv) (Just . Right) idx
-    Index (Right _) _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
-    ShapeSize sht e -> ShapeSize sht <$> eCheckAClosedInTagval tv e
-    Cond ty c nst t nse e -> Cond ty <$> eCheckAClosedInTagval tv c <*> return nst <*> eCheckAClosedInTagval tv t <*> return nse <*> eCheckAClosedInTagval tv e
-    Get ty ti e -> Get ty ti <$> eCheckAClosedInTagval tv e
-    Undef ty -> Just (Undef ty)
+    Const lab x -> Just (Const lab x)
+    PrimApp lab op e -> PrimApp lab op <$> eCheckAClosedInTagval tv e
+    PrimConst lab c -> Just (PrimConst lab c)
+    Pair lab e1 e2 -> Pair lab <$> eCheckAClosedInTagval tv e1 <*> eCheckAClosedInTagval tv e2
+    Nil lab -> Just (Nil lab)
+    Shape lab (Left var) -> Shape lab . Left <$> aCheckLocal var tv
+    Shape _ (Right _) -> error "Exp with label in arrayvar position (Shape) is not closed, todo?"
+    Index lab (Left var) idxe -> Index lab <$> (Left <$> aCheckLocal var tv) <*> eCheckAClosedInTagval tv idxe
+    Index _ (Right _) _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
+    ShapeSize lab sht e -> ShapeSize lab sht <$> eCheckAClosedInTagval tv e
+    Cond lab c t e -> Cond lab <$> eCheckAClosedInTagval tv c  <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
+    Get lab ti e -> Get lab ti <$> eCheckAClosedInTagval tv e
+    Undef lab -> Just (Undef lab)
     Let lhs rhs e -> Let lhs <$> eCheckAClosedInTagval tv rhs <*> eCheckAClosedInTagval tv e
-    Var var -> Just (Var var)
-    FreeVar var -> Just (FreeVar var)
-    Arg ty idx -> Just (Arg ty idx)
-    Label lab -> Just (Label lab)
+    Var lab var referLab -> Just (Var lab var referLab)
+    FreeVar lab var -> Just (FreeVar lab var)
+    Arg lab idx -> Just (Arg lab idx)
 
 efCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenFun env aenv lab alab tenv t -> Maybe (OpenFun env aenv2 lab alab tenv t)
 efCheckAClosedInTagval tv (Lam lhs fun) = Lam lhs <$> efCheckAClosedInTagval tv fun
@@ -146,30 +141,29 @@ aCheckClosedInLHS lhs expr = aCheckClosedInTagval (valPushLHS lhs TEmpty) expr
 
 aCheckClosedInTagval :: TagVal A.ArrayR env2 -> OpenAcc env lab alab args t -> Maybe (OpenAcc env2 lab alab args t)
 aCheckClosedInTagval tv expr = case expr of
-    Aconst ty x -> Just (Aconst ty x)
-    Apair ty e1 e2 -> Apair ty <$> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
-    Anil -> Just Anil
-    Acond ty c t e -> Acond ty <$> eCheckAClosedInTagval tv c <*> aCheckClosedInTagval tv t <*> aCheckClosedInTagval tv e
-    Map ty f e -> Map ty <$> traversePlain (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e
-    ZipWith ty f e1 e2 -> ZipWith ty <$> traversePlain (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
-    Fold ty f me0 e -> Fold ty <$> efCheckAClosedInTagval tv f <*> traverse (eCheckAClosedInTagval tv) me0 <*> aCheckClosedInTagval tv e
-    Scan ty dir f me0 e -> Scan ty dir <$> efCheckAClosedInTagval tv f <*> traverse (eCheckAClosedInTagval tv) me0 <*> aCheckClosedInTagval tv e
-    Scan' ty dir f e0 e -> Scan' ty dir <$> efCheckAClosedInTagval tv f <*> eCheckAClosedInTagval tv e0 <*> aCheckClosedInTagval tv e
-    Backpermute ty dim f e -> Backpermute ty <$> eCheckAClosedInTagval tv dim <*> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e
-    Permute ty cf def pf e -> Permute ty <$> efCheckAClosedInTagval tv cf <*> aCheckClosedInTagval tv def <*> efCheckAClosedInTagval tv pf <*> aCheckClosedInTagval tv e
-    Sum ty e -> Sum ty <$> aCheckClosedInTagval tv e
-    Generate ty e f -> Generate ty <$> eCheckAClosedInTagval tv e <*> traversePlain (efCheckAClosedInTagval tv) f
-    Replicate ty slt sle e -> Replicate ty slt <$> eCheckAClosedInTagval tv sle <*> aCheckClosedInTagval tv e
-    Slice ty slt e sle -> Slice ty slt <$> aCheckClosedInTagval tv e <*> eCheckAClosedInTagval tv sle
-    Reduce ty slt f e -> Reduce ty slt <$> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e
-    Reshape ty sle e -> Reshape ty <$> eCheckAClosedInTagval tv sle <*> aCheckClosedInTagval tv e
-    Aget ty ti e -> Aget ty ti <$> aCheckClosedInTagval tv e
+    Aconst lab x -> Just (Aconst lab x)
+    Apair lab e1 e2 -> Apair lab <$> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
+    Anil lab -> Just (Anil lab)
+    Acond lab c t e -> Acond lab <$> eCheckAClosedInTagval tv c <*> aCheckClosedInTagval tv t <*> aCheckClosedInTagval tv e
+    Map lab f e -> Map lab <$> traversePlain (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e
+    ZipWith lab f e1 e2 -> ZipWith lab <$> traversePlain (efCheckAClosedInTagval tv) f <*> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
+    Fold lab f me0 e -> Fold lab <$> efCheckAClosedInTagval tv f <*> traverse (eCheckAClosedInTagval tv) me0 <*> aCheckClosedInTagval tv e
+    Scan lab dir f me0 e -> Scan lab dir <$> efCheckAClosedInTagval tv f <*> traverse (eCheckAClosedInTagval tv) me0 <*> aCheckClosedInTagval tv e
+    Scan' lab dir f e0 e -> Scan' lab dir <$> efCheckAClosedInTagval tv f <*> eCheckAClosedInTagval tv e0 <*> aCheckClosedInTagval tv e
+    Backpermute lab dim f e -> Backpermute lab <$> eCheckAClosedInTagval tv dim <*> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e
+    Permute lab cf def pf e -> Permute lab <$> efCheckAClosedInTagval tv cf <*> aCheckClosedInTagval tv def <*> efCheckAClosedInTagval tv pf <*> aCheckClosedInTagval tv e
+    Sum lab e -> Sum lab <$> aCheckClosedInTagval tv e
+    Generate lab e f -> Generate lab <$> eCheckAClosedInTagval tv e <*> traversePlain (efCheckAClosedInTagval tv) f
+    Replicate lab slt sle e -> Replicate lab slt <$> eCheckAClosedInTagval tv sle <*> aCheckClosedInTagval tv e
+    Slice lab slt e sle -> Slice lab slt <$> aCheckClosedInTagval tv e <*> eCheckAClosedInTagval tv sle
+    Reduce lab slt f e -> Reduce lab slt <$> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e
+    Reshape lab sle e -> Reshape lab <$> eCheckAClosedInTagval tv sle <*> aCheckClosedInTagval tv e
+    Aget lab ti e -> Aget lab ti <$> aCheckClosedInTagval tv e
     Alet lhs rhs e
       | A.Exists lhs' <- rebuildLHS lhs ->
           Alet lhs' <$> aCheckClosedInTagval tv rhs <*> aCheckClosedInTagval (valPushLHS lhs' tv) e
-    Avar var -> Avar <$> aCheckLocal var tv
-    Aarg ty idx -> Just (Aarg ty idx)
-    Alabel lab -> Just (Alabel lab)
+    Avar lab var referLab -> Avar lab <$> aCheckLocal var tv <*> return referLab
+    Aarg lab idx -> Just (Aarg lab idx)
 
 valPushLHS :: A.LeftHandSide s t env env' -> TagVal s env -> TagVal s env'
 valPushLHS (A.LeftHandSideWildcard _) tv = tv

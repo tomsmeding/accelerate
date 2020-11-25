@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -17,6 +18,7 @@ import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Sink (sinkAcc)
@@ -68,10 +70,10 @@ class ExprLike s f | f -> s where
 newtype OpenExpEnv aenv lab alab args tenv env t =
   OpenExpEnv { unExpEnv :: OpenExp env aenv lab alab args tenv t }
 
-instance ExprLike ScalarType (OpenExpEnv aenv lab alab args tenv) where
-  nil = OpenExpEnv Nil
+instance ExprLike ScalarType (OpenExpEnv aenv () alab args tenv) where
+  nil = OpenExpEnv (Nil magicLabel)
   pair (OpenExpEnv e1) (OpenExpEnv e2) = OpenExpEnv (smartPair e1 e2)
-  var = OpenExpEnv . Var
+  var v@(A.Var ty _) = OpenExpEnv (Var (nilLabel ty) v (nilLabel ty))
   let_ lhs (OpenExpEnv e1) (OpenExpEnv e2) = OpenExpEnv (Let lhs e1 e2)
   fromPair (OpenExpEnv (Pair _ e1 e2)) = Just (OpenExpEnv e1, OpenExpEnv e2)
   fromPair _ = Nothing
@@ -80,10 +82,10 @@ instance ExprLike ScalarType (OpenExpEnv aenv lab alab args tenv) where
 newtype OpenAccEnv lab alab args aenv t =
   OpenAccEnv { unAccEnv :: OpenAcc aenv lab alab args t }
 
-instance ExprLike ArrayR (OpenAccEnv lab alab args) where
-  nil = OpenAccEnv Anil
-  pair (OpenAccEnv e1) (OpenAccEnv e2) = OpenAccEnv (Apair (TupRpair (atypeOf e1) (atypeOf e2)) e1 e2)
-  var v@(A.Var ArrayR{} _) = OpenAccEnv (Avar v)
+instance ExprLike ArrayR (OpenAccEnv lab () args) where
+  nil = OpenAccEnv (Anil (nilLabel TupRunit))
+  pair (OpenAccEnv e1) (OpenAccEnv e2) = OpenAccEnv (Apair (nilLabel (TupRpair (atypeOf e1) (atypeOf e2))) e1 e2)
+  var v@(A.Var ty@ArrayR{} _) = OpenAccEnv (Avar (nilLabel ty) v (nilLabel ty))
   let_ lhs (OpenAccEnv e1) (OpenAccEnv e2) = OpenAccEnv (Alet lhs e1 e2)
   fromPair (OpenAccEnv (Apair _ e1 e2)) = Just (OpenAccEnv e1, OpenAccEnv e2)
   fromPair _ = Nothing
@@ -124,11 +126,11 @@ tupleZipGen ty combine _ignore e1 e2
 -- TODO: check whether this is actually used somewhere (and not only tupleZipExp')
 tupleZipExp :: Applicative m
             => TypeR t
-            -> CombinerExp m lab alab
-            -> IgnorerExp lab alab
-            -> OpenExp env aenv lab alab args tenv t
-            -> OpenExp env aenv lab alab args tenv t
-            -> m (OpenExp env aenv lab alab args tenv t)
+            -> CombinerExp m () alab
+            -> IgnorerExp () alab
+            -> OpenExp env aenv () alab args tenv t
+            -> OpenExp env aenv () alab args tenv t
+            -> m (OpenExp env aenv () alab args tenv t)
 tupleZipExp ty combine ignore e1 e2 =
   unExpEnv <$> tupleZipGen ty (\t (OpenExpEnv x1) (OpenExpEnv x2) -> OpenExpEnv <$> combine t x1 x2)
                               (\t (OpenExpEnv x) -> ignore t x)
@@ -136,22 +138,22 @@ tupleZipExp ty combine ignore e1 e2 =
                               (OpenExpEnv e2)
 
 tupleZipExp' :: TypeR t
-             -> CombinerExp' lab alab
-             -> IgnorerExp lab alab
-             -> OpenExp env aenv lab alab args tenv t
-             -> OpenExp env aenv lab alab args tenv t
-             -> OpenExp env aenv lab alab args tenv t
+             -> CombinerExp' () alab
+             -> IgnorerExp () alab
+             -> OpenExp env aenv () alab args tenv t
+             -> OpenExp env aenv () alab args tenv t
+             -> OpenExp env aenv () alab args tenv t
 tupleZipExp' ty combine' ignore e1 e2 =
   runIdentity $ tupleZipExp ty (\sty sub1 sub2 -> pure (combine' sty sub1 sub2)) ignore e1 e2
 
 -- TODO: check whether this is actually used somewhere (and not only tupleZipAcc')
 tupleZipAcc :: Applicative m
             => ArraysR t
-            -> CombinerAcc m lab alab
-            -> IgnorerAcc lab alab
-            -> OpenAcc aenv lab alab args t
-            -> OpenAcc aenv lab alab args t
-            -> m (OpenAcc aenv lab alab args t)
+            -> CombinerAcc m lab ()
+            -> IgnorerAcc lab ()
+            -> OpenAcc aenv lab () args t
+            -> OpenAcc aenv lab () args t
+            -> m (OpenAcc aenv lab () args t)
 tupleZipAcc ty combine ignore e1 e2 =
   unAccEnv <$> tupleZipGen ty (\t@ArrayR{} (OpenAccEnv x1) (OpenAccEnv x2) -> OpenAccEnv <$> combine t x1 x2)
                               (\t@ArrayR{} (OpenAccEnv x) -> ignore t x)
@@ -159,10 +161,10 @@ tupleZipAcc ty combine ignore e1 e2 =
                               (OpenAccEnv e2)
 
 tupleZipAcc' :: ArraysR t
-             -> CombinerAcc' lab alab
-             -> IgnorerAcc lab alab
-             -> OpenAcc aenv lab alab args t
-             -> OpenAcc aenv lab alab args t
-             -> OpenAcc aenv lab alab args t
+             -> CombinerAcc' lab ()
+             -> IgnorerAcc lab ()
+             -> OpenAcc aenv lab () args t
+             -> OpenAcc aenv lab () args t
+             -> OpenAcc aenv lab () args t
 tupleZipAcc' ty combine' ignore e1 e2 =
   runIdentity $ tupleZipAcc ty (\sty x1 x2 -> pure (combine' sty x1 x2)) ignore e1 e2
