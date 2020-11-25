@@ -18,6 +18,7 @@ module Data.Array.Accelerate.Trafo.AD.ADExp (
 import qualified Control.Monad.Writer as W
 import qualified Data.Functor.Product as Product
 import Data.Functor.Product (Product)
+import Data.GADT.Compare (GCompare, geq)
 import Data.List (intercalate, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
@@ -28,7 +29,6 @@ import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
 import Data.Type.Equality
-import Data.GADT.Compare (GCompare, geq)
 
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Environment as A
@@ -79,11 +79,14 @@ genSingleIds (TupRpair t1 t2) = do
 
 
 -- TODO: make this a data definition, not a tuple
-type Exploded aenv lab alab args tenv res = (EDLabelN lab res, DMap (EDLabelN lab) (Exp aenv lab alab args tenv), DMap (A.Idx args) (EDLabelN lab))
+data Exploded aenv lab alab args tenv res =
+    Exploded { exEndLabel :: EDLabelN lab res
+             , exNodeMap :: DMap (EDLabelN lab) (Exp aenv lab alab args tenv)
+             , exArgMap :: DMap (A.Idx args) (EDLabelN lab) }              }
 
-showExploded :: (Ord lab, Show lab, Show alab) => Exploded aenv lab alab args tenv t -> String
-showExploded (endlab, nodemap, argmap) =
-    "(" ++ showDLabel endlab ++ ", " ++ showNodemap nodemap ++ ", " ++ showArgmap argmap ++ ")"
+instance (Ord lab, Show lab, Show alab) => Show (Exploded aenv lab alab args tenv t) where
+    show (Exploded endlab nodemap argmap) =
+        "Exploded (" ++ showDLabel endlab ++ ") (" ++ showNodemap nodemap ++ ") (" ++ showArgmap argmap ++ ")"
 
 showNodemap :: (Ord lab, Show lab, Show alab) => DMap (EDLabelN lab) (Exp aenv lab alab args tenv) -> String
 showNodemap nodemap =
@@ -144,8 +147,8 @@ reverseAD paramlhs expr
           argsRHS = varsToArgs argsVars
           closedExpr = Let paramlhs' argsRHS (generaliseArgs (sinkExp paramWeaken expr))
           transformedExp = evalIdGen $ do
-              exploded@(_, _, argLabelMap) <- explode LEmpty closedExpr
-              traceM ("exploded: " ++ showExploded exploded)
+              exploded@Exploded { exArgMap = argLabelMap } <- explode LEmpty closedExpr
+              traceM ("exploded: " ++ show exploded)
               primaldual exploded $ \context ->
                   -- 'argsRHS' is an expression of type 't', and is a simple tuple expression
                   -- containing only Arg (and Pair/Nil) nodes. Since 't' is also exactly the
@@ -196,8 +199,8 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
   , TuplifyVars _ fvlabs _ <- tuplifyVars fvlablist
   = -- trace ("AD result: " ++ show transformedExp) $
     evalIdGen $ do
-        exploded@(reslab, nodemap, argLabelMap) <- explode LEmpty labelisedExpr
-        traceM ("exp exploded: " ++ showExploded exploded)
+        exploded@(Exploded reslab nodemap argLabelMap) <- explode LEmpty labelisedExpr
+        traceM ("exp exploded: " ++ show exploded)
         PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
         traceM ("\nexp context in core: " ++ showContext context)
         let reslabs = bindmap DMap.! fmapLabel P reslab
@@ -516,88 +519,88 @@ explode' :: LabVal NodeLabel ScalarType Int env -> OpenExp env aenv unused alab 
 explode' env = \case
     Const ty x -> do
         lab <- genId (TupRsingle ty)
-        return (lab, DMap.singleton lab (Const ty x), mempty)
+        return (Exploded lab (DMap.singleton lab (Const ty x)) mempty)
     PrimApp ty f e -> do
-        (lab1, mp1, argmp) <- explode' env e
+        Exploded lab1 mp1 argmp <- explode' env e
         lab <- genId ty
         let pruned = PrimApp ty f (Label lab1)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping arg's") mp1 itemmp
-        return (lab, mp, argmp)
+        return (Exploded lab mp argmp)
     PrimConst c -> do
         lab <- genId (TupRsingle (SingleScalarType (A.primConstType c)))
-        return (lab, DMap.singleton lab (PrimConst c), mempty)
+        return (Exploded lab (DMap.singleton lab (PrimConst c)) mempty)
     Pair ty e1 e2 -> do
-        (lab1, mp1, argmp1) <- explode' env e1
-        (lab2, mp2, argmp2) <- explode' env e2
+        Exploded lab1 mp1 argmp1 <- explode' env e1
+        Exploded lab2 mp2 argmp2 <- explode' env e2
         lab <- genId ty
         let pruned = Pair ty (Label lab1) (Label lab2)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mp2, itemmp]
             argmp = DMap.unionWithKey (error "explode: Overlapping arg's") argmp1 argmp2
-        return (lab, mp, argmp)
+        return (Exploded lab mp argmp)
     Nil -> do
         lab <- genId TupRunit
-        return (lab, DMap.singleton lab Nil, mempty)
+        return (Exploded lab (DMap.singleton lab Nil) mempty)
     Cond ty e1 e2 e3 -> do
-        (lab1, mp1, argmp1) <- explode' env e1
-        (lab2, mp2, argmp2) <- explode' env e2
-        (lab3, mp3, argmp3) <- explode' env e3
+        Exploded lab1 mp1 argmp1 <- explode' env e1
+        Exploded lab2 mp2 argmp2 <- explode' env e2
+        Exploded lab3 mp3 argmp3 <- explode' env e3
         lab <- genId ty
         let pruned = Cond ty (Label lab1) (Label lab2) (Label lab3)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mp2, mp3, itemmp]
             argmp = DMap.unionsWithKey (error "explode: Overlapping arg's") [argmp1, argmp2, argmp3]
-        return (lab, mp, argmp)
+        return (Exploded lab mp argmp)
     Shape (Left avar@(A.Var (ArrayR sht _) _)) -> do
         lab <- genId (shapeType sht)
-        return (lab, DMap.singleton lab (Shape (Left avar)), mempty)
+        return (Exploded lab (DMap.singleton lab (Shape (Left avar))) mempty)
     Shape (Right alab@(DLabel (ArrayR sht _) _)) -> do
         lab <- genId (shapeType sht)
-        return (lab, DMap.singleton lab (Shape (Right alab)), mempty)
+        return (Exploded lab (DMap.singleton lab (Shape (Right alab))) mempty)
     Index (Left avar@(A.Var (ArrayR _ ty) _)) (Left she) -> do
-        (lab1, mp1, argmp1) <- explode' env she
+        Exploded lab1 mp1 argmp1 <- explode' env she
         lab <- genId ty
         backuplab <- genId (etypeOf she)
         let pruned = Index (Left avar) (Right (lab1, backuplab))
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
-        return (lab, mp, argmp1)
+        return (Exploded lab mp argmp1)
     Index (Right alab@(DLabel (ArrayR _ ty) _)) (Left she) -> do
-        (lab1, mp1, argmp1) <- explode' env she
+        Exploded lab1 mp1 argmp1 <- explode' env she
         lab <- genId ty
         backuplab <- genId (etypeOf she)
         let pruned = Index (Right alab) (Right (lab1, backuplab))
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
-        return (lab, mp, argmp1)
+        return (Exploded lab mp argmp1)
     Index _ (Right _) -> error "explode: Unexpected exp-labelised Index"
     ShapeSize sht e -> do
-        (lab1, mp1, argmp1) <- explode' env e
+        Exploded lab1 mp1 argmp1 <- explode' env e
         lab <- genId (TupRsingle scalarType)
         let pruned = ShapeSize sht (Label lab1)
         let itemmp = DMap.singleton lab pruned
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
-        return (lab, mp, argmp1)
+        return (Exploded lab mp argmp1)
     Undef ty -> do
         lab <- genId (TupRsingle ty)
-        return (lab, DMap.singleton lab (Undef ty), mempty)
+        return (Exploded lab (DMap.singleton lab (Undef ty)) mempty)
     Let lhs rhs body -> do
-        (lab1, mp1, argmp1) <- explode' env rhs
+        Exploded lab1 mp1 argmp1 <- explode' env rhs
         (_, labs) <- genIds (etypeOf rhs)
         let (env', mpLHS) = lpushLHS_Get lhs labs env (Label lab1)
-        (lab2, mp2, argmp2) <- explode' env' body
+        Exploded lab2 mp2 argmp2 <- explode' env' body
         let mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mpLHS, mp2]
             argmp = DMap.unionWithKey (error "explode: Overlapping arg's") argmp1 argmp2
-        return (lab2, mp, argmp)
+        return (Exploded lab2 mp argmp)
     Var (A.Var _ idx) -> do
-        return (tupleLabel (prjL idx env), mempty, mempty)
+        return (Exploded (tupleLabel (prjL idx env)) mempty mempty)
     FreeVar var@(A.Var ty _) -> do
         lab <- genId (TupRsingle ty)
-        return (lab, DMap.singleton lab (FreeVar var), mempty)
+        return (Exploded lab (DMap.singleton lab (FreeVar var)) mempty)
     Arg ty idx -> do
         lab <- genId (TupRsingle ty)
-        return (lab, DMap.singleton lab (Arg ty idx), DMap.singleton idx lab)
+        return (Exploded lab (DMap.singleton lab (Arg ty idx)) (DMap.singleton idx lab))
     Get _ _ _ -> error "explode: Unexpected Get"
     Label _ -> error "explode: Unexpected Label"
   where
@@ -636,7 +639,7 @@ data PrimalResult env aenv alab args tenv =
 -- Resulting computation will only use P, never D
 primal :: Exploded aenv Int alab args tenv res
        -> IdGen (PrimalResult () aenv alab args tenv)
-primal (endlab, nodemap, _) = primal' nodemap endlab (Context LEmpty mempty)
+primal (Exploded { exEndLabel = endlab, exNodeMap = nodemap }) = primal' nodemap endlab (Context LEmpty mempty)
 
 primal' :: DMap (EDLabelN Int) (Exp aenv Int alab args tenv)
         -> EDLabelN Int t
@@ -819,7 +822,7 @@ dual :: Show alab
      -> (forall env'. EContext Int env' -> OpenExp env' aenv (PDExp Int) alab args tenv t)
      -> EContext Int env
      -> IdGen (DualResult env aenv alab args tenv)
-dual (endlab, nodemap, argmap) endadjoint context =
+dual (Exploded { exEndLabel = endlab, exNodeMap = nodemap, exArgMap = argmap }) endadjoint context =
     trace ("\nexp labelorder: " ++ show [labelLabel l | AnyLabel l <- labelorder]) $
     let contribmap = DMap.singleton (fmapLabel D endlab) (AdjList (pure . endadjoint))
     in dual's nodemap labelorder context contribmap
