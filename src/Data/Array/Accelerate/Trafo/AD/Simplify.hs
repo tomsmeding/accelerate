@@ -179,7 +179,8 @@ goExp = \case
     PrimConst c -> returnS $ PrimConst c
     Pair ty e1 e2 -> Pair ty !$! goExp e1 !**! goExp e2
     Nil -> returnS Nil
-    Cond ty e1 e2 e3 -> Cond ty !$! goExp e1 !**! goExp e2 !**! goExp e3
+    Cond ty e1 Nothing e2 Nothing e3 -> Cond ty !$! goExp e1 !**! returnS Nothing !**! goExp e2 !**! returnS Nothing !**! goExp e3
+    Cond _ _ _ _ _ _ -> error "AD.Simplify: Embedded label sets in Cond wouldn't be preserved anyway, so unsupported"
     Shape ref -> Shape !$! goVarOrLab ref
     Index ref idx -> Index !$! goVarOrLab ref !**! either (\e -> Left !$! goExp e) (returnS . Right) idx
     ShapeSize sht e -> ShapeSize sht !$! goExp e
@@ -266,7 +267,8 @@ inlineAE f = \case
     PrimConst c -> PrimConst c
     Pair ty e1 e2 -> Pair ty (inlineAE f e1) (inlineAE f e2)
     Nil -> Nil
-    Cond ty e1 e2 e3 -> Cond ty (inlineAE f e1) (inlineAE f e2) (inlineAE f e3)
+    Cond ty e1 Nothing e2 Nothing e3 -> Cond ty (inlineAE f e1) Nothing (inlineAE f e2) Nothing (inlineAE f e3)
+    Cond _ _ _ _ _ _ -> error "AD.Simplify: Embedded node sets in Cond not supported"
     Shape ref -> Shape (inlineAE_VarOrLab f ref)
     Index ref idx -> Index (inlineAE_VarOrLab f ref) (either (Left . inlineAE f) Right idx)
     ShapeSize sht e -> ShapeSize sht (inlineAE f e)
@@ -312,7 +314,8 @@ inlineE f = \case
     PrimConst c -> PrimConst c
     Pair ty e1 e2 -> Pair ty (inlineE f e1) (inlineE f e2)
     Nil -> Nil
-    Cond ty e1 e2 e3 -> Cond ty (inlineE f e1) (inlineE f e2) (inlineE f e3)
+    Cond ty e1 Nothing e2 Nothing e3 -> Cond ty (inlineE f e1) Nothing (inlineE f e2) Nothing (inlineE f e3)
+    Cond _ _ _ _ _ _ -> error "AD.Simplify: Embedded node sets in Cond not supported"
     Shape ref -> Shape ref
     Index ref idx -> Index ref (either (Left . inlineE f) Right idx)
     ShapeSize sht e -> ShapeSize sht (inlineE f e)

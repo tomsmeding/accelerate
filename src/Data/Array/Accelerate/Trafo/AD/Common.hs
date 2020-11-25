@@ -312,3 +312,6 @@ instance (Ord lab, GCompare s) => Ord (AnyLabel lty s lab) where
           GT -> GT
           EQ | GEQ <- gcompare ty1 ty2 -> EQ
              | otherwise -> error "Ord AnyLabel: labels match, but types do not!"
+
+instance (Show lab, forall t. Show (s t)) => Show (AnyLabel lty s lab) where
+    showsPrec p (AnyLabel lab) = showParen (p > 10) (showString "AnyLabel " . showsPrec 11 lab)
