@@ -572,6 +572,9 @@ smartFDiv ty a b = PrimApp (nilLabel (TupRsingle (SingleScalarType (NumSingleTyp
 smartGt :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv A.PrimBool
 smartGt ty a b = PrimApp magicLabel (A.PrimGt ty) (smartPair a b)
 
+smartVar :: A.ExpVar env t -> OpenExp env aenv () alab args tenv t
+smartVar var@(A.Var ty _) = Var (nilLabel ty) var (nilLabel ty)
+
 -- TODO: make smartFst and smartSnd non-quadratic
 smartFst :: OpenExp env aenv () alab args tenv (t1, t2) -> OpenExp env aenv () alab args tenv t1
 smartFst (Pair _ ex _) = ex

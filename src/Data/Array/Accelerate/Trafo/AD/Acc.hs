@@ -47,72 +47,72 @@ traversePlain :: Applicative f
 traversePlain _ (ELSplit lam lab) = pure (ELSplit lam lab)
 traversePlain f (ELPlain fun) = ELPlain <$> f fun
 
--- TODO: Check how many reified types can be removed in this AST
 data OpenAcc aenv lab alab args t where
-    Aconst  :: ArrayR (Array sh t)
+    Aconst  :: ADLabelNS alab (Array sh t)
             -> Array sh t
             -> OpenAcc aenv lab alab args (Array sh t)
 
-    Apair   :: ArraysR (a, b)
+    Apair   :: ADLabelN alab (a, b)
             -> OpenAcc aenv lab alab args a
             -> OpenAcc aenv lab alab args b
             -> OpenAcc aenv lab alab args (a, b)
 
-    Anil    :: OpenAcc aenv lab alab args ()
+    Anil    :: ADLabelN alab ()
+            -> OpenAcc aenv lab alab args ()
 
-    Acond   :: ArraysR a
+    Acond   :: ADLabelN alab a
             -> Exp aenv lab alab () () A.PrimBool
             -> OpenAcc aenv lab alab args a
             -> OpenAcc aenv lab alab args a
             -> OpenAcc aenv lab alab args a
 
-    Map     :: ArrayR (Array sh t2)
+    Map     :: ADLabelNS alab (Array sh t2)
             -> ExpLambda1 aenv lab alab () sh t1 t2
             -> OpenAcc aenv lab alab args (Array sh t1)
             -> OpenAcc aenv lab alab args (Array sh t2)
 
-    ZipWith :: ArrayR (Array sh t3)
+    ZipWith :: ADLabelNS alab (Array sh t3)
             -> ExpLambda1 aenv lab alab () sh (t1, t2) t3
             -> OpenAcc aenv lab alab args (Array sh t1)
             -> OpenAcc aenv lab alab args (Array sh t2)
             -> OpenAcc aenv lab alab args (Array sh t3)
 
-    Fold    :: ArrayR (Array sh e)
+    Fold    :: ADLabelNS alab (Array sh e)
             -> Fun aenv lab alab () ((e, e) -> e)
             -> Maybe (Exp aenv lab alab () () e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array sh e)
 
-    Sum     :: ArrayR (Array sh e)
+    Sum     :: ADLabelNS alab (Array sh e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array sh e)
 
-    Scan    :: ArrayR (Array (sh, Int) e)
+    Scan    :: ADLabelNS alab (Array (sh, Int) e)
             -> A.Direction
             -> Fun aenv lab alab () ((e, e) -> e)
             -> Maybe (Exp aenv lab alab () () e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
 
-    Scan'   :: ArraysR (Array (sh, Int) e, Array sh e)
+    Scan'   :: ADLabelN alab (Array (sh, Int) e, Array sh e)
             -> A.Direction
             -> Fun aenv lab alab () ((e, e) -> e)
             -> Exp aenv lab alab () () e
             -> OpenAcc aenv lab alab args (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args (Array (sh, Int) e, Array sh e)
 
-    Generate :: ArrayR (Array sh e)
+    Generate :: ADLabelNS alab (Array sh e)
              -> Exp aenv lab alab () () sh
              -> ExpLambda1 aenv lab alab () sh sh e
              -> OpenAcc aenv lab alab args (Array sh e)
 
-    Replicate :: ArrayR (Array sh e)
+    Replicate :: ADLabelNS alab (Array sh e)
               -> SliceIndex slix sl co sh
               -> Exp aenv lab alab () () slix
               -> OpenAcc aenv lab alab args (Array sl e)
               -> OpenAcc aenv lab alab args (Array sh e)
 
-    Slice   :: ArrayR (Array sl e)
+    Slice   :: ADLabelNS alab (Array sl e)
             -> SliceIndex slix sl co sh
             -> OpenAcc aenv lab alab args (Array sh e)
             -> Exp aenv lab alab () () slix
@@ -121,18 +121,18 @@ data OpenAcc aenv lab alab args t where
     -- Has no equivalent in the real AST. Is converted using backpermute, reshape, fold.
     -- Folds the RSpecReduce-dimensions away using the binary operation.
     -- Like 'add' is the dual of 'dup', Reduce is the dual of Replicate.
-    Reduce  :: ArrayR (Array redsh e)
+    Reduce  :: ADLabelNS alab (Array redsh e)
             -> ReduceSpec slix redsh fullsh
             -> Fun aenv lab alab () (e -> e -> e)
             -> OpenAcc aenv lab alab args (Array fullsh e)
             -> OpenAcc aenv lab alab args (Array redsh e)
 
-    Reshape :: ArrayR (Array sh e)
+    Reshape :: ADLabelNS alab (Array sh e)
             -> Exp aenv lab alab () () sh
             -> OpenAcc aenv lab alab args (Array sh' e)
             -> OpenAcc aenv lab alab args (Array sh e)
 
-    Backpermute :: ArrayR (Array sh' e)
+    Backpermute :: ADLabelNS alab (Array sh' e)
                 -> Exp aenv lab alab () () sh'                 -- dimensions of the result
                 -> Fun aenv lab alab () (sh' -> sh)            -- permutation function
                 -> OpenAcc aenv lab alab args (Array sh e)  -- source array
@@ -141,7 +141,7 @@ data OpenAcc aenv lab alab args t where
     -- The combination function is not stored as an ExpLambda1, because we
     -- don't currently support taking the derivative of a Permute: we only
     -- generate it as the derivative of a Backpermute and of array indexing.
-    Permute :: ArrayR (Array sh' e)
+    Permute :: ADLabelNS alab (Array sh' e)
             -> Fun aenv lab alab () (e -> e -> e)            -- combination function
             -> OpenAcc aenv lab alab args (Array sh' e)   -- default values
             -> Fun aenv lab alab () (sh -> A.PrimMaybe sh')  -- permutation function
@@ -150,7 +150,7 @@ data OpenAcc aenv lab alab args t where
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
     -- be laboriously back-converted using Let-bindings.
-    Aget    :: ArraysR s
+    Aget    :: ADLabelN alab s
             -> TupleIdx t s
             -> OpenAcc env lab alab args t
             -> OpenAcc env lab alab args s
@@ -160,27 +160,16 @@ data OpenAcc aenv lab alab args t where
             -> OpenAcc env' lab alab args a
             -> OpenAcc env lab alab args a
 
-    Avar    :: A.ArrayVar env (Array sh e)
+    Avar    :: ADLabelNS alab (Array sh e)  -- own label
+            -> A.ArrayVar env (Array sh e)  -- pointer to binding
+            -> ADLabelNS alab (Array sh e)  -- label of referred-to right-hand side
             -> OpenAcc env lab alab args (Array sh e)
 
-    Aarg    :: ArrayR t
+    Aarg    :: ADLabelNS alab t
             -> Idx args t
             -> OpenAcc env lab alab args t
 
-    Alabel  :: ADLabelN alab t
-            -> OpenAcc env lab alab args t
-
 type Acc = OpenAcc ()
-
--- Closed array program with an unknown type
-data AnyAcc lab alab args = forall t. AnyAcc (Acc lab alab args t)
-deriving instance (Show lab, Show alab) => Show (AnyAcc lab alab args)
-
-data AnyArraysR = forall t. AnyArraysR (ArraysR t)
-deriving instance Show AnyArraysR
-
-data AnyArrayR = forall t. AnyArrayR (ArrayR t)
-deriving instance Show AnyArrayR
 
 -- Specification for which dimensions to reduce in a Reduce aggregate operation.
 -- spec: Equal to the dual SliceIndex, suitable for Replicate. Dual as in:
@@ -210,95 +199,101 @@ rsFullShapeR (RSpecKeep spec) = ShapeRsnoc (rsFullShapeR spec)
 -- ---------
 
 showsAcc :: AShowEnv lab alab -> Int -> OpenAcc env lab alab args t -> ShowS
-showsAcc _ _ (Aconst ty x) =
+showsAcc se _ (Aconst lab@DLabel { labelType = ty } x) =
     showString (showArray (showString . showTupR' showScalar (arrayRtype ty)) ty x)
-showsAcc se _ (Apair _ e1 e2) =
+        . ashowLabelSuffix se lab
+showsAcc se _ (Apair lab e1 e2) =
     showString "(" . showsAcc se 0 e1 . showString ", " .
-        showsAcc se 0 e2 . showString ")"
-showsAcc _ _ Anil =
-    showString "()"
-showsAcc se d (Acond _ c t e) =
+        showsAcc se 0 e2 . showString ")" .
+        ashowLabelSuffix se lab
+showsAcc se _ (Anil lab) =
+    showString "()" . ashowLabelSuffix se lab
+showsAcc se d (Acond lab c t e) =
     showParen (d > 10) $
-        showString "acond " .
+        showString "acond" . ashowLabelSuffix se lab . showString " " .
             showsExp (se { seEnv = [] }) 11 c . showString " " .
             showsAcc se 11 t . showString " " .
             showsAcc se 11 e
-showsAcc se d (Map _ f e) =
+showsAcc se d (Map lab f e) =
     showParen (d > 10) $
-        showString "map " .
+        showString "map" . ashowLabelSuffix se lab . showString " " .
             showsLambda (se { seEnv = [] }) 11 f . showString " " .
             showsAcc se 11 e
-showsAcc se d (ZipWith _ f e1 e2) =
+showsAcc se d (ZipWith lab f e1 e2) =
     showParen (d > 10) $
-        showString "zipWith " .
+        showString "zipWith" . ashowLabelSuffix se lab . showString " " .
             showsLambda (se { seEnv = [] }) 11 f . showString " " .
             showsAcc se 11 e1 . showString " " .
             showsAcc se 11 e2
-showsAcc se d (Fold _ f me0 e) =
+showsAcc se d (Fold lab f me0 e) =
     showParen (d > 10) $
-        showString (maybe "fold1 " (const "fold ") me0) .
+        showString (maybe "fold1" (const "fold") me0) .
+            ashowLabelSuffix se lab . showString " " .
             showsFun (se { seEnv = [] }) 11 f . showString " " .
             maybe id (\e0 -> showsExp (se { seEnv = [] }) 11 e0 . showString " ") me0 .
             showsAcc se 11 e
-showsAcc se d (Scan _ dir f me0 e) =
+showsAcc se d (Scan lab dir f me0 e) =
     showParen (d > 10) $
-        showString ("scan" ++ (case dir of A.LeftToRight -> "l" ; A.RightToLeft -> "r") ++ maybe "1" (const "") me0 ++ " ") .
+        showString ("scan" ++ (case dir of A.LeftToRight -> "l" ; A.RightToLeft -> "r") ++ maybe "1" (const "") me0) .
+            ashowLabelSuffix se lab . showString " " .
             showsFun (se { seEnv = [] }) 11 f . showString " " .
             maybe id (\e0 -> showsExp (se { seEnv = [] }) 11 e0 . showString " ") me0 .
             showsAcc se 11 e
-showsAcc se d (Scan' _ dir f e0 e) =
+showsAcc se d (Scan' lab dir f e0 e) =
     showParen (d > 10) $
-        showString ("scan" ++ (case dir of A.LeftToRight -> "l" ; A.RightToLeft -> "r") ++ "' ") .
+        showString ("scan" ++ (case dir of A.LeftToRight -> "l" ; A.RightToLeft -> "r") ++ "'") .
+            ashowLabelSuffix se lab . showString " " .
             showsFun (se { seEnv = [] }) 11 f . showString " " .
             showsExp (se { seEnv = [] }) 11 e0 . showString " " .
             showsAcc se 11 e
-showsAcc se d (Backpermute _ dim f e) =
+showsAcc se d (Backpermute lab dim f e) =
     showParen (d > 10) $
-        showString "backpermute " .
+        showString "backpermute" . ashowLabelSuffix se lab . showString " " .
             showsExp (se { seEnv = [] }) 11 dim . showString " " .
             showsFun (se { seEnv = [] }) 11 f . showString " " .
             showsAcc se 11 e
-showsAcc se d (Permute _ f1 e1 f2 e2) =
+showsAcc se d (Permute lab f1 e1 f2 e2) =
     showParen (d > 10) $
-        showString "permute " .
+        showString "permute" . ashowLabelSuffix se lab . showString " " .
             showsFun (se { seEnv = [] }) 11 f1 . showString " " .
             showsAcc se 11 e1 . showString " " .
             showsFun (se { seEnv = [] }) 11 f2 . showString " " .
             showsAcc se 11 e2
-showsAcc se d (Sum _ e) =
+showsAcc se d (Sum lab e) =
     showParen (d > 10) $
-        showString "sum " .
+        showString "sum" . ashowLabelSuffix se lab . showString " " .
             showsAcc se 11 e
-showsAcc se d (Generate _ sh f) =
+showsAcc se d (Generate lab sh f) =
     showParen (d > 10) $
-        showString "generate " .
+        showString "generate" . ashowLabelSuffix se lab . showString " " .
             showsExp (se { seEnv = [] }) 11 sh . showString " " .
             showsLambda (se { seEnv = [] }) 11 f
-showsAcc se d (Replicate _ _ e a) =
+showsAcc se d (Replicate lab _ e a) =
     showParen (d > 10) $
-        showString "replicate " .
+        showString "replicate" . ashowLabelSuffix se lab . showString " " .
             showsExp (se { seEnv = [] }) 11 e . showString " " .
             showsAcc se 11 a
-showsAcc se d (Slice _ _ a e) =
+showsAcc se d (Slice lab _ a e) =
     showParen (d > 10) $
-        showString "slice " .
+        showString "slice" . ashowLabelSuffix se lab . showString " " .
             showsAcc se 11 a . showString " " .
             showsExp (se { seEnv = [] }) 11 e
-showsAcc se d (Reduce _ _ f a) =
+showsAcc se d (Reduce lab _ f a) =
     showParen (d > 10) $
-        showString "reduce " .
+        showString "reduce" . ashowLabelSuffix se lab . showString " " .
             showsFun (se { seEnv = [] }) 11 f . showString " " .
             showsAcc se 11 a
-showsAcc se d (Reshape _ e a) =
+showsAcc se d (Reshape lab e a) =
     showParen (d > 10) $
-        showString "reshape " .
+        showString "reshape" . ashowLabelSuffix se lab . showString " " .
             showsExp (se { seEnv = [] }) 11 e . showString " " .
             showsAcc se 11 a
-showsAcc se d (Aget _ ti e) = showParen (d > 10) $
-    showString (tiPrefix ti) . showsAcc se 10 e
+showsAcc se d (Aget lab ti e) = showParen (d > 10) $
+    showString (tiPrefix ti) . ashowLabelSuffix se lab . showString " " .
+    showsAcc se 10 e
   where
     tiPrefix :: TupleIdx t t' -> String
-    tiPrefix = (++ " ") . intercalate "." . reverse . tiPrefix'
+    tiPrefix = intercalate "." . reverse . tiPrefix'
 
     tiPrefix' :: TupleIdx t t' -> [String]
     tiPrefix' TIHere = []
@@ -309,18 +304,29 @@ showsAcc se d (Alet lhs rhs body) = showParen (d > 0) $
         env' = descrs ++ seAenv se
     in showString ("let " ++ descr ++ " = ") . showsAcc (se { seSeed = seed' }) 0 rhs .
             showString " in " . showsAcc (se { seSeed = seed', seAenv = env' }) 0 body
-showsAcc _ d (Aarg ty idx) = showParen (d > 0) $
-    showString ('A' : show (idxToInt idx) ++ " :: " ++ show ty)
-showsAcc se _ (Avar (A.Var _ idx)) =
-    case drop (idxToInt idx) (seAenv se) of
-        descr : _ -> showString descr
-        [] -> showString ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
-showsAcc se d (Alabel lab) = showParen (d > 0) $
-    showString ('L' : seAlabf se (labelLabel lab) ++ " :: " ++ show (labelType lab))
+showsAcc se _ (Avar lab (A.Var _ idx) referLab) =
+    let varstr
+          | descr : _ <- drop (idxToInt idx) (seAenv se) = descr
+          | otherwise = "tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))
+    in case ashowLabelSuffix se referLab "" of
+         "" -> showString varstr
+         referLabStr ->
+             showString ("(" ++ varstr ++ "->" ++ referLabStr ++ ")") .
+             ashowLabelSuffix se lab
+showsAcc se d (Aarg lab idx) = showParen (d > 0) $
+    showString ('A' : show (idxToInt idx)) . ashowLabelSuffix se lab .
+    showString (" :: " ++ show (labelType lab))
 
 showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv sh t1 t2 -> ShowS
 showsLambda se d (ELPlain fun) = showsFun se d fun
 showsLambda _ _ ELSplit{} = showString "{splitlambda}"
+
+ashowLabelSuffix :: AShowEnv lab alab -> DLabel lty s alab t -> ShowS
+ashowLabelSuffix se lab =
+    showString $ case seAlabf se (labelLabel lab) of
+                   "" -> ""
+                   "()" -> ""
+                   res -> "[" ++ res ++ "]"
 
 instance (Show lab, Show alab) => Show (OpenAcc aenv lab alab args t) where
     showsPrec = showsAcc (ShowEnv show show 0 () [])
@@ -331,29 +337,31 @@ instance (Show lab, Show alab) => GShow (OpenAcc aenv lab alab args) where
 -- Auxiliary functions
 -- -------------------
 
+alabelOf :: OpenAcc aenv lab alab args t -> ADLabelN alab t
+alabelOf (Aconst lab _) = tupleLabel lab
+alabelOf (Apair lab _ _) = lab
+alabelOf (Anil lab) = lab
+alabelOf (Acond lab _ _ _) = lab
+alabelOf (Map lab _ _) = tupleLabel lab
+alabelOf (ZipWith lab _ _ _) = tupleLabel lab
+alabelOf (Generate lab _ _) = tupleLabel lab
+alabelOf (Fold lab _ _ _) = tupleLabel lab
+alabelOf (Scan lab _ _ _ _) = tupleLabel lab
+alabelOf (Scan' lab _ _ _ _) = lab
+alabelOf (Backpermute lab _ _ _) = tupleLabel lab
+alabelOf (Permute lab _ _ _ _) = tupleLabel lab
+alabelOf (Replicate lab _ _ _) = tupleLabel lab
+alabelOf (Slice lab _ _ _) = tupleLabel lab
+alabelOf (Reduce lab _ _ _) = tupleLabel lab
+alabelOf (Reshape lab _ _) = tupleLabel lab
+alabelOf (Sum lab _) = tupleLabel lab
+alabelOf (Aget lab _ _) = lab
+alabelOf (Alet _ _ body) = alabelOf body
+alabelOf (Avar lab _ _) = tupleLabel lab
+alabelOf (Aarg lab _) = tupleLabel lab
+
 atypeOf :: OpenAcc aenv lab alab args t -> ArraysR t
-atypeOf (Aconst ty _) = TupRsingle ty
-atypeOf (Apair ty _ _) = ty
-atypeOf Anil = TupRunit
-atypeOf (Acond ty _ _ _) = ty
-atypeOf (Map ty _ _) = TupRsingle ty
-atypeOf (ZipWith ty _ _ _) = TupRsingle ty
-atypeOf (Generate ty _ _) = TupRsingle ty
-atypeOf (Fold ty _ _ _) = TupRsingle ty
-atypeOf (Scan ty _ _ _ _) = TupRsingle ty
-atypeOf (Scan' ty _ _ _ _) = ty
-atypeOf (Backpermute ty _ _ _) = TupRsingle ty
-atypeOf (Permute ty _ _ _ _) = TupRsingle ty
-atypeOf (Replicate ty _ _ _) = TupRsingle ty
-atypeOf (Slice ty _ _ _) = TupRsingle ty
-atypeOf (Reduce ty _ _ _) = TupRsingle ty
-atypeOf (Reshape ty _ _) = TupRsingle ty
-atypeOf (Sum ty _) = TupRsingle ty
-atypeOf (Aget ty _ _) = ty
-atypeOf (Alet _ _ body) = atypeOf body
-atypeOf (Avar (A.Var ty _)) = TupRsingle ty
-atypeOf (Aarg ty _) = TupRsingle ty
-atypeOf (Alabel lab) = labelType lab
+atypeOf = labelType . alabelOf
 
 alabValFind :: Eq lab => LabVal lty ArrayR lab env -> DLabel lty ArrayR lab t -> Maybe (Idx env t)
 alabValFind LEmpty _ = Nothing
@@ -369,18 +377,17 @@ alabValFinds labelenv (TupRsingle lab) =
 alabValFinds labelenv (TupRpair labs1 labs2) =
     TupRpair <$> alabValFinds labelenv labs1 <*> alabValFinds labelenv labs2
 
-alabValToList :: ALabVal lab env -> [(AnyArrayR, lab)]
-alabValToList LEmpty = []
-alabValToList (LPush env (DLabel ty lab)) =
-    (AnyArrayR ty, lab) : alabValToList env
-
-avars :: A.ArrayVars aenv t -> OpenAcc aenv lab alab args t
+avars :: A.ArrayVars aenv t -> OpenAcc aenv lab () args t
 avars = snd . avars'
   where
-    avars' :: A.ArrayVars aenv t -> (ArraysR t, OpenAcc aenv lab alab args t)
-    avars' TupRunit = (TupRunit, Anil)
-    avars' (TupRsingle var@(A.Var ty@ArrayR{} _)) = (TupRsingle ty, Avar var)
+    avars' :: A.ArrayVars aenv t -> (ArraysR t, OpenAcc aenv lab () args t)
+    avars' TupRunit = (TupRunit, Anil (nilLabel TupRunit))
+    avars' (TupRsingle var@(A.Var ty@ArrayR{} _)) =
+        (TupRsingle ty, Avar (nilLabel ty) var (nilLabel ty))
     avars' (TupRpair vars1 vars2) =
         let (t1, e1) = avars' vars1
             (t2, e2) = avars' vars2
-        in (TupRpair t1 t2, Apair (TupRpair t1 t2) e1 e2)
+        in (TupRpair t1 t2, Apair (nilLabel (TupRpair t1 t2)) e1 e2)
+
+smartAvar :: A.ArrayVar aenv (Array sh t) -> OpenAcc aenv lab () args (Array sh t)
+smartAvar var@(A.Var ty _) = Avar (nilLabel ty) var (nilLabel ty)
