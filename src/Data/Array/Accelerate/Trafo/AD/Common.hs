@@ -72,20 +72,20 @@ instance Show lab => GShow (DLabel lty ScalarType lab) where gshowsPrec = showsP
 instance Show lab => GShow (DLabel lty ArraysR    lab) where gshowsPrec = showsPrec
 instance Show lab => GShow (DLabel lty ArrayR     lab) where gshowsPrec = showsPrec
 
-instance GEq s => GEq (DLabel lty s lab) where
-    geq (DLabel ty1 _) (DLabel ty2 _) = do
-        Refl <- geq ty1 ty2
-        return Refl
+instance (Eq lab, GEq s) => GEq (DLabel lty s lab) where
+    geq (DLabel ty1 lab1) (DLabel ty2 lab2)
+      | lab1 == lab2 = case geq ty1 ty2 of
+                         Just Refl -> Just Refl
+                         Nothing -> error "GEq DLabel: Labels match but types differ"
+      | otherwise = Nothing
 
 instance (Ord lab, GCompare s) => GCompare (DLabel lty s lab) where
     gcompare (DLabel ty1 lab1) (DLabel ty2 lab2) =
-        case gcompare ty1 ty2 of
-          GLT -> GLT
-          GGT -> GGT
-          GEQ -> case compare lab1 lab2 of
-                   LT -> GLT
-                   EQ -> GEQ
-                   GT -> GGT
+        case compare lab1 lab2 of
+          LT -> GLT
+          GT -> GGT
+          EQ | GEQ <- gcompare ty1 ty2 -> GEQ
+             | otherwise -> error "GCompare DLabel: Labels match but types differ"
 
 data TupleIdx t t' where
     TIHere  :: TupleIdx s s
@@ -290,6 +290,7 @@ showBindmap bindmap =
 
 -- TODO: make this 'type AnyLabel lty s lab = Exists (DLabel lty s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
 -- (But consider the specialised Eq/Ord instances below. Can we reproduce that with an Exists version?)
+-- Yes we can! Some uses GEq and GCompare for its Eq and Ord instances, and because DLabel acts correctly, that should work.
 data AnyLabel lty s lab = forall t. AnyLabel (DLabel lty s lab t)
 
 type EAnyLabel = AnyLabel EnvLabel ScalarType

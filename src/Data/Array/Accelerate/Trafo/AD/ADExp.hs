@@ -408,7 +408,7 @@ captureEnvironmentSlice (Context toplabelenv topbindmap) (Context origlabelenv o
               in DMap.unionWithKey (error "captureEnvironmentSlice: Context at usage of primal bundle contains keys already defined in primal computation")
                                    newbindmap rebounddiff)
   where
-    collect :: Maybe (EAnyLabel lab) -> env A.:> env' -> ELabVal lab env -> Exists (TupR (Product (EDLabel lab) (A.ExpVar env')))
+    collect :: Eq lab => Maybe (EAnyLabel lab) -> env A.:> env' -> ELabVal lab env -> Exists (TupR (Product (EDLabel lab) (A.ExpVar env')))
     collect _ _ LEmpty = Exists TupRunit
     collect barrier w (LPush labelenv lab)
       | Just (AnyLabel b) <- barrier, Just Refl <- geq lab b = Exists TupRunit
