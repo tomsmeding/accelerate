@@ -16,9 +16,7 @@ module Data.Array.Accelerate.Trafo.AD.ADExp (
 ) where
 
 import qualified Control.Monad.Writer as W
-import qualified Data.Functor.Product as Product
-import Data.Functor.Product (Product)
-import Data.GADT.Compare (GCompare, geq)
+import Data.GADT.Compare (GCompare)
 import Data.List (intercalate, sortOn)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
@@ -370,68 +368,6 @@ collectIndexed (Context labelenv bindmap) nodemap =
                            in DMap.insertWith (<>) lab (IndexInstantiators [IndexInstantiator smartSnd])
                                               (DMap.map (weakenInst itemtype) mp))
                           (Pair restype expr (Pair itemtype adjexp idxexp))
-
-data EnvCapture env lab =
-    forall tmp.
-        EnvCapture -- Collects temporaries into a tuple
-                   (A.ExpVars env tmp)
-                   -- Consumes the tuple and reproduces the labels in a new let-environment
-                   (EnvInstantiator lab tmp)
-
--- Given a new context, and pointers into that context reconstructing the temp
--- tuple, returns a new bindmap that binds the previous tuple labels to the new
--- locations.
--- Precondition: the given context must contain all scalar labels that were in
--- the non-captured part of the environment used to construct the EnvCapture.
-data EnvInstantiator lab tmp =
-    EnvInstantiator (forall env1.
-                     EContext lab env1
-                  -> A.ExpVars env1 tmp
-                  -> DMap (EDLabelN (PDExp lab)) (TupR (EDLabel lab)))
-
-captureEnvironmentSlice :: EContext Int topenv -> EContext Int env -> EnvCapture env Int
-captureEnvironmentSlice (Context toplabelenv topbindmap) (Context origlabelenv origbindmap)
-  | let barrierLab = case toplabelenv of
-                       LEmpty -> Nothing
-                       LPush _ lab -> Just (AnyLabel lab)
-  , Exists origpairs <- collect barrierLab A.weakenId origlabelenv
-  = let origdiffmap = origbindmap `DMap.difference` topbindmap
-    in EnvCapture
-          (fmapTupR productSnd origpairs)
-          (EnvInstantiator $ \(Context newlabelenv newbindmap) pointers ->
-              let oldnewmap =  -- only the captured part
-                    DMap.fromList $
-                      tupRtoList (\(Product.Pair origlab newlab) -> origlab :=> newlab) $
-                        zipWithTupR (\origlab (A.Var _ idx) -> Product.Pair origlab (prjL idx newlabelenv))
-                                    (fmapTupR productFst origpairs) pointers
-                  -- rebind the variables in the captured part to the new scalar labels
-                  rebounddiff = DMap.map (fmapTupR (\lab -> fromMaybe lab (DMap.lookup lab oldnewmap))) origdiffmap
-              in DMap.unionWithKey (error "captureEnvironmentSlice: Context at usage of primal bundle contains keys already defined in primal computation")
-                                   newbindmap rebounddiff)
-  where
-    collect :: Eq lab => Maybe (EAnyLabel lab) -> env A.:> env' -> ELabVal lab env -> Exists (TupR (Product (EDLabel lab) (A.ExpVar env')))
-    collect _ _ LEmpty = Exists TupRunit
-    collect barrier w (LPush labelenv lab)
-      | Just (AnyLabel b) <- barrier, Just Refl <- geq lab b = Exists TupRunit
-      | Exists tup <- collect barrier (A.weakenSucc w) labelenv =
-          Exists (TupRpair tup (TupRsingle (Product.Pair lab (A.Var (labelType lab) (w A.>:> ZeroIdx)))))
-
-    zipWithTupR :: (forall t'. s1 t' -> s2 t' -> s t') -> TupR s1 t -> TupR s2 t -> TupR s t
-    zipWithTupR _ TupRunit TupRunit = TupRunit
-    zipWithTupR f (TupRsingle a) (TupRsingle b) = TupRsingle (f a b)
-    zipWithTupR f (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (zipWithTupR f a1 b1) (zipWithTupR f a2 b2)
-    zipWithTupR _ _ _ = error "impossible GADTs"
-
-    tupRtoList :: (forall t'. s t' -> a) -> TupR s t -> [a]
-    tupRtoList _ TupRunit = []
-    tupRtoList f (TupRsingle x) = [f x]
-    tupRtoList f (TupRpair t1 t2) = tupRtoList f t1 ++ tupRtoList f t2
-
-    productFst :: Product f g t -> f t
-    productFst (Product.Pair x _) = x
-
-    productSnd :: Product f g t -> g t
-    productSnd (Product.Pair _ x) = x
 
 inlineAvarLabels :: Ord alab
                  => TupR (ADLabelNS alab) fv
