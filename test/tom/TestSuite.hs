@@ -159,6 +159,21 @@ prop_acond_1 = compareAD' nil sized_vec $ \() a ->
       A.T2 a1 _ = A.acond (A.the (A.sum a) A.> 0) (A.T2 a b) (A.T2 b a)
   in A.sum (A.map (\x -> x * A.toFloating (A.indexHead (A.shape a1))) b)
 
+-- This property, as well as prop_acond_2b, test ATTEMPT TO that Cond isn't
+-- over-eager in finding the contents of its branches.
+-- The tests apparently don't test well enough, because they don't find the bug.
+prop_acond_2a :: Property
+prop_acond_2a = compareAD' nil sized_vec $ \() x ->
+  let a = A.map (2*) x
+      y = A.acond (A.the (A.sum x) A.<= 2) (A.map (+1) a) (A.map (subtract 1) (A.map (2*) a))
+  in A.sum (A.zipWith (*) a y)
+
+prop_acond_2b :: Property
+prop_acond_2b = compareAD' nil sized_vec $ \() x ->
+  let a = A.map (2*) x
+      y = A.acond (A.the (A.sum x) A.<= 2) (A.map (+1) a) (A.map (subtract 1) (A.map (2*) a))
+  in A.sum (A.zipWith (*) y a)
+
 prop_map :: Property
 prop_map = compareAD' nil sized_vec $ \() a -> A.sum (A.map (*3) a)
 
