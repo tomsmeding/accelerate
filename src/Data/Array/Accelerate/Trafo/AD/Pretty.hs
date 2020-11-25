@@ -114,7 +114,7 @@ layoutExp se _ (Pair _ e1 e2) =
     tuple [layoutExp se 0 e1, layoutExp se 0 e2]
 layoutExp _ _ Nil =
     string "()"
-layoutExp se d (Cond _ c t e) =
+layoutExp se d (Cond _ c _ t _ e) =
     parenthesise (d > 10) $
         lprefix "cond "
             (lseq' [layoutExp se 11 c

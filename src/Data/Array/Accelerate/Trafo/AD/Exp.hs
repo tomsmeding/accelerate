@@ -14,6 +14,7 @@ module Data.Array.Accelerate.Trafo.AD.Exp (
 import Data.Dependent.Map (DMap)
 import Data.List (intercalate)
 import Data.GADT.Show
+import Data.Set (Set)
 
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Shape (shapeType, ShapeR)
@@ -59,8 +60,10 @@ data OpenExp env aenv lab alab args tenv t where
 
     Cond    :: TypeR a
             -> OpenExp env aenv lab alab args tenv A.PrimBool
-            -> OpenExp env aenv lab alab args tenv a
-            -> OpenExp env aenv lab alab args tenv a
+            -> Maybe (Set (EAnyLabelN lab))           -- nodes in the then-branch
+            -> OpenExp env aenv lab alab args tenv a  -- then-branch
+            -> Maybe (Set (EAnyLabelN lab))           -- nodes in the else-branch
+            -> OpenExp env aenv lab alab args tenv a  -- else-branch
             -> OpenExp env aenv lab alab args tenv a
 
     Shape   :: Either (A.ArrayVar aenv (Array sh e))
@@ -166,7 +169,7 @@ showsExp se _ (Pair _ e1 e2) =
         showsExp se 0 e2 . showString ")"
 showsExp _ _ Nil =
     showString "()"
-showsExp se d (Cond _ c t e) =
+showsExp se d (Cond _ c _ t _ e) =
     showParen (d > 10) $
         showString "cond " .
             showsExp se 11 c . showString " " .
@@ -259,7 +262,7 @@ etypeOf (PrimApp ty _ _) = ty
 etypeOf (PrimConst c) = TupRsingle (SingleScalarType (A.primConstType c))
 etypeOf (Pair ty _ _) = ty
 etypeOf Nil = TupRunit
-etypeOf (Cond ty _ _ _) = ty
+etypeOf (Cond ty _ _ _ _ _) = ty
 etypeOf (Shape (Left (A.Var (ArrayR sht _) _))) = shapeType sht
 etypeOf (Shape (Right (DLabel (ArrayR sht _) _))) = shapeType sht
 etypeOf (Index (Left (A.Var (ArrayR _ ty) _)) _) = ty
@@ -378,7 +381,8 @@ generaliseLab (PrimApp ty op ex) = PrimApp ty op (generaliseLab ex)
 generaliseLab (PrimConst c) = PrimConst c
 generaliseLab (Pair ty e1 e2) = Pair ty (generaliseLab e1) (generaliseLab e2)
 generaliseLab Nil = Nil
-generaliseLab (Cond ty e1 e2 e3) = Cond ty (generaliseLab e1) (generaliseLab e2) (generaliseLab e3)
+generaliseLab (Cond ty e1 Nothing e2 Nothing e3) = Cond ty (generaliseLab e1) Nothing (generaliseLab e2) Nothing (generaliseLab e3)
+generaliseLab (Cond _ _ _ _ _ _) = error "generaliseLab: Cond with embedded label sets found"
 generaliseLab (Shape ref) = Shape ref
 generaliseLab (Index ref (Left e)) = Index ref (Left (generaliseLab e))
 generaliseLab (Index _ (Right _)) = error "generaliseLab: Index with label index found"
@@ -398,7 +402,7 @@ generaliseLabA (PrimApp ty op ex) = PrimApp ty op (generaliseLabA ex)
 generaliseLabA (PrimConst c) = PrimConst c
 generaliseLabA (Pair ty e1 e2) = Pair ty (generaliseLabA e1) (generaliseLabA e2)
 generaliseLabA Nil = Nil
-generaliseLabA (Cond ty e1 e2 e3) = Cond ty (generaliseLabA e1) (generaliseLabA e2) (generaliseLabA e3)
+generaliseLabA (Cond ty e1 ns2 e2 ns3 e3) = Cond ty (generaliseLabA e1) ns2 (generaliseLabA e2) ns3 (generaliseLabA e3)
 generaliseLabA (Shape (Left avar)) = Shape (Left avar)
 generaliseLabA (Shape (Right _)) = error "generaliseLabA: Shape with label found"
 generaliseLabA (Index (Left avar) e) = Index (Left avar) (either (Left . generaliseLabA) Right e)
@@ -467,7 +471,7 @@ sinkExp k (PrimApp ty op e) = PrimApp ty op (sinkExp k e)
 sinkExp _ (PrimConst c) = PrimConst c
 sinkExp k (Pair ty e1 e2) = Pair ty (sinkExp k e1) (sinkExp k e2)
 sinkExp _ Nil = Nil
-sinkExp k (Cond ty c t e) = Cond ty (sinkExp k c) (sinkExp k t) (sinkExp k e)
+sinkExp k (Cond ty c nst t nse e) = Cond ty (sinkExp k c) nst (sinkExp k t) nse (sinkExp k e)
 sinkExp _ (Shape var) = Shape var
 sinkExp k (Index var idx) = Index var (either (Left . sinkExp k) Right idx)
 sinkExp k (ShapeSize sht e) = ShapeSize sht (sinkExp k e)
@@ -528,7 +532,7 @@ expALabels (PrimApp _ _ e) = expALabels e
 expALabels (PrimConst _) = []
 expALabels (Pair _ e1 e2) = expALabels e1 ++ expALabels e2
 expALabels Nil = []
-expALabels (Cond _ c t e) = expALabels c ++ expALabels t ++ expALabels e
+expALabels (Cond _ c _ t _ e) = expALabels c ++ expALabels t ++ expALabels e
 expALabels (Shape var) = either (const []) (pure . AnyLabel) var
 expALabels (Index var idx) = either (const []) (pure . AnyLabel) var ++ either expALabels (const []) idx
 expALabels (ShapeSize _ e) = expALabels e
@@ -550,7 +554,7 @@ expHasIndex (PrimApp _ _ e) = expHasIndex e
 expHasIndex (PrimConst _) = False
 expHasIndex (Pair _ e1 e2) = expHasIndex e1 || expHasIndex e2
 expHasIndex Nil = False
-expHasIndex (Cond _ c t e) = expHasIndex c || expHasIndex t || expHasIndex e
+expHasIndex (Cond _ c _ t _ e) = expHasIndex c || expHasIndex t || expHasIndex e
 expHasIndex (Shape _) = False
 expHasIndex (Index _ _) = True
 expHasIndex (ShapeSize _ e) = expHasIndex e

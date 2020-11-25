@@ -95,7 +95,7 @@ translateExp expr = case expr of
     A.Evar (A.Var rep idx) -> D.Var (A.Var rep idx)
     A.Let lhs def body -> D.Let lhs (translateExp def) (translateExp body)
     A.Nil -> D.Nil
-    A.Cond c t e -> D.Cond (A.expType t) (translateExp c) (translateExp t) (translateExp e)
+    A.Cond c t e -> D.Cond (A.expType t) (translateExp c) Nothing (translateExp t) Nothing (translateExp e)
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExp e1) (translateExp e2)
     A.Shape var -> D.Shape (Left var)
     A.Index var e -> D.Index (Left var) (Left (translateExp e))
@@ -113,7 +113,7 @@ translateExpInPVal pv expr = case expr of
         Left topvar -> D.FreeVar topvar
     A.Let lhs def body -> D.Let lhs (translateExpInPVal pv def) (translateExpInPVal (pvalPushLHS lhs pv) body)
     A.Nil -> D.Nil
-    A.Cond c t e -> D.Cond (A.expType t) (translateExpInPVal pv c) (translateExpInPVal pv t) (translateExpInPVal pv e)
+    A.Cond c t e -> D.Cond (A.expType t) (translateExpInPVal pv c) Nothing (translateExpInPVal pv t) Nothing (translateExpInPVal pv e)
     A.Pair e1 e2 -> D.Pair (A.expType expr) (translateExpInPVal pv e1) (translateExpInPVal pv e2)
     A.Shape var -> D.Shape (Left var)
     A.Index var e -> D.Index (Left var) (Left (translateExpInPVal pv e))
@@ -146,7 +146,7 @@ untranslateLHSboundExp toplhs topexpr topweak
           -> A.Let lhs' (go def w pv) (go body (fmap (A.weakenWithLHS lhs' A..>) w) (pvalPushLHS lhs' pv))
         D.Nil -> A.Nil
         D.Pair _ e1 e2 -> A.Pair (go e1 w pv) (go e2 w pv)
-        D.Cond _ e1 e2 e3 -> A.Cond (go e1 w pv) (go e2 w pv) (go e3 w pv)
+        D.Cond _ e1 _ e2 _ e3 -> A.Cond (go e1 w pv) (go e2 w pv) (go e3 w pv)
         D.Shape (Left avar) -> A.Shape avar
         D.Shape (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Shape) in array var position"
         D.Index (Left avar) (Left e) -> A.Index avar (go e w pv)
@@ -181,7 +181,7 @@ untranslateLHSboundExpA toplhs topexpr arrpv
           -> A.Let lhs' (go def pv) (go body (pvalPushLHS lhs' pv))
         D.Nil -> A.Nil
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
-        D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
+        D.Cond _ e1 _ e2 _ e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
         D.Shape (Left avar) -> A.Shape (fromJust (D.eCheckLocalP' matchArrayR avar arrpv))
         D.Shape (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
         D.Index (Left avar) (Left e) -> A.Index (fromJust (D.eCheckLocalP' matchArrayR avar arrpv)) (go e pv)

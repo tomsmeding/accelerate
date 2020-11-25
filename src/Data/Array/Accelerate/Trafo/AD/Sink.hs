@@ -28,7 +28,7 @@ sinkExpAenv k (PrimApp ty op e) = PrimApp ty op (sinkExpAenv k e)
 sinkExpAenv _ (PrimConst c) = PrimConst c
 sinkExpAenv k (Pair ty e1 e2) = Pair ty (sinkExpAenv k e1) (sinkExpAenv k e2)
 sinkExpAenv _ Nil = Nil
-sinkExpAenv k (Cond ty c t e) = Cond ty (sinkExpAenv k c) (sinkExpAenv k t) (sinkExpAenv k e)
+sinkExpAenv k (Cond ty c nst t nse e) = Cond ty (sinkExpAenv k c) nst (sinkExpAenv k t) nse (sinkExpAenv k e)
 sinkExpAenv k (Shape (Left (A.Var sht idx))) = Shape (Left (A.Var sht (k A.>:> idx)))
 sinkExpAenv _ (Shape (Right lab)) = Shape (Right lab)
 sinkExpAenv k (Index (Left (A.Var sht idx)) idxe) = Index (Left (A.Var sht (k A.>:> idx))) (either (Left . sinkExpAenv k) Right idxe)
@@ -97,7 +97,7 @@ eCheckClosedInTagval tv expr = case expr of
     PrimConst c -> Just (PrimConst c)
     Pair ty e1 e2 -> Pair ty <$> eCheckClosedInTagval tv e1 <*> eCheckClosedInTagval tv e2
     Nil -> Just Nil
-    Cond ty c t e -> Cond ty <$> eCheckClosedInTagval tv c <*> eCheckClosedInTagval tv t <*> eCheckClosedInTagval tv e
+    Cond ty c nst t nse e -> Cond ty <$> eCheckClosedInTagval tv c <*> return nst <*> eCheckClosedInTagval tv t <*> return nse <*> eCheckClosedInTagval tv e
     Shape avar -> Just (Shape avar)
     Index avar (Right ls) -> Just (Index avar (Right ls))
     Index avar (Left e) -> Index avar . Left <$> eCheckClosedInTagval tv e
@@ -124,7 +124,7 @@ eCheckAClosedInTagval tv expr = case expr of
     Index (Left var) idx -> Index <$> (Left <$> aCheckLocal var tv) <*> either (fmap Left . eCheckAClosedInTagval tv) (Just . Right) idx
     Index (Right _) _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
     ShapeSize sht e -> ShapeSize sht <$> eCheckAClosedInTagval tv e
-    Cond ty c t e -> Cond ty <$> eCheckAClosedInTagval tv c <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
+    Cond ty c nst t nse e -> Cond ty <$> eCheckAClosedInTagval tv c <*> return nst <*> eCheckAClosedInTagval tv t <*> return nse <*> eCheckAClosedInTagval tv e
     Get ty ti e -> Get ty ti <$> eCheckAClosedInTagval tv e
     Undef ty -> Just (Undef ty)
     Let lhs rhs e -> Let lhs <$> eCheckAClosedInTagval tv rhs <*> eCheckAClosedInTagval tv e

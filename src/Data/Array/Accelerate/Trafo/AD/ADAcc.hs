@@ -1150,10 +1150,12 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                    (ELPlain (Lam (A.LeftHandSidePair shlhs (A.LeftHandSideSingle scalarType))
                                  (Body (Cond elttype
                                              (smartGt singleType (Var (A.Var scalarType ZeroIdx)) (Const scalarType 0))
+                                             Nothing
                                              (Index (Left (A.Var ty ZeroIdx))
                                                     (Left (smartPair
                                                             (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
                                                             (smartSub numType (Var (A.Var scalarType ZeroIdx)) (Const scalarType 1)))))
+                                             Nothing
                                              prefix)))))
     smartCons _ _ = error "impossible GADTs"
 
@@ -1306,7 +1308,7 @@ indexingContributions templab idxInstMap =
           Cond (etypeOf e1)
                (PrimApp (TupRsingle scalarType) (A.PrimLt sty)
                         (smartPair (smartSnd subject) (zeroForType ty)))
-               e1 e2
+               Nothing e1 Nothing e2
         _ -> e2  -- if there is no head, then it certainly isn't negative
 
 arrayPlus :: OpenAcc aenv lab alab args (Array sh t)
@@ -1414,7 +1416,9 @@ sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
       Let slicelhs (sinkExp (A.weakenWithLHS indexlhs) slexpr) $
           Cond eltty
                (genCond slix indexvars slicevars)
+               Nothing
                (Index (Left adjvar) (Left (evars (indexSlice slix indexvars))))
+               Nothing
                (zeroForType eltty)
   where
     indexSlice :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env sl
