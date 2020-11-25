@@ -1,10 +1,12 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.Common where
 
 import Control.Monad.State.Strict
@@ -13,14 +15,19 @@ import Data.List (intercalate, sortOn)
 import Data.Dependent.Map (DMap)
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Sum (DSum(..))
+import Data.Functor.Product (Product)
+import qualified Data.Functor.Product as Product
 import Data.GADT.Compare
 import Data.GADT.Show
+import Data.Maybe (fromMaybe)
 import Data.Some (Some, mkSome)
 import Data.Typeable ((:~:)(Refl))
 import Data.Void
 
+import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Idx
+import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Representation.Array hiding ((!!))
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
@@ -315,3 +322,66 @@ instance (Ord lab, GCompare s) => Ord (AnyLabel lty s lab) where
 
 instance (Show lab, forall t. Show (s t)) => Show (AnyLabel lty s lab) where
     showsPrec p (AnyLabel lab) = showParen (p > 10) (showString "AnyLabel " . showsPrec 11 lab)
+
+
+data EnvCapture s tag env lab =
+    forall tmp.
+        EnvCapture -- Collects temporaries into a tuple
+                   (Vars s env tmp)
+                   -- Consumes the tuple and reproduces the labels in a new let-environment
+                   (EnvInstantiator s tag lab tmp)
+
+-- Given a new context, and pointers into that context reconstructing the temp
+-- tuple, returns a new bindmap that binds the previous tuple labels to the new
+-- locations.
+-- Precondition: the given context must contain all scalar labels that were in
+-- the non-captured part of the environment used to construct the EnvCapture.
+data EnvInstantiator s tag lab tmp =
+    EnvInstantiator (forall env1.
+                     Context s tag lab env1
+                  -> Vars s env1 tmp
+                  -> DMap (DLabel NodeLabel (TupR s) (PD tag lab)) (TupR (DLabel EnvLabel s lab)))
+
+captureEnvironmentSlice :: (GCompare s, GCompare (TupR s), Ord tag) => Context s tag Int topenv -> Context s tag Int env -> EnvCapture s tag env Int
+captureEnvironmentSlice (Context toplabelenv topbindmap) (Context origlabelenv origbindmap)
+  | let barrierLab = case toplabelenv of
+                       LEmpty -> Nothing
+                       LPush _ lab -> Just (AnyLabel lab)
+  , Exists origpairs <- collect barrierLab weakenId origlabelenv
+  = let origdiffmap = origbindmap `DMap.difference` topbindmap
+    in EnvCapture
+          (fmapTupR productSnd origpairs)
+          (EnvInstantiator $ \(Context newlabelenv newbindmap) pointers ->
+              let oldnewmap =  -- only the captured part
+                    DMap.fromList $
+                      tupRtoList (\(Product.Pair origlab newlab) -> origlab :=> newlab) $
+                        zipWithTupR (\origlab (Var _ idx) -> Product.Pair origlab (prjL idx newlabelenv))
+                                    (fmapTupR productFst origpairs) pointers
+                  -- rebind the variables in the captured part to the new scalar labels
+                  rebounddiff = DMap.map (fmapTupR (\lab -> fromMaybe lab (DMap.lookup lab oldnewmap))) origdiffmap
+              in DMap.unionWithKey (error "captureEnvironmentSlice: Context at usage of primal bundle contains keys already defined in primal computation")
+                                   newbindmap rebounddiff)
+  where
+    collect :: (Eq lab, GEq s) => Maybe (AnyLabel EnvLabel s lab) -> env :> env' -> LabVal EnvLabel s lab env -> Exists (TupR (Product (DLabel EnvLabel s lab) (Var s env')))
+    collect _ _ LEmpty = Exists TupRunit
+    collect barrier w (LPush labelenv lab)
+      | Just (AnyLabel b) <- barrier, Just Refl <- geq lab b = Exists TupRunit
+      | Exists tup <- collect barrier (weakenSucc w) labelenv =
+          Exists (TupRpair tup (TupRsingle (Product.Pair lab (Var (labelType lab) (w >:> ZeroIdx)))))
+
+    zipWithTupR :: (forall t'. s1 t' -> s2 t' -> s t') -> TupR s1 t -> TupR s2 t -> TupR s t
+    zipWithTupR _ TupRunit TupRunit = TupRunit
+    zipWithTupR f (TupRsingle a) (TupRsingle b) = TupRsingle (f a b)
+    zipWithTupR f (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (zipWithTupR f a1 b1) (zipWithTupR f a2 b2)
+    zipWithTupR _ _ _ = error "impossible GADTs"
+
+    tupRtoList :: (forall t'. s t' -> a) -> TupR s t -> [a]
+    tupRtoList _ TupRunit = []
+    tupRtoList f (TupRsingle x) = [f x]
+    tupRtoList f (TupRpair t1 t2) = tupRtoList f t1 ++ tupRtoList f t2
+
+    productFst :: Product f g t -> f t
+    productFst (Product.Pair x _) = x
+
+    productSnd :: Product f g t -> g t
+    productSnd (Product.Pair _ x) = x
