@@ -17,7 +17,7 @@ module Data.Array.Accelerate.Trafo.AD.ADExp (
 
 import qualified Control.Monad.Writer as W
 import Data.GADT.Compare (GCompare)
-import Data.List (intercalate, sortOn)
+import Data.List (intercalate, sortOn, foldl')
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import Data.Maybe
@@ -26,6 +26,7 @@ import Data.Set (Set)
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
+import Data.Some
 import Data.Type.Equality
 
 import qualified Data.Array.Accelerate.AST as A
@@ -76,7 +77,6 @@ genSingleIds (TupRpair t1 t2) = do
     return (Exists (A.LeftHandSidePair lhs1 lhs2), TupRpair ids1 ids2)
 
 
--- TODO: make this a data definition, not a tuple
 data Exploded aenv lab alab args tenv res =
     Exploded { exEndLabel :: EDLabelN lab res
              , exNodeMap :: DMap (EDLabelN lab) (Exp aenv lab alab args tenv)
@@ -195,7 +195,7 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
         argsRHS = varsToArgs argsVars
         closedExpr = Let paramlhs' argsRHS (sinkExp paramWeaken (generaliseArgs (generaliseLab expr)))
   , (fvlablist, labelisedExpr) <- labeliseExp alabelenv closedExpr
-  , TuplifyVars _ fvlabs _ <- tuplifyVars fvlablist
+  , Some fvlabs <- tuplifyVars fvlablist
   = -- trace ("AD result: " ++ show transformedExp) $
     evalIdGen $ do
         exploded@(Exploded reslab nodemap argLabelMap _) <- explode LEmpty labelisedExpr
@@ -298,28 +298,9 @@ labeliseExp labelenv = \ex -> let (labs, ex') = go ex
       FreeVar var -> return (FreeVar var)
       Label lab -> return (Label lab)
 
--- TODO: the first and third field of this data type seem to be unused. Remove them if so.
-data TuplifyVars lty s lab env =
-    forall env' t.
-        TuplifyVars -- Collects vars from array environment outside the lambda
-                     (forall env''. env' A.:> env'' -> A.Vars s env'' t)
-                     -- The tuple of labels bound
-                     (TupR (DLabel lty s lab) t)
-                     -- Bind the collected vars in the lambda argument
-                     (A.LeftHandSide s t env env')
-                     -- -- Lookup vars in passed tuple inside the lambda
-                     -- (forall aenv''. aenv' A.:> aenv'' -> DMap (DLabel ArrayR lab) (A.ArrayVar aenv''))
-
-tuplifyVars :: Ord lab => [AnyLabel lty s lab] -> TuplifyVars lty s lab env
-tuplifyVars [] = TuplifyVars (const TupRunit) TupRunit A.LeftHandSideUnit -- (const mempty)
-tuplifyVars (AnyLabel lab@(DLabel ty _) : rest)
-  | TuplifyVars tupexprf labs lhs {-mpf-} <- tuplifyVars rest
-  = TuplifyVars (\w -> TupRpair (tupexprf (A.weakenSucc w))
-                                (TupRsingle (A.Var ty (w A.>:> ZeroIdx))))
-                (TupRpair labs (TupRsingle lab))
-                (A.LeftHandSidePair lhs (A.LeftHandSideSingle ty))
-                -- (\w -> DMap.insert lab (A.Var ty (w A.>:> ZeroIdx))
-                --                    (mpf (A.weakenSucc w)))
+tuplifyVars :: [AnyLabel lty s lab] -> Some (TupR (DLabel lty s lab))
+tuplifyVars = foldl' (\(Some tup) (AnyLabel lab) -> Some (TupRpair tup (TupRsingle lab)))
+                     (Some TupRunit)
 
 data CollectIndexed env aenv lab alab args tenv =
     forall idxadj.
