@@ -7,6 +7,7 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Array.Accelerate.Trafo.AD.Common where
 
 import Control.Monad.State.Strict
@@ -71,6 +72,23 @@ type EDLabelN = DLabel NodeLabel TypeR
 type EDLabelNS = DLabel NodeLabel ScalarType
 type ADLabelN = DLabel NodeLabel ArraysR
 type ADLabelNS = DLabel NodeLabel ArrayR
+
+-- Convenience function like 'scalarType', except for tuple types
+class IsTuple t where tupleType :: TypeR t
+instance {-# OVERLAPPING #-} IsTuple () where tupleType = TupRunit
+instance {-# OVERLAPPING #-} (IsTuple a, IsTuple b) => IsTuple (a, b) where tupleType = TupRpair tupleType tupleType
+instance {-# OVERLAPPABLE #-} IsScalar t => IsTuple t where tupleType = TupRsingle scalarType
+
+-- Convenience function like 'scalarType', except for non-label labels
+scalarLabel :: IsScalar t => DLabel lty ScalarType () t
+scalarLabel = DLabel scalarType ()
+
+-- Convenience function like 'scalarLabel', except for tuple types
+magicLabel :: IsTuple t => DLabel lty TypeR () t
+magicLabel = DLabel tupleType ()
+
+nilLabel :: s t -> DLabel lty s () t
+nilLabel ty = DLabel ty ()
 
 
 
