@@ -328,6 +328,7 @@ prop_aindex_map_4 = compareAD' nil sized_vec $ \() a ->
                                a)
   in A.sum (A.map (\x -> x * a A.! A.I1 (A.abs (A.round x) `mod` n)) b)
 
+-- This property tests whether acond branches are only executed if the condition has the correct value.
 prop_aindex_acond_1 :: Property
 prop_aindex_acond_1 = compareAD' nil sized_vec $ \() a ->
   let A.I1 n = A.shape a
@@ -371,6 +372,8 @@ prop_cond_2 = compareADE sized_vec $ \x ->
                  (A.pi / 12 * ((2 - 2 / A.pi * (x - A.pi / 2) `fmod` (2 * pi)) ^^ (6 :: Int) - 1))
   in y * y
 
+-- This property, as well as prop_cond_3b, test that Cond isn't over-eager in finding the contents
+-- of its branches.
 prop_cond_3a :: Property
 prop_cond_3a = compareADE sized_vec $ \x ->
   let a = 2 * x
