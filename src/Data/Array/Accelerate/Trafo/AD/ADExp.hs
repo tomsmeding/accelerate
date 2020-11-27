@@ -200,6 +200,7 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
     evalIdGen $ do
         exploded@(Exploded reslab nodemap argLabelMap _) <- explode LEmpty labelisedExpr
         traceM ("exp exploded: " ++ show exploded)
+
         PrimalResult context@(Context labelenv bindmap) builder <- primal exploded
         traceM ("\nexp context in core: " ++ showContext context)
         let reslabs = bindmap DMap.! fmapLabel P reslab
@@ -313,6 +314,8 @@ data ArrLabelExpExp env aenv lab alab args tenv =
                        (OpenExp env aenv lab alab args tenv t)
                        (OpenExp env aenv lab alab args tenv sh)
 
+-- idxadj is of the form:
+-- ((...(((), (sh1, adj1)), (sh2, adj2)), ...), (shN, adjN))
 collectIndexed :: forall env aenv lab alab args tenv. (Ord lab, Ord alab, Show lab)
                => EContext lab env
                -> DMap (EDLabelN lab) (Exp aenv lab alab args tenv)  -- nodemap
