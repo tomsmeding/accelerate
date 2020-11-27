@@ -204,46 +204,45 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
         traceM ("\nexp context in core: " ++ showContext context)
         let reslabs = bindmap DMap.! fmapLabel P reslab
         case elabValFinds labelenv reslabs of
-            Just resultvars
-              | EnvCapture tmpvars (EnvInstantiator instantiator) <- captureEnvironmentSlice (Context LEmpty mempty) context -> do
-                  let primalBody = builder (evars (TupRpair resultvars tmpvars))
+            Just resultvars -> do
+              EnvCapture tmpvars (EnvInstantiator instantiator) <- return (captureEnvironmentSlice (Context LEmpty mempty) context)
+              let primalBody = builder (evars (TupRpair resultvars tmpvars))
 
-                  (Exists adjlhs, adjlabs) <- genSingleIds exprtype
-                  -- TODO: is there a neater way to unwrap the existential?
-                  LetBoundExpE tmpRestoreLHS tmpRestoreVars <- return (elhsCopy (A.varsType tmpvars))
-                  (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpvars)
-                  -- The type of the labelenv here is () |> adjoint... |> temporaries...,
-                  -- where a |> b = (a, b), infixr |>. This nested tuple is the type of
-                  -- the argument of the dual lambda.
-                  let dualLabelenv = lpushLabTup (lpushLabTup LEmpty adjlhs adjlabs) tmpRestoreLHS tmpRestoreLabs
-                      dualBindmap = instantiator (Context dualLabelenv mempty) tmpRestoreVars
-                      dualInstCtx = Context dualLabelenv dualBindmap
-                  traceM $ "invoking exp dual with context: " ++ showContext dualInstCtx
-                  let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args tenv t'
-                      adjointProducer (Context labelenv' _) =
-                        case elabValFinds labelenv' adjlabs of
-                            Just vars -> evars vars
-                            Nothing -> error "splitLambdaAD: end-node adjoint label not put in labelenv?"
-                  DualResult ctx' _ builder' <- dual exploded adjointProducer dualInstCtx
-                  case collectIndexed ctx' nodemap of
-                    CollectIndexed idxadjType idxInstantiators idxadjExpr -> do
-                        let dualBody = builder' (smartPair (produceGradient argLabelMap ctx' argsVars) idxadjExpr)
+              (Exists adjlhs, adjlabs) <- genSingleIds exprtype
+              -- TODO: is there a neater way to unwrap the existential?
+              LetBoundExpE tmpRestoreLHS tmpRestoreVars <- return (elhsCopy (A.varsType tmpvars))
+              (_, tmpRestoreLabs) <- genSingleIds (A.varsType tmpvars)
+              -- The type of the labelenv here is () |> adjoint... |> temporaries...,
+              -- where a |> b = (a, b), infixr |>. This nested tuple is the type of
+              -- the argument of the dual lambda.
+              let dualLabelenv = lpushLabTup (lpushLabTup LEmpty adjlhs adjlabs) tmpRestoreLHS tmpRestoreLabs
+                  dualBindmap = instantiator (Context dualLabelenv mempty) tmpRestoreVars
+                  dualInstCtx = Context dualLabelenv dualBindmap
+              traceM $ "invoking exp dual with context: " ++ showContext dualInstCtx
+              let adjointProducer :: EContext Int env -> OpenExp env aenv (PDExp Int) alab args tenv t'
+                  adjointProducer (Context labelenv' _) =
+                    case elabValFinds labelenv' adjlabs of
+                        Just vars -> evars vars
+                        Nothing -> error "splitLambdaAD: end-node adjoint label not put in labelenv?"
+              DualResult ctx' _ builder' <- dual exploded adjointProducer dualInstCtx
+              CollectIndexed idxadjType idxInstantiators idxadjExpr <- return (collectIndexed ctx' nodemap)
+              let dualBody = builder' (smartPair (produceGradient argLabelMap ctx' argsVars) idxadjExpr)
 
-                        -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
-                        return $ SomeSplitLambdaAD $
-                            SplitLambdaAD (\fvavars ->
-                                               Lam paramlhs'
-                                                 (Body (realiseArgs
-                                                           (inlineAvarLabels fvlabs fvavars primalBody)
-                                                           paramlhs')))
-                                          (\fvavars ->
-                                               Lam (A.LeftHandSidePair adjlhs tmpRestoreLHS)
-                                                   (Body (generaliseArgs
-                                                             (inlineAvarLabels fvlabs fvavars dualBody))))
-                                          fvlabs
-                                          (A.varsType tmpvars)
-                                          idxadjType
-                                          idxInstantiators
+              -- The primal and dual lambda expression here are inlined because of the monomorphism restriction
+              return $ SomeSplitLambdaAD $
+                  SplitLambdaAD (\fvavars ->
+                                     Lam paramlhs'
+                                       (Body (realiseArgs
+                                                 (inlineAvarLabels fvlabs fvavars primalBody)
+                                                 paramlhs')))
+                                (\fvavars ->
+                                     Lam (A.LeftHandSidePair adjlhs tmpRestoreLHS)
+                                         (Body (generaliseArgs
+                                                   (inlineAvarLabels fvlabs fvavars dualBody))))
+                                fvlabs
+                                (A.varsType tmpvars)
+                                idxadjType
+                                idxInstantiators
             _ ->
                 error "Final primal value not computed"
   | otherwise =
