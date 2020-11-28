@@ -1,13 +1,15 @@
 module Playground.Fusion where
 
 -- import qualified Prelude as P
-import Prelude (IO, print)
+import Prelude (IO, print, id)
 import Data.Array.Accelerate
 
 
 main :: IO ()
 main = do
-  print inputProgram
+  -- print inputProgram
+  print producesTransform
+  print looseMapId
 
 inputProgram :: Acc (Scalar Float)
 inputProgram =
@@ -27,3 +29,12 @@ shapeTest =
   in zipWith (+)
        (generate (shape a9) (\_ -> 1.0))
        (map (\(T2 _ tup) -> tup) a8)
+
+producesTransform :: Acc (Vector Float) -> Acc (Vector Float)
+producesTransform a =
+  zipWith (+)
+    (zipWith (\x y -> x * 2 * y) a a)
+    (map (\x -> x * x) a)
+
+looseMapId :: Acc (Vector Float) -> Acc (Vector Float)
+looseMapId a = zipWith (+) a (map id a)

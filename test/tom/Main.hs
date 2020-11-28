@@ -17,6 +17,7 @@ import qualified Logistic
 import qualified Neural
 import qualified Optimise
 import qualified Playground.Neural
+import qualified Playground.Fusion
 import qualified TestSuite
 
 
@@ -352,3 +353,4 @@ main = do
   -- Playground.Neural.main
   -- lstm
   -- convnet
+  -- Playground.Fusion.main
