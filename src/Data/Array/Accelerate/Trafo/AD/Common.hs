@@ -6,6 +6,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Array.Accelerate.Trafo.AD.Common where
@@ -38,6 +39,7 @@ data TagVal s env where
     TEmpty :: TagVal s ()
     TPush :: TagVal s env -> s t -> TagVal s (env, t)
 
+-- TODO: type LabVal lty s lab = TagVal (DLabel lty s lab)
 data LabVal lty s lab env where
     LEmpty :: LabVal lty s lab ()
     LPush :: LabVal lty s lab env -> DLabel lty s lab t -> LabVal lty s lab (env, t)
@@ -72,6 +74,14 @@ type EDLabelN = DLabel NodeLabel TypeR
 type EDLabelNS = DLabel NodeLabel ScalarType
 type ADLabelN = DLabel NodeLabel ArraysR
 type ADLabelNS = DLabel NodeLabel ArrayR
+
+-- A PartLabel is used to refer to an element of the tuple that the full label points to.
+data PartLabel lty s lab t t' = PartLabel (DLabel lty s lab t) (TupleIdx t t')
+  deriving (Show)
+
+type EPartLabelN = PartLabel NodeLabel TypeR
+type APartLabelN = PartLabel NodeLabel ArraysR
+
 
 -- Convenience function like 'scalarType', except for tuple types
 class IsTuple t where tupleType :: TypeR t
@@ -116,6 +126,8 @@ data TupleIdx t t' where
     TIHere  :: TupleIdx s s
     TILeft  :: TupleIdx a t -> TupleIdx (a, b) t
     TIRight :: TupleIdx b t -> TupleIdx (a, b) t
+
+deriving instance Show (TupleIdx t t')
 
 -- TODO: move to Shows
 showScalar :: ScalarType t -> t -> String

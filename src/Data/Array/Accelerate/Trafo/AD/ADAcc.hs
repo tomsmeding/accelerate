@@ -42,7 +42,7 @@ import Data.Array.Accelerate.Representation.Slice
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Additive
-import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD, labeliseExp, labeliseFun, inlineAvarLabels')
+import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD, labeliseExpA, labeliseFunA, inlineAvarLabels')
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as ADExp
 import Data.Array.Accelerate.Trafo.AD.Algorithms
 import Data.Array.Accelerate.Trafo.AD.Common
@@ -261,7 +261,7 @@ explode' labelenv = \case
         lab <- genId TupRunit
         return (lab, DMap.singleton lab Anil, mempty)
     Acond ty e e1 e2 -> do
-        let e' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ e
+        let e' = snd . labeliseExpA labelenv . generaliseLabA . generaliseLab $ e
         (lab1, mp1, argmp1) <- explode' labelenv e1
         (lab2, mp2, argmp2) <- explode' labelenv e2
         lab <- genId ty
@@ -299,8 +299,8 @@ explode' labelenv = \case
         -- currently, we do recompute-all for the Fold lambda, not store-all;
         -- this is not because we can't, but because I haven't implemented that
         -- yet. Also I think it may be better to not do it at all anyway.
-        let e' = snd . labeliseFun labelenv . generaliseLabFunA . generaliseLabFun $ e
-            me0' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab <$> me0
+        let e' = snd . labeliseFunA labelenv . generaliseLabFunA . generaliseLabFun $ e
+            me0' = snd . labeliseExpA labelenv . generaliseLabA . generaliseLab <$> me0
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
         let pruned = Fold ty e' me0' (Alabel lab1)
@@ -308,8 +308,8 @@ explode' labelenv = \case
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
     Backpermute ty dim f a -> do
-        let f' = snd . labeliseFun labelenv . generaliseLabFunA . generaliseLabFun $ f
-            dim' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ dim
+        let f' = snd . labeliseFunA labelenv . generaliseLabFunA . generaliseLabFun $ f
+            dim' = snd . labeliseExpA labelenv . generaliseLabA . generaliseLab $ dim
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
         let pruned = Backpermute ty dim' f' (Alabel lab1)
@@ -327,14 +327,14 @@ explode' labelenv = \case
       | SomeSplitLambdaAD f'@(SplitLambdaAD _ _ _ tmpty _ _) <- splitLambdaAD labelenv (generaliseLabFun f)
       -> do
         tmplab <- genSingleId (ArrayR sht tmpty)
-        let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
+        let she' = snd . labeliseExpA labelenv . generaliseLabA . generaliseLab $ she
         lab <- genId (TupRsingle ty)
         let pruned = Generate ty she' (ELSplit f' tmplab)
         let itemmp = DMap.singleton lab pruned
         return (lab, itemmp, DMap.empty)
     Generate _ _ ELSplit{} -> error "explode: Unexpected Generate SplitLambdaAD"
     Replicate ty slt she a -> do
-        let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
+        let she' = snd . labeliseExpA labelenv . generaliseLabA . generaliseLab $ she
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
         let pruned = Replicate ty slt she' (Alabel lab1)
@@ -342,7 +342,7 @@ explode' labelenv = \case
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
     Slice ty slt a she -> do
-        let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
+        let she' = snd . labeliseExpA labelenv . generaliseLabA . generaliseLab $ she
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
         let pruned = Slice ty slt (Alabel lab1) she'
@@ -350,7 +350,7 @@ explode' labelenv = \case
             mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
         return (lab, mp, argmp1)
     Reshape ty she a -> do
-        let she' = snd . labeliseExp labelenv . generaliseLabA . generaliseLab $ she
+        let she' = snd . labeliseExpA labelenv . generaliseLabA . generaliseLab $ she
         (lab1, mp1, argmp1) <- explode' labelenv a
         lab <- genId (TupRsingle ty)
         let pruned = Reshape ty she' (Alabel lab1)

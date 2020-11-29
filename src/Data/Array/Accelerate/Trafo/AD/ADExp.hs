@@ -10,9 +10,9 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 module Data.Array.Accelerate.Trafo.AD.ADExp (
-  reverseAD, ReverseADResE(..),
-  splitLambdaAD, labeliseFun,
-  labeliseExp, inlineAvarLabels'
+  -- reverseAD, ReverseADResE(..),
+  -- splitLambdaAD, labeliseFunA,
+  -- labeliseExpA, inlineAvarLabels'
 ) where
 
 import qualified Control.Monad.Writer as W
@@ -103,22 +103,21 @@ showArgmap argmap =
 
 -- Assumes the expression does not contain Arg
 generaliseArgs :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args' tenv t
-generaliseArgs (Const ty x) = Const ty x
-generaliseArgs (PrimApp ty op ex) = PrimApp ty op (generaliseArgs ex)
-generaliseArgs (PrimConst c) = PrimConst c
-generaliseArgs (Pair ty e1 e2) = Pair ty (generaliseArgs e1) (generaliseArgs e2)
-generaliseArgs Nil = Nil
-generaliseArgs (Cond ty e1 ns2 e2 ns3 e3) = Cond ty (generaliseArgs e1) ns2 (generaliseArgs e2) ns3 (generaliseArgs e3)
-generaliseArgs (Shape ref) = Shape ref
-generaliseArgs (Index ref idx) = Index ref (either (Left . generaliseArgs) Right idx)
-generaliseArgs (ShapeSize sht e) = ShapeSize sht (generaliseArgs e)
-generaliseArgs (Get ty path ex) = Get ty path (generaliseArgs ex)
-generaliseArgs (Undef ty) = Undef ty
+generaliseArgs (Const lab x) = Const lab x
+generaliseArgs (PrimApp lab op ex) = PrimApp lab op (generaliseArgs ex)
+generaliseArgs (PrimConst lab c) = PrimConst lab c
+generaliseArgs (Pair lab e1 e2) = Pair lab (generaliseArgs e1) (generaliseArgs e2)
+generaliseArgs (Nil lab) = Nil lab
+generaliseArgs (Cond lab e1 e2 e3) = Cond lab (generaliseArgs e1) (generaliseArgs e2) (generaliseArgs e3)
+generaliseArgs (Shape lab ref) = Shape lab ref
+generaliseArgs (Index lab ref idx) = Index lab ref (generaliseArgs idx)
+generaliseArgs (ShapeSize lab sht e) = ShapeSize lab sht (generaliseArgs e)
+generaliseArgs (Get lab path ex) = Get lab path (generaliseArgs ex)
+generaliseArgs (Undef lab) = Undef lab
 generaliseArgs (Let lhs rhs ex) = Let lhs (generaliseArgs rhs) (generaliseArgs ex)
-generaliseArgs (Var v) = Var v
-generaliseArgs (FreeVar v) = FreeVar v
+generaliseArgs (Var lab var referLab) = Var lab var referLab
+generaliseArgs (FreeVar lab var) = FreeVar lab var
 generaliseArgs (Arg _ _) = error "generaliseArgs: Arg found"
-generaliseArgs (Label labs) = Label labs
 
 data ReverseADResE aenv alab tenv t = forall env. ReverseADResE (A.ELeftHandSide t () env) (OpenExp env aenv (PDExp Int) alab () tenv t)
 
@@ -194,7 +193,7 @@ splitLambdaAD alabelenv origfun@(Lam paramlhs (Body expr))
   , let argsVars = varsgen A.weakenId
         argsRHS = varsToArgs argsVars
         closedExpr = Let paramlhs' argsRHS (sinkExp paramWeaken (generaliseArgs (generaliseLab expr)))
-  , (fvlablist, labelisedExpr) <- labeliseExp alabelenv closedExpr
+  , (fvlablist, labelisedExpr) <- labeliseExpA alabelenv closedExpr
   , Some fvlabs <- tuplifyVars fvlablist
   = -- trace ("AD result: " ++ show transformedExp) $
     evalIdGen $ do
@@ -255,48 +254,47 @@ splitLambdaAD _ _ =
 -- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.
 -- The list of labels is deduplicated.
 -- Asserts that there are no array labels yet in the expression, and resets the array environment.
-labeliseFun :: Ord alab
+labeliseFunA :: Ord alab
             => LabVal NodeLabel ArrayR alab aenv
             -> OpenFun env aenv lab alab' tenv t
             -> ([AAnyLabelNS alab], OpenFun env aenv' lab alab tenv t)
-labeliseFun labelenv (Lam lhs fun) = Lam lhs <$> labeliseFun labelenv fun
-labeliseFun labelenv (Body ex) = Body <$> labeliseExp labelenv ex
+labeliseFunA labelenv (Lam lhs fun) = Lam lhs <$> labeliseFunA labelenv fun
+labeliseFunA labelenv (Body ex) = Body <$> labeliseExpA labelenv ex
 
 -- Replaces all array variables by their labels in the array environment, and additionally returns the list of labels thus inserted.
 -- The list of labels is deduplicated.
 -- Asserts that there are no array labels yet in the expression, and resets the array environment.
-labeliseExp :: Ord alab
+labeliseExpA :: Ord alab
             => LabVal NodeLabel ArrayR alab aenv
             -> OpenExp env aenv lab alab' args tenv t
             -> ([AAnyLabelNS alab], OpenExp env aenv' lab alab args tenv t)
-labeliseExp labelenv = \ex -> let (labs, ex') = go ex
-                              in (sortUniq labs, ex')
+labeliseExpA labelenv = \ex -> let (labs, ex') = go ex
+                               in (sortUniq labs, ex')
   where
     go ex = case ex of
-      Const ty x -> return (Const ty x)
-      PrimApp ty op e -> PrimApp ty op <$> labeliseExp labelenv e
-      PrimConst c -> return (PrimConst c)
-      Pair ty e1 e2 -> Pair ty <$> labeliseExp labelenv e1 <*> labeliseExp labelenv e2
-      Nil -> return Nil
-      Cond ty e1 ns2 e2 ns3 e3 -> Cond ty <$> labeliseExp labelenv e1 <*> return ns2 <*> labeliseExp labelenv e2 <*> return ns3 <*> labeliseExp labelenv e3
-      Shape (Left (A.Var _ idx)) -> do
-          let lab = prjL idx labelenv
-          W.tell [AnyLabel lab]
-          return (Shape (Right lab))
-      Shape (Right _) -> error "Unexpected Shape(Label) in labeliseExp"
-      Index (Left (A.Var _ idx)) idxe -> do
-          let lab = prjL idx labelenv
-          W.tell [AnyLabel lab]
-          Index (Right lab) <$> either (fmap Left . labeliseExp labelenv) (return . Right) idxe
-      Index (Right _) _ -> error "Unexpected Index(Label) in labeliseExp"
-      ShapeSize sht e -> ShapeSize sht <$> labeliseExp labelenv e
-      Get ty ti e -> Get ty ti <$> labeliseExp labelenv e
-      Undef ty -> return (Undef ty)
-      Let lhs rhs e -> Let lhs <$> labeliseExp labelenv rhs <*> labeliseExp labelenv e
-      Arg ty idx -> return (Arg ty idx)
-      Var var -> return (Var var)
-      FreeVar var -> return (FreeVar var)
-      Label lab -> return (Label lab)
+      Const lab x -> return (Const lab x)
+      PrimApp lab op e -> PrimApp lab op <$> labeliseExpA labelenv e
+      PrimConst lab c -> return (PrimConst lab c)
+      Pair lab e1 e2 -> Pair lab <$> labeliseExpA labelenv e1 <*> labeliseExpA labelenv e2
+      Nil lab -> return (Nil lab)
+      Cond lab e1 e2 e3 -> Cond lab <$> labeliseExpA labelenv e1 <*> labeliseExpA labelenv e2 <*> labeliseExpA labelenv e3
+      Shape lab (Left (A.Var _ idx)) -> do
+          let alab = prjL idx labelenv
+          W.tell [AnyLabel alab]
+          return (Shape lab (Right alab))
+      Shape _ (Right _) -> error "Unexpected Shape(Label) in labeliseExpA"
+      Index lab (Left (A.Var _ idx)) idxe -> do
+          let alab = prjL idx labelenv
+          W.tell [AnyLabel alab]
+          Index lab (Right alab) <$> labeliseExpA labelenv idxe
+      Index _ (Right _) _ -> error "Unexpected Index(Label) in labeliseExpA"
+      ShapeSize lab sht e -> ShapeSize lab sht <$> labeliseExpA labelenv e
+      Get lab ti e -> Get lab ti <$> labeliseExpA labelenv e
+      Undef lab -> return (Undef lab)
+      Let lhs rhs e -> Let lhs <$> labeliseExpA labelenv rhs <*> labeliseExpA labelenv e
+      Arg lab idx -> return (Arg lab idx)
+      Var lab var referLab -> return (Var lab var referLab)
+      FreeVar lab var -> return (FreeVar lab var)
 
 tuplifyVars :: [AnyLabel lty s lab] -> Some (TupR (DLabel lty s lab))
 tuplifyVars = foldl' (\(Some tup) (AnyLabel lab) -> Some (TupRpair tup (TupRsingle lab)))
@@ -314,6 +312,7 @@ data ArrLabelExpExp env aenv lab alab args tenv =
                        (OpenExp env aenv lab alab args tenv t)
                        (OpenExp env aenv lab alab args tenv sh)
 
+{-  -- collectIndexed
 -- idxadj is of the form:
 -- ((...(((), (sh1, adj1)), (sh2, adj2)), ...), (shN, adjN))
 collectIndexed :: forall env aenv lab alab args tenv. (Ord lab, Ord alab, Show lab)
@@ -351,6 +350,7 @@ collectIndexed (Context labelenv bindmap) nodemap =
                            in DMap.insertWith (<>) lab (IndexInstantiators [IndexInstantiator smartSnd])
                                               (DMap.map (weakenInst itemtype) mp))
                           (Pair restype expr (Pair itemtype adjexp idxexp))
+-}
 
 inlineAvarLabels :: Ord alab
                  => TupR (ADLabelNS alab) fv
@@ -377,24 +377,23 @@ inlineAvarLabels' :: (forall t'. ADLabelNS alab t' -> A.ArrayVar aenv' t')
                   -> OpenExp env aenv lab alab args tenv t
                   -> OpenExp env aenv' lab alab' args tenv t
 inlineAvarLabels' f = \case
-    Const ty x -> Const ty x
-    PrimApp ty op ex -> PrimApp ty op (inlineAvarLabels' f ex)
-    PrimConst c -> PrimConst c
-    Pair ty e1 e2 -> Pair ty (inlineAvarLabels' f e1) (inlineAvarLabels' f e2)
-    Nil -> Nil
-    Cond ty e1 ns2 e2 ns3 e3 -> Cond ty (inlineAvarLabels' f e1) ns2 (inlineAvarLabels' f e2) ns3 (inlineAvarLabels' f e3)
-    Shape (Right lab) -> Shape (Left (f lab))
-    Shape (Left _) -> error "inlineAvarLabels': Array variable found in labelised expression (Shape)"
-    ShapeSize sht e -> ShapeSize sht (inlineAvarLabels' f e)
-    Index (Right lab) idxe -> Index (Left (f lab)) (either (Left . inlineAvarLabels' f) Right idxe)
-    Index (Left _) _ -> error "inlineAvarLabels': Array variable found in labelised expression (Index)"
-    Get ty tidx ex -> Get ty tidx (inlineAvarLabels' f ex)
-    Undef ty -> Undef ty
+    Const lab x -> Const lab x
+    PrimApp lab op ex -> PrimApp lab op (inlineAvarLabels' f ex)
+    PrimConst lab c -> PrimConst lab c
+    Pair lab e1 e2 -> Pair lab (inlineAvarLabels' f e1) (inlineAvarLabels' f e2)
+    Nil lab -> Nil lab
+    Cond lab e1 e2 e3 -> Cond lab (inlineAvarLabels' f e1) (inlineAvarLabels' f e2) (inlineAvarLabels' f e3)
+    Shape lab (Right alab) -> Shape lab (Left (f alab))
+    Shape _ (Left _) -> error "inlineAvarLabels': Array variable found in labelised expression (Shape)"
+    ShapeSize lab sht e -> ShapeSize lab sht (inlineAvarLabels' f e)
+    Index lab (Right alab) idxe -> Index lab (Left (f alab)) (inlineAvarLabels' f idxe)
+    Index _ (Left _) _ -> error "inlineAvarLabels': Array variable found in labelised expression (Index)"
+    Get lab tidx ex -> Get lab tidx (inlineAvarLabels' f ex)
+    Undef lab -> Undef lab
     Let lhs rhs ex -> Let lhs (inlineAvarLabels' f rhs) (inlineAvarLabels' f ex)
-    Var v -> Var v
-    FreeVar v -> FreeVar v
-    Arg ty idx -> Arg ty idx
-    Label l -> Label l
+    Var lab v referLab -> Var lab v referLab
+    FreeVar lab v -> FreeVar lab v
+    Arg lab idx -> Arg lab idx
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
@@ -403,138 +402,60 @@ realiseArgs = \expr lhs -> go A.weakenId (A.weakenWithLHS lhs) expr
   where
     go :: args A.:> env' -> env A.:> env' -> OpenExp env aenv lab alab args tenv res -> OpenExp env' aenv lab alab () tenv res
     go argWeaken varWeaken expr = case expr of
-        Const ty x -> Const ty x
-        PrimApp ty op ex -> PrimApp ty op (go argWeaken varWeaken ex)
-        PrimConst c -> PrimConst c
-        Pair ty e1 e2 -> Pair ty (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
-        Nil -> Nil
-        Cond ty e1 ns2 e2 ns3 e3 -> Cond ty (go argWeaken varWeaken e1) ns2 (go argWeaken varWeaken e2) ns3 (go argWeaken varWeaken e3)
-        Shape ref -> Shape ref
-        Index ref idxe -> Index ref (either (Left . go argWeaken varWeaken) Right idxe)
-        ShapeSize sht e -> ShapeSize sht (go argWeaken varWeaken e)
-        Get ty tidx ex -> Get ty tidx (go argWeaken varWeaken ex)
-        Undef ty -> Undef ty
+        Const lab x -> Const lab x
+        PrimApp lab op ex -> PrimApp lab op (go argWeaken varWeaken ex)
+        PrimConst lab c -> PrimConst lab c
+        Pair lab e1 e2 -> Pair lab (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
+        Nil lab -> Nil lab
+        Cond lab e1 e2 e3 -> Cond lab (go argWeaken varWeaken e1) (go argWeaken varWeaken e2) (go argWeaken varWeaken e3)
+        Shape lab ref -> Shape lab ref
+        Index lab ref idxe -> Index lab ref (go argWeaken varWeaken idxe)
+        ShapeSize lab sht e -> ShapeSize lab sht (go argWeaken varWeaken e)
+        Get lab tidx ex -> Get lab tidx (go argWeaken varWeaken ex)
+        Undef lab -> Undef lab
         Let lhs rhs ex
           | A.Exists lhs' <- rebuildLHS lhs ->
               Let lhs' (go argWeaken varWeaken rhs)
                   (go (A.weakenWithLHS lhs' A..> argWeaken) (A.sinkWithLHS lhs lhs' varWeaken) ex)
-        Var (A.Var ty idx) -> Var (A.Var ty (varWeaken A.>:> idx))
-        FreeVar var -> FreeVar var
-        Arg ty idx -> Var (A.Var ty (argWeaken A.>:> idx))
-        Label _ -> error "realiseArgs: unexpected Label"
+        Var lab (A.Var ty idx) referLab -> Var lab (A.Var ty (varWeaken A.>:> idx)) referLab
+        FreeVar lab var -> FreeVar lab var
+        Arg lab idx -> Var (A.Var lab (argWeaken A.>:> idx))
 
--- Map will NOT contain Let or Var. Note that it may contain Label due to Let-bindings.
-explode :: Show alab => LabVal NodeLabel ScalarType Int env -> OpenExp env aenv unused alab args tenv t -> IdGen (Exploded aenv Int alab args tenv t)
-explode labelenv e =
-    trace ("exp explode: exploding " ++ showsExp (ShowEnv (const "L?") show 0 [] []) 9 e "") $
-    explode' labelenv e
+data AnyPartLabel lty s lab t' = forall t. AnyPartLabel (PartLabel lty s lab t t')
 
--- The labelenv in explode contains the node labels in scope. This means that
--- it contains tuple labels; however, a LabVal must contain scalar labels, thus
--- the label numbers are wrapped in scalar DLabel's instead of tuple labels.
--- This works out because any node that enters the environment does so via a
--- Let binding, which forcibly destructures any tuples to scalar-typed values.
--- After explode finishes, this LabVal is thrown away.
-explode' :: LabVal NodeLabel ScalarType Int env -> OpenExp env aenv unused alab args tenv t -> IdGen (Exploded aenv Int alab args tenv t)
-explode' env = \case
-    Const ty x -> do
-        lab <- genId (TupRsingle ty)
-        return (Exploded lab (DMap.singleton lab (Const ty x)) mempty (Set.singleton (AnyLabel lab)))
-    PrimApp ty f e -> do
-        Exploded lab1 mp1 argmp subtree <- explode' env e
-        lab <- genId ty
-        let pruned = PrimApp ty f (Label lab1)
-        let itemmp = DMap.singleton lab pruned
-            mp = DMap.unionWithKey (error "explode: Overlapping arg's") mp1 itemmp
-        return (Exploded lab mp argmp (Set.insert (AnyLabel lab) subtree))
-    PrimConst c -> do
-        lab <- genId (TupRsingle (SingleScalarType (A.primConstType c)))
-        return (Exploded lab (DMap.singleton lab (PrimConst c)) mempty (Set.singleton (AnyLabel lab)))
-    Pair ty e1 e2 -> do
-        Exploded lab1 mp1 argmp1 subtree1 <- explode' env e1
-        Exploded lab2 mp2 argmp2 subtree2 <- explode' env e2
-        lab <- genId ty
-        let pruned = Pair ty (Label lab1) (Label lab2)
-        let itemmp = DMap.singleton lab pruned
-            mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mp2, itemmp]
-            argmp = DMap.unionWithKey (error "explode: Overlapping arg's") argmp1 argmp2
-        return (Exploded lab mp argmp (Set.insert (AnyLabel lab) (subtree1 <> subtree2)))
-    Nil -> do
-        lab <- genId TupRunit
-        return (Exploded lab (DMap.singleton lab Nil) mempty (Set.singleton (AnyLabel lab)))
-    Cond ty e1 Nothing e2 Nothing e3 -> do
-        Exploded lab1 mp1 argmp1 subtree1 <- explode' env e1
-        Exploded lab2 mp2 argmp2 subtree2 <- explode' env e2
-        Exploded lab3 mp3 argmp3 subtree3 <- explode' env e3
-        lab <- genId ty
-        -- Note: This is the place where we use those subtrees, namely to tell Cond what its branches are.
-        let pruned = Cond ty (Label lab1) (Just subtree2) (Label lab2) (Just subtree3) (Label lab3)
-        let itemmp = DMap.singleton lab pruned
-            mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mp2, mp3, itemmp]
-            argmp = DMap.unionsWithKey (error "explode: Overlapping arg's") [argmp1, argmp2, argmp3]
-        return (Exploded lab mp argmp (Set.insert (AnyLabel lab) (subtree1 <> subtree2 <> subtree3)))
-    Cond _ _ _ _ _ _ -> error "explode: Unexpected Cond with embedded node sets"
-    Shape (Left avar@(A.Var (ArrayR sht _) _)) -> do
-        lab <- genId (shapeType sht)
-        return (Exploded lab (DMap.singleton lab (Shape (Left avar))) mempty (Set.singleton (AnyLabel lab)))
-    Shape (Right alab@(DLabel (ArrayR sht _) _)) -> do
-        lab <- genId (shapeType sht)
-        return (Exploded lab (DMap.singleton lab (Shape (Right alab))) mempty (Set.singleton (AnyLabel lab)))
-    Index (Left avar@(A.Var (ArrayR _ ty) _)) (Left she) -> do
-        Exploded lab1 mp1 argmp1 subtree1 <- explode' env she
-        lab <- genId ty
-        backuplab <- genId (etypeOf she)
-        let pruned = Index (Left avar) (Right (lab1, backuplab))
-        let itemmp = DMap.singleton lab pruned
-            mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
-        return (Exploded lab mp argmp1 (Set.insert (AnyLabel lab) subtree1))
-    Index (Right alab@(DLabel (ArrayR _ ty) _)) (Left she) -> do
-        Exploded lab1 mp1 argmp1 subtree1 <- explode' env she
-        lab <- genId ty
-        backuplab <- genId (etypeOf she)
-        let pruned = Index (Right alab) (Right (lab1, backuplab))
-        let itemmp = DMap.singleton lab pruned
-            mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
-        return (Exploded lab mp argmp1 (Set.insert (AnyLabel lab) subtree1))
-    Index _ (Right _) -> error "explode: Unexpected exp-labelised Index"
-    ShapeSize sht e -> do
-        Exploded lab1 mp1 argmp1 subtree1 <- explode' env e
-        lab <- genId (TupRsingle scalarType)
-        let pruned = ShapeSize sht (Label lab1)
-        let itemmp = DMap.singleton lab pruned
-            mp = DMap.unionWithKey (error "explode: Overlapping id's") mp1 itemmp
-        return (Exploded lab mp argmp1 (Set.insert (AnyLabel lab) subtree1))
-    Undef ty -> do
-        lab <- genId (TupRsingle ty)
-        return (Exploded lab (DMap.singleton lab (Undef ty)) mempty (Set.singleton (AnyLabel lab)))
-    Let lhs rhs body -> do
-        Exploded lab1 mp1 argmp1 subtree1 <- explode' env rhs
-        (_, labs) <- genIds (etypeOf rhs)
-        let (env', mpLHS) = lpushLHS_Get lhs labs env (Label lab1)
-        Exploded lab2 mp2 argmp2 subtree2 <- explode' env' body
-        let mp = DMap.unionsWithKey (error "explode: Overlapping id's") [mp1, mpLHS, mp2]
-            argmp = DMap.unionWithKey (error "explode: Overlapping arg's") argmp1 argmp2
-        return (Exploded lab2 mp argmp (subtree1 <> subtree2))
-    Var (A.Var _ idx) -> do
-        return (Exploded (tupleLabel (prjL idx env)) mempty mempty mempty)
-    FreeVar var@(A.Var ty _) -> do
-        lab <- genId (TupRsingle ty)
-        return (Exploded lab (DMap.singleton lab (FreeVar var)) mempty (Set.singleton (AnyLabel lab)))
-    Arg ty idx -> do
-        lab <- genId (TupRsingle ty)
-        return (Exploded lab (DMap.singleton lab (Arg ty idx)) (DMap.singleton idx lab) (Set.singleton (AnyLabel lab)))
-    Get _ _ _ -> error "explode: Unexpected Get"
-    Label _ -> error "explode: Unexpected Label"
+type EAnyPartLabelN = AnyPartLabel NodeLabel TypeR
+
+enlabelExp :: TagVal (EAnyPartLabelN Int) env -> OpenExp env aenv () alab args tenv t -> IdGen (OpenExp env aenv Int alab args tenv t)
+enlabelExp env expr = case expr of
+    Const lab x -> Const <$> genLabNS lab <*> return x
+    PrimApp lab op ex -> PrimApp <$> genLabN lab <*> return op <*> enlabelExp env ex
+    PrimConst lab c -> PrimConst <$> genLabNS lab <*> return c
+    Pair lab e1 e2 -> Pair <$> genLabN lab <*> enlabelExp env e1 <*> enlabelExp env e2
+    Nil lab -> Nil <$> genLabN lab
+    Cond lab e1 e2 e3 -> Cond <$> genLabN lab <*> enlabelExp env e1 <*> enlabelExp env e2 <*> enlabelExp env e3
+    Shape lab ref -> Shape <$> genLabN lab <*> return ref
+    Index lab ref idxe -> Index <$> genLabN lab <*> return ref <*> enlabelExp env idxe
+    ShapeSize lab sht e -> ShapeSize <$> genLabNS lab <*> return sht <*> enlabelExp env e
+    Get lab tidx e -> Get <$> genLabN lab <*> return tidx <*> enlabelExp env e
+    Undef lab -> Undef <$> genLabNS lab
+    Let lhs rhs ex ->
+        Let lhs <$> enlabelExp env rhs <*> (lpushLHS_parts env lhs >>= \env' -> enlabelExp env' ex)
+    Var lab var referLab -> undefined
+    FreeVar lab var -> undefined
+    Arg lab idx -> undefined
   where
-    lpushLHS_Get :: A.ELeftHandSide t env env' -> TupR (EDLabelNS Int) t -> LabVal NodeLabel ScalarType Int env -> Exp aenv Int alab args tenv t -> (LabVal NodeLabel ScalarType Int env', DMap (EDLabelN Int) (Exp aenv Int alab args tenv))
-    lpushLHS_Get lhs labs labelenv rhs = case (lhs, labs) of
-        (A.LeftHandSidePair lhs1 lhs2, TupRpair labs1 labs2) ->
-            let (labelenv1, mp1) = lpushLHS_Get lhs1 labs1 labelenv (smartFst rhs)
-                (labelenv2, mp2) = lpushLHS_Get lhs2 labs2 labelenv1 (smartSnd rhs)
-            in (labelenv2, DMap.unionWithKey (error "lpushLHS_Get: Overlapping id's") mp1 mp2)
-        (A.LeftHandSideSingle _, TupRsingle lab) -> (LPush labelenv lab, DMap.singleton (tupleLabel lab) rhs)
-        (A.LeftHandSideWildcard _, _) -> (labelenv, mempty)
-        _ -> error "lpushLHS_Get: impossible GADTs"
+    genLabN :: EDLabelN () t -> IdGen (EDLabelN Int t)
+    genLabN = genId . labelType
+
+    genLabNS :: EDLabelNS () t -> IdGen (EDLabelNS Int t)
+    genLabNS = genIdNodeSingle . labelType
+
+    lpushLHS_parts :: TagVal (EAnyPartLabelN Int) env -> A.ELeftHandSide t env env' -> IdGen (TagVal (EAnyPartLabelN Int) env')
+    lpushLHS_parts env (A.LeftHandSidePair lhs1 lhs2) =
+        lpushLHS_parts env lhs1 >>= \env' -> lpushLHS_parts env' lhs2
+    lpushLHS_parts env (A.LeftHandSideSingle ty) =
+        LPush env <$> genLabNS ty
+    -- lpushLHS_parts env (A.LeftHandSideSingle )
 
 -- TODO: remove Show constraint from alab
 primaldual :: Show alab
@@ -573,6 +494,7 @@ primalAll nodemap (AnyLabel lab : labs) ctx = do
     PrimalResult ctx2 builder2 <- primalAll nodemap labs ctx1
     return (PrimalResult ctx2 (builder1 . builder2))
 
+{-  -- primal'
 primal' :: DMap (EDLabelN Int) (Exp aenv Int alab args tenv)
         -> EDLabelN Int t
         -> EContext Int env
@@ -745,11 +667,12 @@ primal' nodemap lbl (Context labelenv bindmap)
 
           _ ->
               error "primal: Unexpected node shape in Exploded"
+-}
 
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
 -- environment (and the bindmap) is needed.
-newtype AdjList aenv lab alab args tenv t = AdjList (forall env. EContext lab env -> [OpenExp env aenv (PDExp lab) alab args tenv t])
+newtype AdjList aenv lab alab args tenv t = AdjList (forall env. EContext lab env -> [OpenExp env aenv () alab args tenv t])
 
 data DualResult env aenv alab args tenv =
     forall env'.
@@ -802,6 +725,7 @@ dual's nodemap (AnyLabel lab : labs) context contribmap = do
     DualResult context2 contribmap2 f2 <- dual's nodemap labs context1 contribmap1
     return $ DualResult context2 contribmap2 (f1 . f2)
 
+{-  -- dual'
 dual' :: Show alab
       => DMap (EDLabelN Int) (Exp aenv Int alab args tenv)
       -> EDLabelN Int t
@@ -1125,6 +1049,7 @@ dual' nodemap lbl (Context labelenv bindmap) contribmap =
                               (Let lhs adjoint)
 
       expr -> error ("\n!! " ++ show expr)
+-}
 
 -- TODO: make a new abstraction after the refactor, possibly inspired by this function, which was the abstraction pre-refactor
 -- dualStoreAdjoint
@@ -1160,7 +1085,7 @@ data Contribution node aenv alab args tenv =
                      (TypedList (EDLabelN Int) parents)  -- labels you need the primary value of
                      (forall env. A.ExpVars env node                  -- current node's adjoint
                                -> TypedList (A.ExpVars env) parents   -- requested primal values
-                               -> OpenExp env aenv (PDExp Int) alab args tenv t)   -- contribution
+                               -> OpenExp env aenv () alab args tenv t)   -- contribution
 
 -- Note: Before this code was extracted into a separate function, its
 -- functionality was inlined in the branches of dual'. Because of that, the
@@ -1173,11 +1098,11 @@ data Contribution node aenv alab args tenv =
 -- the code.
 updateContribmap :: EDLabelN Int node
                  -> [Contribution node aenv alab args tenv]
-                 -> DMap (EDLabelN (PDExp Int)) (AdjList aenv Int alab args tenv)
-                 -> DMap (EDLabelN (PDExp Int)) (AdjList aenv Int alab args tenv)
+                 -> DMap (EDLabelN Int) (AdjList aenv Int alab args tenv)
+                 -> DMap (EDLabelN Int) (AdjList aenv Int alab args tenv)
 updateContribmap lbl =
     flip . foldr $ \(Contribution lab parentlabs gen) ->
-        addContribution (fmapLabel D lab) $ \(Context labelenv bindmap) ->
+        addContribution lab $ \(Context labelenv bindmap) ->
             let currentlabs = bindmap `dmapFind` fmapLabel D lbl
             in case (elabValFinds labelenv currentlabs, findAll (Context labelenv bindmap) parentlabs) of
                 (Just adjvars, parvars) -> gen adjvars parvars
@@ -1190,65 +1115,51 @@ updateContribmap lbl =
             in fromMaybe (error $ "updateContribmap: arg P " ++ show lab ++ " was not computed; labs: " ++ showTupR show labs ++ "; labelenv: " ++ showLabelenv labelenv ++ "; bindmap: " ++ showBindmap bindmap) (elabValFinds labelenv labs)
 
 addContribution :: Ord lab
-                => EDLabelN (PDExp lab) t
-                -> (forall env. EContext lab env -> OpenExp env aenv (PDExp lab) alab args tenv t)
-                -> DMap (EDLabelN (PDExp lab)) (AdjList aenv lab alab args tenv)
-                -> DMap (EDLabelN (PDExp lab)) (AdjList aenv lab alab args tenv)
+                => EDLabelN lab t
+                -> (forall env. EContext lab env -> OpenExp env aenv () alab args tenv t)
+                -> DMap (EDLabelN lab) (AdjList aenv lab alab args tenv)
+                -> DMap (EDLabelN lab) (AdjList aenv lab alab args tenv)
 addContribution lbl contribution =
     DMap.insertWith (\(AdjList f1) (AdjList f2) -> AdjList (\context -> f1 context ++ f2 context))
                     lbl
                     (AdjList (pure . contribution))
 
-collectAdjoint :: DMap (EDLabelN (PDExp Int)) (AdjList aenv Int alab args tenv)
+collectAdjoint :: DMap (EDLabelN Int) (AdjList aenv Int alab args tenv)
                -> EDLabelN Int item
                -> EContext Int env
-               -> OpenExp env aenv (PDExp Int) alab args tenv item
+               -> OpenExp env aenv () alab args tenv item
 collectAdjoint contribmap lbl (Context labelenv bindmap) =
-    case DMap.lookup (fmapLabel D lbl) contribmap of
+    case DMap.lookup lbl contribmap of
         Just (AdjList listgen) -> expSum (labelType lbl) (listgen (Context labelenv bindmap))
         Nothing -> expSum (labelType lbl) []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
 
-oneHotTup :: TypeR t -> TupleIdx t t' -> OpenExp env aenv lab alab args tenv t' -> OpenExp env aenv lab alab args tenv t
+oneHotTup :: TypeR t -> TupleIdx t t' -> OpenExp env aenv () alab args tenv t' -> OpenExp env aenv () alab args tenv t
 oneHotTup _ TIHere ex = ex
-oneHotTup ty@(TupRpair ty1 ty2) (TILeft ti) ex = Pair ty (oneHotTup ty1 ti ex) (zeroForType ty2)
-oneHotTup ty@(TupRpair ty1 ty2) (TIRight ti) ex = Pair ty (zeroForType ty1) (oneHotTup ty2 ti ex)
+oneHotTup ty@(TupRpair ty1 ty2) (TILeft ti) ex = Pair (nilLabel ty) (oneHotTup ty1 ti ex) (zeroForType ty2)
+oneHotTup ty@(TupRpair ty1 ty2) (TIRight ti) ex = Pair (nilLabel ty) (zeroForType ty1) (oneHotTup ty2 ti ex)
 oneHotTup _ _ _ = error "oneHotTup: impossible GADTs"
 
 -- Errors if any parents are not Label nodes, or if called on a Let or Var node.
 expLabelParents :: OpenExp env aenv lab alab args tenv t -> [EAnyLabelN lab]
 expLabelParents = \case
     Const _ _ -> []
-    PrimApp _ _ e -> fromLabel e
-    PrimConst _ -> []
-    Pair _ e1 e2 -> fromLabel e1 ++ fromLabel e2
-    Nil -> []
-    Cond _ e1 _ e2 _ e3 -> fromLabel e1 ++ fromLabel e2 ++ fromLabel e3
-    Shape _ -> []
-    Index _ (Left e) -> fromLabel e
-    Index _ (Right (lab, _)) -> [AnyLabel lab]
-    ShapeSize _ e -> fromLabel e
-    Get _ _ e -> fromLabel e
+    PrimApp _ _ e -> [AnyLabel (elabelOf e)]
+    PrimConst _ _ -> []
+    Pair _ e1 e2 -> [AnyLabel (elabelOf e1), AnyLabel (elabelOf e2)]
+    Nil _ -> []
+    Cond _ e1 e2 e3 -> [AnyLabel (elabelOf e1), AnyLabel (elabelOf e2), AnyLabel (elabelOf e3)]
+    Shape _ _ -> []
+    Index _ _ e -> [AnyLabel (elabelOf e)]
+    ShapeSize _ _ e -> [AnyLabel (elabelOf e)]
+    Get _ _ e -> [AnyLabel (elabelOf e)]
     Undef _ -> []
-    FreeVar _ -> []
+    FreeVar _ _ -> []
     Arg _ _ -> []
-    Label lab -> [AnyLabel lab]
     Let _ _ _ -> unimplemented "Let"
-    Var _ -> unimplemented "Var"
+    Var _ _ referLab -> [AnyLabel (tupleLabel referLab)]
   where
     unimplemented name =
         error ("expLabelParents: Unimplemented for " ++ name ++ ", semantics unclear")
-
-    fromLabel (Label lab) = [AnyLabel lab]
-    fromLabel _ = error "expLabelParents: Parent is not a label"
-
-graphSubsetBoundary :: Ord lab
-                    => DMap (EDLabelN lab) (OpenExp env aenv lab alab args tenv)
-                    -> Set (EAnyLabelN lab)
-                    -> Set (EAnyLabelN lab)
-graphSubsetBoundary nodemap interior =
-    let expanded = Set.fromList (concat [expLabelParents (nodemap `dmapFind` lab)
-                                        | AnyLabel lab <- Set.toList interior])
-    in expanded Set.\\ interior
 
 dmapFind :: (HasCallStack, GCompare f) => DMap f g -> f a -> g a
 dmapFind mp elt = case DMap.lookup elt mp of

@@ -96,7 +96,7 @@ data OpenExp env aenv lab alab args tenv t where
 
     Var       :: EDLabelNS lab t  -- own label
               -> A.ExpVar env t   -- pointer to binding
-              -> EDLabelNS lab t  -- label of referred-to right-hand side
+              -> EPartLabelN lab rhs_t t  -- label of, and index into, referred-to right-hand side
               -> OpenExp env aenv lab alab args tenv t
 
     FreeVar   :: EDLabelNS lab t
@@ -176,28 +176,20 @@ showsExp se d (Get lab ti e) =
     showParen (d > 10) $
         showString (tiPrefix ti) . showLabelSuffix se lab . showString " " .
         showsExp se 10 e
-  where
-    tiPrefix :: TupleIdx t t' -> String
-    tiPrefix = intercalate "." . reverse . tiPrefix'
-
-    tiPrefix' :: TupleIdx t t' -> [String]
-    tiPrefix' TIHere = []
-    tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
-    tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
 showsExp se _ (Undef lab) = showString "undef" . showLabelSuffix se lab
 showsExp se d (Let lhs rhs body) = showParen (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
         env' = descrs ++ seEnv se
     in showString ("let " ++ descr ++ " = ") . showsExp (se { seSeed = seed' }) 0 rhs .
             showString " in " . showsExp (se { seSeed = seed', seEnv = env' }) 0 body
-showsExp se _ (Var lab (A.Var _ idx) referLab) =
+showsExp se _ (Var lab (A.Var _ idx) (PartLabel referLab referPart)) =
     let varstr
           | descr : _ <- drop (idxToInt idx) (seEnv se) = descr
           | otherwise = "tE_UP" ++ show (1 + idxToInt idx - length (seEnv se))
     in case showLabelSuffix se referLab "" of
          "" -> showString varstr
          referLabStr ->
-             showString ("(" ++ varstr ++ "->" ++ referLabStr ++ ")") .
+             showString ("(" ++ varstr ++ "->" ++ tiPrefix referPart ++ " " ++ referLabStr ++ ")") .
              showLabelSuffix se lab
 showsExp se d (FreeVar lab (A.Var ty idx)) = showParen (d > 0) $
     showString ("tFREE" ++ show (1 + idxToInt idx)) . showLabelSuffix se lab .
@@ -205,6 +197,14 @@ showsExp se d (FreeVar lab (A.Var ty idx)) = showParen (d > 0) $
 showsExp se d (Arg lab idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx)) . showLabelSuffix se lab .
     showString (" :: " ++ show (labelType lab))
+
+tiPrefix :: TupleIdx t t' -> String
+tiPrefix = intercalate "." . reverse . tiPrefix'
+  where
+    tiPrefix' :: TupleIdx t t' -> [String]
+    tiPrefix' TIHere = []
+    tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
+    tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
 
 showsFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab tenv t -> ShowS
 showsFun se d (Body expr) = showsExp se d expr
@@ -333,7 +333,7 @@ elabValFinds labelenv (TupRpair labs1 labs2) =
 
 evars :: A.ExpVars env t -> OpenExp env aenv () alab args tenv t
 evars TupRunit = Nil magicLabel
-evars (TupRsingle var@(A.Var ty _)) = Var (nilLabel ty) var (nilLabel ty)
+evars (TupRsingle var@(A.Var ty _)) = Var (nilLabel ty) var (PartLabel (tupleLabel (nilLabel ty)) TIHere)
 evars (TupRpair vars1 vars2) = smartPair (evars vars1) (evars vars2)
 
 untupleExps :: TupR (OpenExp env aenv () alab args tenv) t -> OpenExp env aenv () alab args tenv t
@@ -573,7 +573,7 @@ smartGt :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env a
 smartGt ty a b = PrimApp magicLabel (A.PrimGt ty) (smartPair a b)
 
 smartVar :: A.ExpVar env t -> OpenExp env aenv () alab args tenv t
-smartVar var@(A.Var ty _) = Var (nilLabel ty) var (nilLabel ty)
+smartVar var@(A.Var ty _) = Var (nilLabel ty) var (PartLabel (tupleLabel (nilLabel ty)) TIHere)
 
 -- TODO: make smartFst and smartSnd non-quadratic
 smartFst :: OpenExp env aenv () alab args tenv (t1, t2) -> OpenExp env aenv () alab args tenv t1
