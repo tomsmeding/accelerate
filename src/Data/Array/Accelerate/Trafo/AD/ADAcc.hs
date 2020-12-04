@@ -1013,18 +1013,16 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                          contribmap' cont
 
       Backpermute restype@(ArrayR _ eltty) _ (Lam indexfuncLHS (Body indexfuncBody)) (Alabel arglab) -> do
-          let TupRsingle argtype@(ArrayR shtypeArg _) = labelType arglab
+          let TupRsingle argtype = labelType arglab
               adjoint = collectAdjoint contribmap lbl (Context labelenv bindmap)
               contribmap' = updateContribmap lbl
                                 [Contribution arglab (arglab :@ TLNil) TLNil $
                                     \(TupRsingle adjvar) (TupRsingle pvar :@ TLNil) _ labelenv' ->
                                         Permute argtype (plusLam eltty)
                                                 (generateConstantArray argtype (Shape (Left pvar)))
-                                                (case declareVars (shapeType shtypeArg) of
-                                                   DeclareVars lhsArg _ varsgenArg ->
-                                                      Lam indexfuncLHS . Body $
-                                                          Let lhsArg (resolveAlabs (Context labelenv' bindmap) indexfuncBody)
-                                                              (mkJust (evars (varsgenArg A.weakenId))))
+                                                (Lam indexfuncLHS . Body $
+                                                   mkJust (resolveAlabs (Context labelenv' bindmap)
+                                                                        indexfuncBody))
                                                 (Avar adjvar)]
                                 contribmap
           lab <- genSingleId restype
