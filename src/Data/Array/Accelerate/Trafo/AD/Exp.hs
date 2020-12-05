@@ -174,7 +174,7 @@ showsExp se d (ShapeSize lab _ e) =
         showsExp se 11 e
 showsExp se d (Get lab ti e) =
     showParen (d > 10) $
-        showString (tiPrefix ti) . showLabelSuffix se lab . showString " " .
+        showString (tiPrefixExp ti) . showLabelSuffix se lab . showString " " .
         showsExp se 10 e
 showsExp se _ (Undef lab) = showString "undef" . showLabelSuffix se lab
 showsExp se d (Let lhs rhs body) = showParen (d > 0) $
@@ -189,7 +189,7 @@ showsExp se _ (Var lab (A.Var _ idx) (PartLabel referLab referPart)) =
     in case showLabelSuffix se referLab "" of
          "" -> showString varstr
          referLabStr ->
-             showString ("(" ++ varstr ++ "->" ++ tiPrefix referPart ++ " " ++ referLabStr ++ ")") .
+             showString ("(" ++ varstr ++ "->" ++ tiPrefixExp referPart ++ " " ++ referLabStr ++ ")") .
              showLabelSuffix se lab
 showsExp se d (FreeVar lab (A.Var ty idx)) = showParen (d > 0) $
     showString ("tFREE" ++ show (1 + idxToInt idx)) . showLabelSuffix se lab .
@@ -198,13 +198,16 @@ showsExp se d (Arg lab idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx)) . showLabelSuffix se lab .
     showString (" :: " ++ show (labelType lab))
 
-tiPrefix :: TupleIdx t t' -> String
-tiPrefix = intercalate "." . reverse . tiPrefix'
+tiPrefix :: String -> String -> TupleIdx t t' -> String
+tiPrefix fststr sndstr = intercalate "." . reverse . tiPrefix'
   where
     tiPrefix' :: TupleIdx t t' -> [String]
     tiPrefix' TIHere = []
-    tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
-    tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
+    tiPrefix' (TILeft ti') = fststr : tiPrefix' ti'
+    tiPrefix' (TIRight ti') = sndstr : tiPrefix' ti'
+
+tiPrefixExp :: TupleIdx t t' -> String
+tiPrefixExp = tiPrefix "fst" "snd"
 
 showsFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab tenv t -> ShowS
 showsFun se d (Body expr) = showsExp se d expr

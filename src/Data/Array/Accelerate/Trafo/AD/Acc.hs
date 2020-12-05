@@ -9,7 +9,6 @@ module Data.Array.Accelerate.Trafo.AD.Acc (
 ) where
 
 import Data.Functor.Identity
-import Data.List (intercalate)
 import Data.GADT.Show
 
 import Data.Array.Accelerate.Representation.Array hiding ((!!))
@@ -289,16 +288,8 @@ showsAcc se d (Reshape lab e a) =
             showsExp (se { seEnv = [] }) 11 e . showString " " .
             showsAcc se 11 a
 showsAcc se d (Aget lab ti e) = showParen (d > 10) $
-    showString (tiPrefix ti) . ashowLabelSuffix se lab . showString " " .
+    showString (tiPrefixAcc ti) . ashowLabelSuffix se lab . showString " " .
     showsAcc se 10 e
-  where
-    tiPrefix :: TupleIdx t t' -> String
-    tiPrefix = intercalate "." . reverse . tiPrefix'
-
-    tiPrefix' :: TupleIdx t t' -> [String]
-    tiPrefix' TIHere = []
-    tiPrefix' (TILeft ti') = "afst" : tiPrefix' ti'
-    tiPrefix' (TIRight ti') = "asnd" : tiPrefix' ti'
 showsAcc se d (Alet lhs rhs body) = showParen (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
         env' = descrs ++ seAenv se
@@ -316,6 +307,9 @@ showsAcc se _ (Avar lab (A.Var _ idx) referLab) =
 showsAcc se d (Aarg lab idx) = showParen (d > 0) $
     showString ('A' : show (idxToInt idx)) . ashowLabelSuffix se lab .
     showString (" :: " ++ show (labelType lab))
+
+tiPrefixAcc :: TupleIdx t t' -> String
+tiPrefixAcc = tiPrefix "afst" "asnd"
 
 showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv sh t1 t2 -> ShowS
 showsLambda se d (ELPlain fun) = showsFun se d fun
