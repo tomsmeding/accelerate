@@ -31,15 +31,15 @@ sinkExpAenv _ (Nil lab) = Nil lab
 sinkExpAenv k (Cond lab c t e) = Cond lab (sinkExpAenv k c) (sinkExpAenv k t) (sinkExpAenv k e)
 sinkExpAenv k (Shape lab (Left (A.Var sht idx))) = Shape lab (Left (A.Var sht (k A.>:> idx)))
 sinkExpAenv _ (Shape lab (Right alab)) = Shape lab (Right alab)
-sinkExpAenv k (Index lab (Left (A.Var sht idx)) idxe) = Index lab (Left (A.Var sht (k A.>:> idx))) (sinkExpAenv k idxe)
-sinkExpAenv k (Index lab (Right alab) idxe) = Index lab (Right alab) (sinkExpAenv k idxe)
+sinkExpAenv k (Index lab (Left (A.Var sht idx)) execLab idxe) = Index lab (Left (A.Var sht (k A.>:> idx))) execLab (sinkExpAenv k idxe)
+sinkExpAenv k (Index lab (Right alab) execLab idxe) = Index lab (Right alab) execLab (sinkExpAenv k idxe)
 sinkExpAenv k (ShapeSize lab sht e) = ShapeSize lab sht (sinkExpAenv k e)
 sinkExpAenv k (Get lab ti e) = Get lab ti (sinkExpAenv k e)
 sinkExpAenv _ (Undef lab) = Undef lab
 sinkExpAenv k (Let lhs rhs e) = Let lhs (sinkExpAenv k rhs) (sinkExpAenv k e)
 sinkExpAenv _ (Var lab var referLab) = Var lab var referLab
 sinkExpAenv _ (FreeVar lab var) = FreeVar lab var
-sinkExpAenv _ (Arg lab idx) = Arg lab idx
+sinkExpAenv _ (Arg lab argsty tidx) = Arg lab argsty tidx
 
 sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab alab tenv t -> OpenFun env aenv' lab alab tenv t
 sinkFunAenv k (Lam lhs fun) = Lam lhs (sinkFunAenv k fun)
@@ -97,7 +97,7 @@ eCheckClosedInTagval tv expr = case expr of
     Nil lab -> Just (Nil lab)
     Cond lab c t e -> Cond lab <$> eCheckClosedInTagval tv c  <*> eCheckClosedInTagval tv t  <*> eCheckClosedInTagval tv e
     Shape lab avar -> Just (Shape lab avar)
-    Index lab avar e -> Index lab avar <$> eCheckClosedInTagval tv e
+    Index lab avar execLab e -> Index lab avar execLab <$> eCheckClosedInTagval tv e
     ShapeSize lab sht e -> ShapeSize lab sht <$> eCheckClosedInTagval tv e
     Get lab ti e -> Get lab ti <$> eCheckClosedInTagval tv e
     Undef lab -> Just (Undef lab)
@@ -106,7 +106,7 @@ eCheckClosedInTagval tv expr = case expr of
           Let lhs' <$> eCheckClosedInTagval tv rhs <*> eCheckClosedInTagval (valPushLHS lhs' tv) e
     Var lab var referLab -> Var lab <$> eCheckLocalT matchScalarType var tv <*> return referLab
     FreeVar lab var -> Just (FreeVar lab var)
-    Arg lab idx -> Just (Arg lab idx)
+    Arg lab argsty tidx -> Just (Arg lab argsty tidx)
 
 eCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenExp env aenv lab alab args tenv t -> Maybe (OpenExp env aenv2 lab alab args tenv t)
 eCheckAClosedInTagval tv expr = case expr of
@@ -117,8 +117,8 @@ eCheckAClosedInTagval tv expr = case expr of
     Nil lab -> Just (Nil lab)
     Shape lab (Left var) -> Shape lab . Left <$> aCheckLocal var tv
     Shape _ (Right _) -> error "Exp with label in arrayvar position (Shape) is not closed, todo?"
-    Index lab (Left var) idxe -> Index lab <$> (Left <$> aCheckLocal var tv) <*> eCheckAClosedInTagval tv idxe
-    Index _ (Right _) _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
+    Index lab (Left var) execLab idxe -> Index lab <$> (Left <$> aCheckLocal var tv) <*> return execLab <*> eCheckAClosedInTagval tv idxe
+    Index _ (Right _) _ _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
     ShapeSize lab sht e -> ShapeSize lab sht <$> eCheckAClosedInTagval tv e
     Cond lab c t e -> Cond lab <$> eCheckAClosedInTagval tv c  <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
     Get lab ti e -> Get lab ti <$> eCheckAClosedInTagval tv e
@@ -126,7 +126,7 @@ eCheckAClosedInTagval tv expr = case expr of
     Let lhs rhs e -> Let lhs <$> eCheckAClosedInTagval tv rhs <*> eCheckAClosedInTagval tv e
     Var lab var referLab -> Just (Var lab var referLab)
     FreeVar lab var -> Just (FreeVar lab var)
-    Arg lab idx -> Just (Arg lab idx)
+    Arg lab argsty tidx -> Just (Arg lab argsty tidx)
 
 efCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenFun env aenv lab alab tenv t -> Maybe (OpenFun env aenv2 lab alab tenv t)
 efCheckAClosedInTagval tv (Lam lhs fun) = Lam lhs <$> efCheckAClosedInTagval tv fun

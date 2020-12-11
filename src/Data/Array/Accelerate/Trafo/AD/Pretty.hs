@@ -132,7 +132,7 @@ layoutExp se d (Shape lab (Right alab)) =
     parenthesise (d > 10) $
         string $ "shape" ++ showLabelSuffix' se lab ++ " (L" ++
                  seAlabf se (labelLabel alab) ++ " :: " ++ show (labelType alab) ++ ")"
-layoutExp se d (Index lab subj e) =
+layoutExp se d (Index lab subj execLab e) =
     parenthesise (d > 10) $ lseq'
         [case subj of
            Left (A.Var _ idx) ->
@@ -141,21 +141,16 @@ layoutExp se d (Index lab subj e) =
                   [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
            Right alab ->
               string ('L' : seAlabf se (labelLabel alab) ++ " :: " ++ show (labelType alab))
-        ,string ("!" ++ showLabelSuffix' se lab)
+        ,string ("!" ++ showLabelSuffix' se lab ++
+                    (case showLabelSuffix' se execLab of
+                       "" -> ""
+                       str -> "[exec=" ++ str ++ "]"))
         ,layoutExp se 11 e ]
 layoutExp se d (ShapeSize lab _ e) =
     parenthesise (d > 10) $
         lprefix ("shapeSize" ++ showLabelSuffix' se lab ++ " ") (layoutExp se 11 e)
 layoutExp se d (Get lab ti e) = parenthesise (d > 10) $
-    lprefix (tiPrefix ti ++ showLabelSuffix' se lab ++ " ") (layoutExp se 11 e)
-  where
-    tiPrefix :: TupleIdx t t' -> String
-    tiPrefix = intercalate "." . reverse . tiPrefix'
-
-    tiPrefix' :: TupleIdx t t' -> [String]
-    tiPrefix' TIHere = []
-    tiPrefix' (TILeft ti') = "fst" : tiPrefix' ti'
-    tiPrefix' (TIRight ti') = "snd" : tiPrefix' ti'
+    lprefix (tiPrefixExp ti ++ showLabelSuffix' se lab ++ " ") (layoutExp se 11 e)
 layoutExp se _ (Undef lab) = string ("undef" ++ showLabelSuffix' se lab)
 layoutExp se d (Let lhs rhs body) = parenthesise (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
@@ -165,18 +160,19 @@ layoutExp se d (Let lhs rhs body) = parenthesise (d > 0) $
               ,case body of
                    Let _ _ _ -> layoutExp (se { seSeed = seed', seEnv = env' }) 0 body
                    _ -> lprefix "in " (layoutExp (se { seSeed = seed', seEnv = env' }) 0 body)]
-layoutExp se _ (Var lab (A.Var _ idx) referLab) =
+layoutExp se _ (Var lab (A.Var _ idx) (PartLabel referLab referPart)) =
     let varstr
           | descr : _ <- drop (idxToInt idx) (seEnv se) = descr
           | otherwise = "tE_UP" ++ show (1 + idxToInt idx - length (seEnv se))
     in case showLabelSuffix se referLab "" of
          "" -> string varstr
          referLabStr ->
-             string ("(" ++ varstr ++ "->" ++ referLabStr ++ ")" ++ showLabelSuffix' se lab)
+             string ("(" ++ varstr ++ "->" ++ tiPrefixExp referPart ++ " " ++
+                        referLabStr ++ ")" ++ showLabelSuffix' se lab)
 layoutExp se d (FreeVar lab (A.Var ty idx)) = parenthesise (d > 0) $
     string ("tFREE" ++ show (1 + idxToInt idx) ++ showLabelSuffix' se lab ++ " :: " ++ show ty)
-layoutExp se d (Arg lab idx) = parenthesise (d > 0) $
-    string ('A' : show (idxToInt idx) ++ showLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
+layoutExp se d (Arg lab _ tidx) = parenthesise (d > 0) $
+    string ('A' : compactTupleIdx tidx ++ showLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
 
 layoutAcc :: AShowEnv lab alab -> Int -> OpenAcc env lab alab args t -> Layout
 layoutAcc se _ (Aconst lab@DLabel { labelType = ty } x) =
@@ -267,15 +263,7 @@ layoutAcc se d (Reshape lab she e) =
             (lseq' [layoutExp (se { seEnv = [] }) 11 she
                    ,layoutAcc se 11 e])
 layoutAcc se d (Aget lab ti e) = parenthesise (d > 10) $
-    lprefix (tiPrefix ti ++ ashowLabelSuffix' se lab ++ " ") (layoutAcc se 11 e)
-  where
-    tiPrefix :: TupleIdx t t' -> String
-    tiPrefix = intercalate "." . reverse . tiPrefix'
-
-    tiPrefix' :: TupleIdx t t' -> [String]
-    tiPrefix' TIHere = []
-    tiPrefix' (TILeft ti') = "afst" : tiPrefix' ti'
-    tiPrefix' (TIRight ti') = "asnd" : tiPrefix' ti'
+    lprefix (tiPrefixAcc ti ++ ashowLabelSuffix' se lab ++ " ") (layoutAcc se 11 e)
 layoutAcc se d (Alet lhs rhs body) = parenthesise (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
         env' = descrs ++ seAenv se

@@ -187,14 +187,14 @@ goExp = \case
     Nil lab -> returnS (Nil lab)
     Cond lab e1 e2 e3 -> Cond lab !$! goExp e1 !**! goExp e2 !**! goExp e3
     Shape lab ref -> Shape lab !$! goVarOrLab ref
-    Index lab ref e -> Index lab !$! goVarOrLab ref !**! goExp e
+    Index lab ref execLab e -> Index lab !$! goVarOrLab ref !**! returnS execLab !**! goExp e
     ShapeSize lab sht e -> ShapeSize lab sht !$! goExp e
     Undef ty -> returnS $ Undef ty  -- TODO: undef poisons, and can be propagated; however we currently don't generate code where that would help.
     Let lhs rhs e ->
       \s -> let ((s1a, s1e), rhs') = goExp rhs s
                 (s2, e') = goExp e (s1a, spushLHS0 s1e lhs)
             in (second (spopLHS lhs) s2, Let lhs rhs' e')
-    Arg lab idx -> returnS $ Arg lab idx
+    Arg lab argsty tidx -> returnS $ Arg lab argsty tidx
     Var lab var referLab -> \s -> (second (statAddV var 1) s, Var lab var referLab)
     FreeVar lab var -> returnS $ FreeVar lab var
   where
@@ -272,12 +272,12 @@ inlineAE f = \case
     Nil lab -> Nil lab
     Cond lab e1 e2 e3 -> Cond lab (inlineAE f e1) (inlineAE f e2) (inlineAE f e3)
     Shape lab ref -> Shape lab (inlineAE_VarOrLab f ref)
-    Index lab ref e -> Index lab (inlineAE_VarOrLab f ref) (inlineAE f e)
+    Index lab ref execLab e -> Index lab (inlineAE_VarOrLab f ref) execLab (inlineAE f e)
     ShapeSize lab sht e -> ShapeSize lab sht (inlineAE f e)
     Get lab ti e -> Get lab ti (inlineAE f e)
     Undef lab -> Undef lab
     Let lhs rhs e -> Let lhs (inlineAE f rhs) (inlineAE f e)
-    Arg lab idx -> Arg lab idx
+    Arg lab argsty tidx -> Arg lab argsty tidx
     Var lab var referLab -> Var lab var referLab
     FreeVar lab var -> FreeVar lab var
   where
@@ -317,14 +317,14 @@ inlineE f = \case
     Nil lab -> Nil lab
     Cond lab e1 e2 e3 -> Cond lab (inlineE f e1) (inlineE f e2) (inlineE f e3)
     Shape lab ref -> Shape lab ref
-    Index lab ref e -> Index lab ref (inlineE f e)
+    Index lab ref execLab e -> Index lab ref execLab (inlineE f e)
     ShapeSize lab sht e -> ShapeSize lab sht (inlineE f e)
     Get lab ti e -> Get lab ti (inlineE f e)
     Undef lab -> Undef lab
     Let lhs rhs e
       | Exists lhs' <- rebuildLHS lhs
       -> Let lhs' (inlineE f rhs) (inlineE (sinkInlinerELHS lhs lhs' f) e)
-    Arg lab idx -> Arg lab idx
+    Arg lab argsty tidx -> Arg lab argsty tidx
     Var _ var _ -> unInlinerE f var
     FreeVar lab var -> FreeVar lab var
 
