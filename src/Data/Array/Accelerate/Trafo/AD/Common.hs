@@ -4,6 +4,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -21,10 +23,12 @@ import Data.Functor.Product (Product)
 import qualified Data.Functor.Product as Product
 import Data.GADT.Compare
 import Data.GADT.Show
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
-import Data.Some (Some, mkSome)
+import Data.Some (Some, pattern Some, mkSome)
 import Data.Typeable ((:~:)(Refl))
 import Data.Void
+import GHC.Stack (HasCallStack)
 
 import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -99,6 +103,14 @@ magicLabel = DLabel tupleType ()
 
 nilLabel :: s t -> DLabel lty s () t
 nilLabel ty = DLabel ty ()
+
+
+class    IsTupleType scalar s              where toTupleType :: s t -> TupR scalar t
+instance IsTupleType ScalarType TypeR      where toTupleType = id
+instance IsTupleType ScalarType ScalarType where toTupleType = TupRsingle
+
+tupleLabel' :: IsTupleType scalar s => DLabel lty s lab t -> DLabel lty (TupR scalar) lab t
+tupleLabel' (DLabel ty lab) = DLabel (toTupleType ty) lab
 
 
 
@@ -197,6 +209,29 @@ enumerateTupR TupRunit = []
 enumerateTupR (TupRsingle x) = [mkSome x]
 enumerateTupR (TupRpair t1 t2) = enumerateTupR t1 ++ enumerateTupR t2
 
+joinTupR :: TupR (TupR s) t -> TupR s t
+joinTupR TupRunit = TupRunit
+joinTupR (TupRsingle t) = t
+joinTupR (TupRpair t1 t2) = TupRpair (joinTupR t1) (joinTupR t2)
+
+tupleIndices :: TupR s t -> TupR (TupleIdx t) t
+tupleIndices = \tup -> go tup TIHere
+  where
+    go :: TupR s t -> TupleIdx top t -> TupR (TupleIdx top) t
+    go TupRunit _ = TupRunit
+    go (TupRsingle _) tidx = TupRsingle tidx
+    go (TupRpair t1 t2) tidx = TupRpair (go t1 (insertFst tidx)) (go t2 (insertSnd tidx))
+
+zipWithTupR :: (forall t'. s1 t' -> s2 t' -> s t') -> TupR s1 t -> TupR s2 t -> TupR s t
+zipWithTupR _ TupRunit TupRunit = TupRunit
+zipWithTupR f (TupRsingle a) (TupRsingle b) = TupRsingle (f a b)
+zipWithTupR f (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (zipWithTupR f a1 b1) (zipWithTupR f a2 b2)
+zipWithTupR _ _ _ = error "impossible GADTs"
+
+prjT :: Idx env t -> TagVal s env -> s t
+prjT ZeroIdx (TPush _ x) = x
+prjT (SuccIdx idx) (TPush env _) = prjT idx env
+
 prjL :: Idx env t -> LabVal lty s lab env -> DLabel lty s lab t
 prjL ZeroIdx (LPush _ x) = x
 prjL (SuccIdx idx) (LPush env _) = prjL idx env
@@ -252,6 +287,18 @@ namifyLHS seed (LeftHandSidePair lhs1 lhs2) =
         (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
     in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", descrs2 ++ descrs1,seed2)
 
+-- TODO: this is quadratic
+insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
+insertFst TIHere = TILeft TIHere
+insertFst (TILeft ti) = TILeft (insertFst ti)
+insertFst (TIRight ti) = TIRight (insertFst ti)
+
+-- TODO: this is quadratic
+insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
+insertSnd TIHere = TIRight TIHere
+insertSnd (TILeft ti) = TILeft (insertSnd ti)
+insertSnd (TIRight ti) = TIRight (insertSnd ti)
+
 
 newtype IdGen a = IdGen (State Int a)
   deriving (Functor, Applicative, Monad, MonadState Int)
@@ -265,11 +312,11 @@ genId' ty = state (\s -> (DLabel ty s, succ s))
 -- The restriction to env labels is not syntactically necessary, but
 -- semantically it generally doesn't make sense to push a tuple of node labels.
 -- Hence to prevent mishaps, this function is specialised to EnvLabel.
-lpushLabTup :: LabVal EnvLabel s lab env -> LeftHandSide s t env env' -> TupR (DLabel EnvLabel s lab) t -> LabVal EnvLabel s lab env'
-lpushLabTup labelenv (LeftHandSideWildcard _) TupRunit = labelenv
-lpushLabTup labelenv (LeftHandSideSingle _) (TupRsingle lab) = LPush labelenv lab
-lpushLabTup labelenv (LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) =
-    lpushLabTup (lpushLabTup labelenv lhs1 labs1) lhs2 labs2
+lpushLabTup :: LeftHandSide s t env env' -> TupR (DLabel EnvLabel s lab) t -> LabVal EnvLabel s lab env -> LabVal EnvLabel s lab env'
+lpushLabTup (LeftHandSideWildcard _) _ labelenv = labelenv
+lpushLabTup (LeftHandSideSingle _) (TupRsingle lab) labelenv = LPush labelenv lab
+lpushLabTup (LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) labelenv =
+    lpushLabTup lhs2 labs2 (lpushLabTup lhs1 labs1 labelenv)
 lpushLabTup _ _ _ = error "lpushLabTup: impossible GADTs"
 
 
@@ -290,15 +337,18 @@ data PDAuxTagAcc = TmpTup
 type PDExp = PD PDAuxTagExp
 type PDAcc = PD PDAuxTagAcc
 
+type BindMap s tag lab =
+    DMap (DLabel NodeLabel (TupR s) (PD tag lab))
+         (TupR (DLabel EnvLabel s lab))
+type EBindMap lab = BindMap ScalarType PDAuxTagExp lab
+type ABindMap lab = BindMap ArrayR PDAuxTagAcc lab
+
 -- Expression node labels are of tuple type and have a PD tag; environment
 -- labels are of scalar type and have no tag.
 -- The labelenv recalls the environment of let-bound variables with environment
 -- labels; the bindmap maps node labels to the tuple of environment labels
 -- indicating where its value is stored.
-data Context s tag lab env =
-    Context (LabVal EnvLabel s lab env)
-            (DMap (DLabel NodeLabel (TupR s) (PD tag lab))
-                  (TupR (DLabel EnvLabel s lab)))
+data Context s tag lab env = Context (LabVal EnvLabel s lab env) (BindMap s tag lab)
 
 type EContext = Context ScalarType PDAuxTagExp
 type AContext = Context ArrayR PDAuxTagAcc
@@ -316,13 +366,50 @@ showLabelenv (LPush env lab) = "[" ++ go env ++ showDLabel lab ++ "]"
     go (LPush env' lab') = go env' ++ showDLabel lab' ++ ", "
 
 showBindmap :: (Ord lab, Show lab, Show tag, Ord tag, forall t. Show (s t), forall t. Show (TupR s t))
-            => DMap (DLabel NodeLabel (TupR s) (PD tag lab)) (TupR (DLabel EnvLabel s lab)) -> String
+            => BindMap s tag lab -> String
 showBindmap bindmap =
     let tups = sortOn fst [(lab, (showDLabel dlab, showTupR showDLabel labs))
                           | dlab@(DLabel _ lab) :=> labs <- DMap.assocs bindmap]
         s = intercalate ", " ["(" ++ dlabshow ++ ") :=> " ++ labsshow
                              | (_, (dlabshow, labsshow)) <- tups]
     in "[" ++ s ++ "]"
+
+filterBindmap :: (GCompare s, GCompare (TupR s), Ord tag, Ord lab)
+              => [Some (DLabel NodeLabel (TupR s) (PD tag lab))]
+              -> BindMap s tag lab
+              -> BindMap s tag lab
+filterBindmap labs bm = DMap.fromList [lab :=> bm DMap.! lab | Some lab <- labs]
+
+reassignBindmap :: (GCompare s, Ord lab)
+                => TupR (DLabel EnvLabel s lab) t
+                -> TupR (DLabel EnvLabel s lab) t
+                -> BindMap s tag lab
+                -> BindMap s tag lab
+reassignBindmap old new =
+    let oldnew = DMap.fromList
+            [l1 :=> l2
+            | Some (Product.Pair l1 l2) <-
+                  enumerateTupR (zipWithTupR Product.Pair old new)]
+    in DMap.map (fmapTupR (\lab -> fromMaybe lab (DMap.lookup lab oldnew)))
+
+reassignLabelmap :: (GCompare s, Ord lab)
+                 => TupR (DLabel EnvLabel s lab) t
+                 -> TupR (DLabel EnvLabel s lab) t
+                 -> Map.Map k [Some (DLabel EnvLabel s lab)]
+                 -> Map.Map k [Some (DLabel EnvLabel s lab)]
+reassignLabelmap old new =
+    let oldnew = DMap.fromList
+            [l1 :=> l2
+            | Some (Product.Pair l1 l2) <-
+                  enumerateTupR (zipWithTupR Product.Pair old new)]
+    in fmap (map (\(Some lab) -> Some (fromMaybe lab (DMap.lookup lab oldnew))))
+
+dmapDisjointUnions :: (HasCallStack, GCompare k) => [DMap k v] -> DMap k v
+dmapDisjointUnions =
+    DMap.unionsWithKey (error "dmapDisjointUnions: overlapping entries")
+
+mapDisjointUnions :: (HasCallStack, Ord k) => [Map.Map k v] -> Map.Map k v
+mapDisjointUnions = Map.unionsWith (error "mapDisjointUnions: overlapping entries")
 
 
 -- TODO: make this 'type AnyLabel lty s lab = Exists (DLabel lty s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
@@ -370,7 +457,7 @@ data EnvInstantiator s tag lab tmp =
     EnvInstantiator (forall env1.
                      Context s tag lab env1
                   -> Vars s env1 tmp
-                  -> DMap (DLabel NodeLabel (TupR s) (PD tag lab)) (TupR (DLabel EnvLabel s lab)))
+                  -> BindMap s tag lab)
 
 captureEnvironmentSlice :: (GCompare s, GCompare (TupR s), Ord tag) => Context s tag Int topenv -> Context s tag Int env -> EnvCapture s tag env Int
 captureEnvironmentSlice (Context toplabelenv topbindmap) (Context origlabelenv origbindmap)
@@ -399,19 +486,19 @@ captureEnvironmentSlice (Context toplabelenv topbindmap) (Context origlabelenv o
       | Exists tup <- collect barrier (weakenSucc w) labelenv =
           Exists (TupRpair tup (TupRsingle (Product.Pair lab (Var (labelType lab) (w >:> ZeroIdx)))))
 
-    zipWithTupR :: (forall t'. s1 t' -> s2 t' -> s t') -> TupR s1 t -> TupR s2 t -> TupR s t
-    zipWithTupR _ TupRunit TupRunit = TupRunit
-    zipWithTupR f (TupRsingle a) (TupRsingle b) = TupRsingle (f a b)
-    zipWithTupR f (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (zipWithTupR f a1 b1) (zipWithTupR f a2 b2)
-    zipWithTupR _ _ _ = error "impossible GADTs"
-
     tupRtoList :: (forall t'. s t' -> a) -> TupR s t -> [a]
     tupRtoList _ TupRunit = []
     tupRtoList f (TupRsingle x) = [f x]
     tupRtoList f (TupRpair t1 t2) = tupRtoList f t1 ++ tupRtoList f t2
 
-    productFst :: Product f g t -> f t
-    productFst (Product.Pair x _) = x
+productFst :: Product f g t -> f t
+productFst (Product.Pair x _) = x
 
-    productSnd :: Product f g t -> g t
-    productSnd (Product.Pair _ x) = x
+productSnd :: Product f g t -> g t
+productSnd (Product.Pair _ x) = x
+
+mapProductFst :: (forall t. f t -> g t) -> Product f h a -> Product g h a
+mapProductFst f (Product.Pair x y) = Product.Pair (f x) y
+
+mapProductSnd :: (forall t. g t -> h t) -> Product f g a -> Product f h a
+mapProductSnd f (Product.Pair x y) = Product.Pair x (f y)

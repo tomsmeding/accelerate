@@ -487,7 +487,7 @@ primal' nodemap lbl ctx cont
                       (Exists lhs, labs) <- genSingleIds restype
                       Alet lhs (Acond restype (resolveAlabs (Context labelenv bindmap) condexpr)
                                               (avars thenvars) (avars elsevars))
-                           <$> cont (Context (lpushLabTup labelenv lhs labs)
+                           <$> cont (Context (lpushLabTup lhs labs labelenv)
                                              (DMap.insert (fmapLabel P lbl) labs bindmap))
                   _ ->
                       error "primal: Acond arguments did not compute arguments"
@@ -746,7 +746,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 contribmap
           (Exists lhs, labs) <- genSingleIds restype
           Alet lhs adjoint
-               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+               <$> dual' nodemap restlabels (Context (lpushLabTup lhs labs labelenv)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
                          contribmap' cont
 
@@ -1040,7 +1040,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 contribmap
           (Exists lhs, labs) <- genSingleIds restype
           Alet lhs adjoint
-              <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+              <$> dual' nodemap restlabels (Context (lpushLabTup lhs labs labelenv)
                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
                         contribmap' cont
 
@@ -1054,7 +1054,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 contribmap
           (Exists lhs, labs) <- genSingleIds restype
           Alet lhs adjoint
-              <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+              <$> dual' nodemap restlabels (Context (lpushLabTup lhs labs labelenv)
                                                     (DMap.insert (fmapLabel D lbl) labs bindmap))
                         contribmap' cont
 
@@ -1073,7 +1073,7 @@ dual' nodemap (AnyLabel lbl : restlabels) (Context labelenv bindmap) contribmap 
                                 contribmap
           (Exists lhs, labs) <- genSingleIds (labelType arglab)
           Alet lhs adjoint
-               <$> dual' nodemap restlabels (Context (lpushLabTup labelenv lhs labs)
+               <$> dual' nodemap restlabels (Context (lpushLabTup lhs labs labelenv)
                                                      (DMap.insert (fmapLabel D lbl) labs bindmap))
                          contribmap' cont
 
@@ -1232,7 +1232,7 @@ collectAdjoint contribmap lbl (Context labelenv bindmap)
         Nothing -> arraysSum (labelType lbl) pvars []  -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
 collectAdjoint _ _ _ = error "Impossible GADTs"
 
-lookupLambdaLabs :: DMap (ADLabelN (PDAcc Int)) (TupR (ADLabel Int))  -- bindmap
+lookupLambdaLabs :: ABindMap Int  -- bindmap
                  -> TupR (ADLabelNS Int) t  -- free variable labels from SplitLambdaAD
                  -> TupR (ADLabel Int) t  -- resolved labels pointing into the current labelenv
 lookupLambdaLabs bindmap' =

@@ -29,7 +29,7 @@ import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Trafo.AD.Acc as D
 import qualified Data.Array.Accelerate.Trafo.AD.Additive as D (zeroForType)
 import qualified Data.Array.Accelerate.Trafo.AD.Common as D
-import Data.Array.Accelerate.Trafo.AD.Common (labelType, magicLabel, nilLabel, scalarLabel)
+import Data.Array.Accelerate.Trafo.AD.Common (labelType, magicLabel, nilLabel, scalarLabel, tupleLabel)
 import Data.Array.Accelerate.Trafo.AD.Common (PartialVal(..), pvalPushLHS)
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
 
@@ -94,13 +94,13 @@ translateExp expr = case expr of
     A.Const ty con -> D.Const (nilLabel ty) con
     A.PrimApp f e -> D.PrimApp (nilLabel (A.expType expr)) f (translateExp e)
     A.PrimConst c -> D.PrimConst (nilLabel (SingleScalarType (A.primConstType c))) c
-    A.Evar (A.Var rep idx) -> D.Var (nilLabel rep) (A.Var rep idx) (nilLabel rep)
+    A.Evar (A.Var rep idx) -> D.Var (nilLabel rep) (A.Var rep idx) (D.PartLabel (tupleLabel (nilLabel rep)) D.TIHere)
     A.Let lhs def body -> D.Let lhs (translateExp def) (translateExp body)
     A.Nil -> D.Nil magicLabel
     A.Cond c t e -> D.Cond (nilLabel (A.expType t)) (translateExp c) (translateExp t) (translateExp e)
     A.Pair e1 e2 -> D.Pair (nilLabel (A.expType expr)) (translateExp e1) (translateExp e2)
     A.Shape var@(A.Var (ArrayR sht _) _) -> D.Shape (nilLabel (shapeType sht)) (Left var)
-    A.Index var@(A.Var (ArrayR _ ty) _) e -> D.Index (nilLabel ty) (Left var) (translateExp e)
+    A.Index var@(A.Var (ArrayR _ ty) _) e -> D.Index (nilLabel ty) (Left var) scalarLabel (translateExp e)
     A.ShapeSize sht e -> D.ShapeSize scalarLabel sht (translateExp e)
     A.Undef ty -> D.Undef (nilLabel ty)
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
@@ -111,14 +111,14 @@ translateExpInPVal pv expr = case expr of
     A.PrimApp f e -> D.PrimApp (nilLabel (A.expType expr)) f (translateExpInPVal pv e)
     A.PrimConst c -> D.PrimConst (nilLabel (SingleScalarType (A.primConstType c))) c
     A.Evar var -> case D.eCheckLocalP matchScalarType var pv of
-        Right var'@(A.Var ty _) -> D.Var (nilLabel ty) var' (nilLabel ty)
+        Right var'@(A.Var ty _) -> D.Var (nilLabel ty) var' (D.PartLabel (tupleLabel (nilLabel ty)) D.TIHere)
         Left topvar@(A.Var ty _) -> D.FreeVar (nilLabel ty) topvar
     A.Let lhs def body -> D.Let lhs (translateExpInPVal pv def) (translateExpInPVal (pvalPushLHS lhs pv) body)
     A.Nil -> D.Nil magicLabel
     A.Cond c t e -> D.Cond (nilLabel (A.expType t)) (translateExpInPVal pv c) (translateExpInPVal pv t) (translateExpInPVal pv e)
     A.Pair e1 e2 -> D.Pair (nilLabel (A.expType expr)) (translateExpInPVal pv e1) (translateExpInPVal pv e2)
     A.Shape var@(A.Var (ArrayR sht _) _) -> D.Shape (nilLabel (shapeType sht)) (Left var)
-    A.Index var@(A.Var (ArrayR _ ty) _) e -> D.Index (nilLabel ty) (Left var) (translateExpInPVal pv e)
+    A.Index var@(A.Var (ArrayR _ ty) _) e -> D.Index (nilLabel ty) (Left var) scalarLabel (translateExpInPVal pv e)
     A.ShapeSize sht e -> D.ShapeSize scalarLabel sht (translateExpInPVal pv e)
     A.Undef ty -> D.Undef (nilLabel ty)
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
@@ -151,14 +151,14 @@ untranslateLHSboundExp toplhs topexpr topweak
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 w pv) (go e2 w pv) (go e3 w pv)
         D.Shape _ (Left avar) -> A.Shape avar
         D.Shape _ (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Shape) in array var position"
-        D.Index _ (Left avar) e -> A.Index avar (go e w pv)
-        D.Index _ (Right _) _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position"
+        D.Index _ (Left avar) _ e -> A.Index avar (go e w pv)
+        D.Index _ (Right _) _ _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position"
         D.ShapeSize _ sht e -> A.ShapeSize sht (go e w pv)
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e w pv) body
         D.Undef lab -> A.Undef (labelType lab)
-        D.Arg _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
+        D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
 
 untranslateLHSboundExpA :: forall a env env1 lab alab args tenv t aenv topaenv aenv2.
                            A.ELeftHandSide a () env
@@ -184,14 +184,14 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
         D.Shape _ (Left avar) -> A.Shape (fromJust (D.eCheckLocalP' matchArrayR avar arrpv))
         D.Shape _ (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
-        D.Index _ (Left avar) e -> A.Index (fromJust (D.eCheckLocalP' matchArrayR avar arrpv)) (go e pv)
-        D.Index _ (Right _) _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
+        D.Index _ (Left avar) _ e -> A.Index (fromJust (D.eCheckLocalP' matchArrayR avar arrpv)) (go e pv)
+        D.Index _ (Right _) _ _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
         D.ShapeSize _ sht e -> A.ShapeSize sht (go e pv)
         D.Get _ path e
           | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go e pv) body
         D.Undef lab -> A.Undef (labelType lab)
-        D.Arg _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
+        D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
 
 untranslateClosedExp :: forall lab alab args tenv t aenv. D.OpenExp () aenv lab alab args tenv t -> A.OpenExp () aenv t
 untranslateClosedExp expr
