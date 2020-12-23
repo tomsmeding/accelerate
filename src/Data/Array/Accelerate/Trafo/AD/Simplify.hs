@@ -29,7 +29,7 @@ import Data.Array.Accelerate.Trafo.AD.Sink
 
 simplifyAcc :: OpenAcc aenv () () args t -> OpenAcc aenv () () args t
 simplifyAcc a = let res = snd (goAcc a SNil)
-                in trace ("simplify result:\n" ++ prettyPrint res) res
+                in trace ("simplify input:\n" ++ prettyPrint a) $ trace ("simplify result:\n" ++ prettyPrint res) res
 -- simplifyAcc = snd . flip goAcc SNil
 -- simplifyAcc = id
 
@@ -102,7 +102,7 @@ goAcc = \case
     Backpermute lab she f a -> Backpermute lab !$! goExp' she !**! simplifyFun f !**! goAcc a
     Permute lab f a1 pf a2 -> Permute lab !$! simplifyFun f !**! goAcc a1 !**! simplifyFun pf !**! goAcc a2
     Aget lab tidx a -> Aget lab tidx !$! goAcc a
-    Aarg lab idx -> returnS $ Aarg lab idx
+    Aarg lab argsty tidx -> returnS $ Aarg lab argsty tidx
     Alet lhs a1 a2 ->
       \s -> let (s1, a1') = goAcc a1 s
                 (s2, a2') = goAcc a2 (spushLHS0 s1 lhs)
@@ -205,7 +205,7 @@ goExp = \case
       = True
     isNumConstant _ _ = False
 
-goVarOrLab :: Either (A.ArrayVar aenv t) (ADLabelNS lab t) -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), Either (A.ArrayVar aenv t) (ADLabelNS lab t))
+goVarOrLab :: Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)) -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)))
 goVarOrLab (Left var) (sa, se) = ((statAddV var 2 sa, se), Left var)
 goVarOrLab (Right lab) s = (s, Right lab)
 
@@ -257,7 +257,7 @@ inlineA f = \case
     Backpermute lab she f' a -> Backpermute lab (inlineAE f she) (inlineAEF f f') (inlineA f a)
     Permute lab f' a1 pf a2 -> Permute lab (inlineAEF f f') (inlineA f a1) (inlineAEF f pf) (inlineA f a2)
     Aget lab tidx a -> Aget lab tidx (inlineA f a)
-    Aarg lab idx -> Aarg lab idx
+    Aarg lab argsty tidx -> Aarg lab argsty tidx
     Alet lhs a1 a2
       | Exists lhs2 <- rebuildLHS lhs
       -> Alet lhs2 (inlineA f a1) (inlineA (sinkInlinerALHS lhs lhs2 f) a2)
@@ -281,7 +281,7 @@ inlineAE f = \case
     Var lab var referLab -> Var lab var referLab
     FreeVar lab var -> FreeVar lab var
   where
-    inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args -> Either (A.ArrayVar aenv t) (ADLabelNS alab t) -> Either (A.ArrayVar aenv' t) (ADLabelNS alab t)
+    inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args -> Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)) -> Either (A.ArrayVar aenv' t) (AAnyPartLabelN alab (Array sh e))
     inlineAE_VarOrLab f' (Left var)
       | Avar _ var' _ <- unInlinerA f' var = Left var'
       | otherwise = error "inlineAE: Inlining array variable referenced in expression"

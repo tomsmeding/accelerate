@@ -301,6 +301,7 @@ prop_aindex_generate_3 = compareAD' nil sized_vec $ \() a ->
   in A.sum (A.generate (A.I1 (2 * n))
                        (\(A.I1 i) -> A.cond (i A.< 5) (a A.! A.I1 (i `div` 2)) 42))
 
+-- gradientA (\a -> let I1 n = shape (a :: Acc (Vector Float)) in sum (generate (I1 (2 * n)) (\(I1 i) -> cond (i < n) (a ! I1 i) (a ! I1 (i - n)))))
 prop_aindex_generate_4 :: Property
 prop_aindex_generate_4 = compareAD' nil sized_vec $ \() a ->
   let A.I1 n = A.shape a

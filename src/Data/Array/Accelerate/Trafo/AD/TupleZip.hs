@@ -73,7 +73,7 @@ newtype OpenExpEnv aenv lab alab args tenv env t =
 instance ExprLike ScalarType (OpenExpEnv aenv () alab args tenv) where
   nil = OpenExpEnv (Nil magicLabel)
   pair (OpenExpEnv e1) (OpenExpEnv e2) = OpenExpEnv (smartPair e1 e2)
-  var v@(A.Var ty _) = OpenExpEnv (Var (nilLabel ty) v (PartLabel (nilLabel (TupRsingle ty)) TIHere))
+  var v = OpenExpEnv (smartVar v)
   let_ lhs (OpenExpEnv e1) (OpenExpEnv e2) = OpenExpEnv (Let lhs e1 e2)
   fromPair (OpenExpEnv (Pair _ e1 e2)) = Just (OpenExpEnv e1, OpenExpEnv e2)
   fromPair _ = Nothing
@@ -85,7 +85,7 @@ newtype OpenAccEnv lab alab args aenv t =
 instance ExprLike ArrayR (OpenAccEnv lab () args) where
   nil = OpenAccEnv (Anil (nilLabel TupRunit))
   pair (OpenAccEnv e1) (OpenAccEnv e2) = OpenAccEnv (Apair (nilLabel (TupRpair (atypeOf e1) (atypeOf e2))) e1 e2)
-  var v@(A.Var ty@ArrayR{} _) = OpenAccEnv (Avar (nilLabel ty) v (nilLabel ty))
+  var v@(A.Var ty@ArrayR{} _) = OpenAccEnv (Avar (nilLabel ty) v (PartLabel (nilLabel (TupRsingle ty)) TIHere))
   let_ lhs (OpenAccEnv e1) (OpenAccEnv e2) = OpenAccEnv (Alet lhs e1 e2)
   fromPair (OpenAccEnv (Apair _ e1 e2)) = Just (OpenAccEnv e1, OpenAccEnv e2)
   fromPair _ = Nothing

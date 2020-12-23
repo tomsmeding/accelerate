@@ -12,7 +12,7 @@ code. Use the @Plain@-suffixed functions for that.
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Array.Accelerate.ForwardAD (
-    ADF, pattern ADF,
+    ADF, -- pattern ADF,
     ADFClasses,
     variablePlain, constantPlain, valuePlain, derivativePlain,
     variable, constant, value, derivative,
@@ -24,7 +24,7 @@ import qualified Data.Array.Accelerate as A
 
 
 -- | Forward AD. This type is an instance of many of the standard numeric
--- classes, meaning that it should be usable seemlessly in place of e.g.
+-- classes, meaning that it should be usable seamlessly in place of e.g.
 -- 'Float'.
 -- NOTE: The current representation is inefficient for higher-order
 -- derivatives, since it computes intermediate derivatives an exponential

@@ -3,6 +3,7 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.AD.Acc (
     module Data.Array.Accelerate.Trafo.AD.Acc,
     Idx(..), idxToInt
@@ -18,7 +19,6 @@ import Data.Array.Accelerate.Representation.Type
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.AST.Idx
-import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 import Data.Array.Accelerate.Trafo.AD.Orphans ()
@@ -31,7 +31,7 @@ import Data.Array.Accelerate.Trafo.AD.Orphans ()
 -- contains the split-lambda information as well as the label at which the
 -- expression temporaries are stored; or a plain expression function (ELPlain).
 data ExpLambda1 aenv lab alab tenv sh t1 t2
-  = forall tmp idxadj. ELSplit (SplitLambdaAD t1 t2 lab alab tenv tmp idxadj) (ADLabel alab (Array sh tmp))
+  = forall tmp idxadj. ELSplit (SplitLambdaAD t1 t2 lab alab tenv tmp idxadj) (ADLabelNS alab (Array sh tmp))
   |                    ELPlain (Fun aenv lab alab tenv (t1 -> t2))
 
 fmapPlain :: (Fun aenv lab alab tenv (t1 -> t2) -> Fun aenv' lab alab tenv (t1 -> t2))
@@ -132,8 +132,8 @@ data OpenAcc aenv lab alab args t where
             -> OpenAcc aenv lab alab args (Array sh e)
 
     Backpermute :: ADLabelNS alab (Array sh' e)
-                -> Exp aenv lab alab () () sh'                 -- dimensions of the result
-                -> Fun aenv lab alab () (sh' -> sh)            -- permutation function
+                -> Exp aenv lab alab () () sh'              -- dimensions of the result
+                -> Fun aenv lab alab () (sh' -> sh)         -- permutation function
                 -> OpenAcc aenv lab alab args (Array sh e)  -- source array
                 -> OpenAcc aenv lab alab args (Array sh' e)
 
@@ -142,9 +142,9 @@ data OpenAcc aenv lab alab args t where
     -- generate it as the derivative of a Backpermute and of array indexing.
     Permute :: ADLabelNS alab (Array sh' e)
             -> Fun aenv lab alab () (e -> e -> e)            -- combination function
-            -> OpenAcc aenv lab alab args (Array sh' e)   -- default values
+            -> OpenAcc aenv lab alab args (Array sh' e)      -- default values
             -> Fun aenv lab alab () (sh -> A.PrimMaybe sh')  -- permutation function
-            -> OpenAcc aenv lab alab args (Array sh e)    -- source array
+            -> OpenAcc aenv lab alab args (Array sh e)       -- source array
             -> OpenAcc aenv lab alab args (Array sh' e)
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
@@ -161,12 +161,13 @@ data OpenAcc aenv lab alab args t where
 
     Avar    :: ADLabelNS alab (Array sh e)  -- own label
             -> A.ArrayVar env (Array sh e)  -- pointer to binding
-            -> ADLabelNS alab (Array sh e)  -- label of referred-to right-hand side
+            -> APartLabelN alab rhs_t (Array sh e)  -- label of, and index into, referred-to right-hand side
             -> OpenAcc env lab alab args (Array sh e)
 
-    Aarg    :: ADLabelNS alab t
-            -> Idx args t
-            -> OpenAcc env lab alab args t
+    Aarg    :: ADLabelNS alab (Array sh e)
+            -> ArraysR args
+            -> TupleIdx args (Array sh e)
+            -> OpenAcc env lab alab args (Array sh e)
 
 type Acc = OpenAcc ()
 
@@ -295,18 +296,18 @@ showsAcc se d (Alet lhs rhs body) = showParen (d > 0) $
         env' = descrs ++ seAenv se
     in showString ("let " ++ descr ++ " = ") . showsAcc (se { seSeed = seed' }) 0 rhs .
             showString " in " . showsAcc (se { seSeed = seed', seAenv = env' }) 0 body
-showsAcc se _ (Avar lab (A.Var _ idx) referLab) =
+showsAcc se _ (Avar lab (A.Var _ idx) (PartLabel referLab referPart)) =
     let varstr
           | descr : _ <- drop (idxToInt idx) (seAenv se) = descr
           | otherwise = "tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))
     in case ashowLabelSuffix se referLab "" of
          "" -> showString varstr
          referLabStr ->
-             showString ("(" ++ varstr ++ "->" ++ referLabStr ++ ")") .
+             showString ("(" ++ varstr ++ "->" ++ tiPrefixAcc referPart ++ " " ++ referLabStr ++ ")") .
              ashowLabelSuffix se lab
-showsAcc se d (Aarg lab idx) = showParen (d > 0) $
-    showString ('A' : show (idxToInt idx)) . ashowLabelSuffix se lab .
-    showString (" :: " ++ show (labelType lab))
+showsAcc se d (Aarg lab _ tidx) = showParen (d > 0) $
+    showString (case tiPrefixAcc tidx of "" -> "A" ; pr -> "(" ++ pr ++ " A)")
+    . ashowLabelSuffix se lab . showString (" :: " ++ show (labelType lab))
 
 tiPrefixAcc :: TupleIdx t t' -> String
 tiPrefixAcc = tiPrefix "afst" "asnd"
@@ -352,24 +353,18 @@ alabelOf (Sum lab _) = tupleLabel lab
 alabelOf (Aget lab _ _) = lab
 alabelOf (Alet _ _ body) = alabelOf body
 alabelOf (Avar lab _ _) = tupleLabel lab
-alabelOf (Aarg lab _) = tupleLabel lab
+alabelOf (Aarg lab _ _) = tupleLabel lab
 
 atypeOf :: OpenAcc aenv lab alab args t -> ArraysR t
 atypeOf = labelType . alabelOf
 
-alabValFind :: Eq lab => LabVal lty ArrayR lab env -> DLabel lty ArrayR lab t -> Maybe (Idx env t)
-alabValFind LEmpty _ = Nothing
-alabValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
-    | Just Refl <- matchArrayR ty ty2
-    , lab == lab2 = Just ZeroIdx
-    | otherwise = SuccIdx <$> alabValFind env target
+alabelOf1 :: OpenAcc aenv lab alab args (Array sh t) -> ADLabelNS alab (Array sh t)
+alabelOf1 a | DLabel (TupRsingle ty@ArrayR{}) lab <- alabelOf a = DLabel ty lab
+            | otherwise = error "invalid GADTs"
 
-alabValFinds :: Eq lab => LabVal lty ArrayR lab env -> TupR (DLabel lty ArrayR lab) t -> Maybe (A.ArrayVars env t)
-alabValFinds _ TupRunit = Just TupRunit
-alabValFinds labelenv (TupRsingle lab) =
-    TupRsingle . A.Var (labelType lab) <$> alabValFind labelenv lab
-alabValFinds labelenv (TupRpair labs1 labs2) =
-    TupRpair <$> alabValFinds labelenv labs1 <*> alabValFinds labelenv labs2
+atypeOf1 :: OpenAcc aenv lab alab args (Array sh t) -> ArrayR (Array sh t)
+atypeOf1 a | TupRsingle ty <- atypeOf a = ty
+           | otherwise = error "invalid GADTs"
 
 avars :: A.ArrayVars aenv t -> OpenAcc aenv lab () args t
 avars = snd . avars'
@@ -377,11 +372,36 @@ avars = snd . avars'
     avars' :: A.ArrayVars aenv t -> (ArraysR t, OpenAcc aenv lab () args t)
     avars' TupRunit = (TupRunit, Anil (nilLabel TupRunit))
     avars' (TupRsingle var@(A.Var ty@ArrayR{} _)) =
-        (TupRsingle ty, Avar (nilLabel ty) var (nilLabel ty))
+        (TupRsingle ty, Avar (nilLabel ty) var (PartLabel (nilLabel (TupRsingle ty)) TIHere))
     avars' (TupRpair vars1 vars2) =
         let (t1, e1) = avars' vars1
             (t2, e2) = avars' vars2
         in (TupRpair t1 t2, Apair (nilLabel (TupRpair t1 t2)) e1 e2)
 
+untupleAccs :: TupR (OpenAcc aenv () () args) t -> OpenAcc aenv () () args t
+untupleAccs TupRunit = Anil (nilLabel TupRunit)
+untupleAccs (TupRsingle e) = e
+untupleAccs (TupRpair t1 t2) = smartApair (untupleAccs t1) (untupleAccs t2)
+
 smartAvar :: A.ArrayVar aenv (Array sh t) -> OpenAcc aenv lab () args (Array sh t)
-smartAvar var@(A.Var ty _) = Avar (nilLabel ty) var (nilLabel ty)
+smartAvar var@(A.Var ty _) = Avar (nilLabel ty) var (PartLabel (nilLabel (TupRsingle ty)) TIHere)
+
+smartApair :: OpenAcc aenv lab () args a -> OpenAcc aenv lab () args b -> OpenAcc aenv lab () args (a, b)
+smartApair a b = Apair (nilLabel (TupRpair (atypeOf a) (atypeOf b))) a b
+
+-- TODO: make smartFstA and smartSndA non-quadratic
+smartFstA :: OpenAcc aenv lab () args (t1, t2) -> OpenAcc aenv lab () args t1
+smartFstA (Apair _ ex _) = ex
+smartFstA (Aget (labelType -> TupRpair t1 _) tidx ex) = Aget (nilLabel t1) (insertFst tidx) ex
+smartFstA ex
+  | TupRpair t1 _ <- atypeOf ex
+  = Aget (nilLabel t1) (TILeft TIHere) ex
+smartFstA _ = error "smartFstA: impossible GADTs"
+
+smartSndA :: OpenAcc aenv lab () args (t1, t2) -> OpenAcc aenv lab () args t2
+smartSndA (Apair _ _ ex) = ex
+smartSndA (Aget (labelType -> TupRpair _ t2) tidx ex) = Aget (nilLabel t2) (insertSnd tidx) ex
+smartSndA ex
+  | TupRpair _ t2 <- atypeOf ex
+  = Aget (nilLabel t2) (TIRight TIHere) ex
+smartSndA _ = error "smartSndA: impossible GADTs"

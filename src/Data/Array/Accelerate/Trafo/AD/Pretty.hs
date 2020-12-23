@@ -100,7 +100,7 @@ layoutExp :: EShowEnv lab alab -> Int -> OpenExp env aenv lab alab args tenv t -
 layoutExp se _ (Const lab x) =
     string (showScalar (labelType lab) x ++ showLabelSuffix' se lab)
 layoutExp se d (PrimApp lab f (Pair _ e1 e2))
-  | isInfixOp f, "" <- showLabelSuffix se lab "" =
+  | isInfixOp f, "" <- showLabelSuffix' se lab =
       let prec = precedence f
           ops = prettyPrimFun Infix f
       in parenthesise (d > prec) $ lseq'
@@ -124,14 +124,14 @@ layoutExp se d (Cond lab c t e) =
                    ,layoutExp se 11 e])
 layoutExp se d (Shape lab (Left (A.Var _ idx))) =
     parenthesise (d > 10) $
-        lprefix ("shape " ++ showLabelSuffix' se lab ++ " ")
+        lprefix ("shape" ++ showLabelSuffix' se lab ++ " ")
             (case drop (idxToInt idx) (seAenv se) of
                 descr : _ -> string descr
                 [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))))
-layoutExp se d (Shape lab (Right alab)) =
+layoutExp se d (Shape lab (Right (AnyPartLabel partl))) =
     parenthesise (d > 10) $
         string $ "shape" ++ showLabelSuffix' se lab ++ " (L" ++
-                 seAlabf se (labelLabel alab) ++ " :: " ++ show (labelType alab) ++ ")"
+                 showPartLabelSuffix (seAlabf se) partl "" ++ " :: " ++ show (partLabelSmallType partl) ++ ")"
 layoutExp se d (Index lab subj execLab e) =
     parenthesise (d > 10) $ lseq'
         [case subj of
@@ -139,8 +139,8 @@ layoutExp se d (Index lab subj execLab e) =
               case drop (idxToInt idx) (seAenv se) of
                   descr : _ -> string descr
                   [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
-           Right alab ->
-              string ('L' : seAlabf se (labelLabel alab) ++ " :: " ++ show (labelType alab))
+           Right (AnyPartLabel partl) ->
+              string ('L' : showPartLabelSuffix (seAlabf se) partl "" ++ " :: " ++ show (partLabelSmallType partl))
         ,string ("!" ++ showLabelSuffix' se lab ++
                     (case showLabelSuffix' se execLab of
                        "" -> ""
@@ -164,7 +164,7 @@ layoutExp se _ (Var lab (A.Var _ idx) (PartLabel referLab referPart)) =
     let varstr
           | descr : _ <- drop (idxToInt idx) (seEnv se) = descr
           | otherwise = "tE_UP" ++ show (1 + idxToInt idx - length (seEnv se))
-    in case showLabelSuffix se referLab "" of
+    in case showLabelSuffix' se referLab of
          "" -> string varstr
          referLabStr ->
              string ("(" ++ varstr ++ "->" ++ tiPrefixExp referPart ++ " " ++
@@ -172,7 +172,8 @@ layoutExp se _ (Var lab (A.Var _ idx) (PartLabel referLab referPart)) =
 layoutExp se d (FreeVar lab (A.Var ty idx)) = parenthesise (d > 0) $
     string ("tFREE" ++ show (1 + idxToInt idx) ++ showLabelSuffix' se lab ++ " :: " ++ show ty)
 layoutExp se d (Arg lab _ tidx) = parenthesise (d > 0) $
-    string ('A' : compactTupleIdx tidx ++ showLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
+    string ((case tiPrefixExp tidx of "" -> "A" ; pr -> "(" ++ pr ++ " A)")
+            ++ showLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
 
 layoutAcc :: AShowEnv lab alab -> Int -> OpenAcc env lab alab args t -> Layout
 layoutAcc se _ (Aconst lab@DLabel { labelType = ty } x) =
@@ -272,16 +273,17 @@ layoutAcc se d (Alet lhs rhs body) = parenthesise (d > 0) $
               ,case body of
                    Alet _ _ _ -> layoutAcc (se { seSeed = seed', seAenv = env' }) 0 body
                    _ -> lprefix "in " (layoutAcc (se { seSeed = seed', seAenv = env' }) 0 body)]
-layoutAcc se _ (Avar lab (A.Var _ idx) referLab) =
+layoutAcc se _ (Avar lab (A.Var _ idx) (PartLabel referLab referPart)) =
     let varstr
           | descr : _ <- drop (idxToInt idx) (seAenv se) = descr
           | otherwise = "tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))
-    in case ashowLabelSuffix se referLab "" of
+    in case ashowLabelSuffix' se referLab of
          "" -> string varstr
          referLabStr ->
-             string ("(" ++ varstr ++ "->" ++ referLabStr ++ ")" ++ ashowLabelSuffix' se lab)
-layoutAcc se d (Aarg lab idx) = parenthesise (d > 0) $
-    string ('A' : show (idxToInt idx) ++ ashowLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
+             string ("(" ++ varstr ++ "->" ++ tiPrefixAcc referPart ++ " " ++ referLabStr ++ ")" ++ ashowLabelSuffix' se lab)
+layoutAcc se d (Aarg lab _ tidx) = parenthesise (d > 0) $
+    string ((case tiPrefixAcc tidx of "" -> "A" ; pr -> "(" ++ pr ++ " A)")
+            ++ ashowLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
 
 layoutFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab tenv t -> Layout
 layoutFun se d (Body expr) = layoutExp se d expr
@@ -302,7 +304,7 @@ showRSpec (RSpecReduce spec) = "(" ++ showRSpec spec ++ ", [red])"
 showRSpec (RSpecKeep spec) = "(" ++ showRSpec spec ++ ", [keep])"
 
 showLabelSuffix' :: EShowEnv lab alab -> DLabel lty s lab t -> String
-showLabelSuffix' se lab = showLabelSuffix se lab ""
+showLabelSuffix' se lab = showLabelSuffix (seLabf se) lab ""
 
 ashowLabelSuffix' :: AShowEnv lab alab -> DLabel lty s alab t -> String
 ashowLabelSuffix' se lab = ashowLabelSuffix se lab ""

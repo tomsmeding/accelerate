@@ -15,7 +15,7 @@ module Data.Array.Accelerate.Trafo.AD.Common where
 
 import Control.Monad.State.Strict
 import Data.Char (isDigit)
-import Data.List (intercalate, sortOn)
+import Data.List (intercalate, sortOn, foldl')
 import Data.Dependent.Map (DMap)
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Sum (DSum(..))
@@ -25,7 +25,7 @@ import Data.GADT.Compare
 import Data.GADT.Show
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
-import Data.Some (Some, pattern Some, mkSome)
+import Data.Some (Some, pattern Some, mkSome, mapSome)
 import Data.Typeable ((:~:)(Refl))
 import Data.Void
 import GHC.Stack (HasCallStack)
@@ -34,8 +34,10 @@ import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.Var
+import Data.Array.Accelerate.Analysis.Match (matchScalarType, matchArrayR, matchTupR)
 import Data.Array.Accelerate.Representation.Array hiding ((!!))
 import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Trafo.Var (DeclareVars(..), declareVars)
 import Data.Array.Accelerate.Type
 
 
@@ -86,6 +88,37 @@ data PartLabel lty s lab t t' = PartLabel (DLabel lty s lab t) (TupleIdx t t')
 type EPartLabelN = PartLabel NodeLabel TypeR
 type APartLabelN = PartLabel NodeLabel ArraysR
 
+-- Existentialises the "large type" parameter of a PartLabel.
+data AnyPartLabel lty s lab t' = forall t. AnyPartLabel (PartLabel lty s lab t t')
+
+type EAnyPartLabelN = AnyPartLabel NodeLabel TypeR
+type AAnyPartLabelN = AnyPartLabel NodeLabel ArraysR
+
+deriving instance (Show lab, forall t. Show (s t)) => Show (AnyPartLabel lty s lab t')
+
+partLabelLargeType :: PartLabel lty s lab t t' -> s t
+partLabelLargeType (PartLabel lab _) = labelType lab
+
+partLabelSmallType :: PartLabel lty (TupR s) lab t t' -> TupR s t'
+partLabelSmallType (PartLabel lab tidx) = pickTupR tidx (labelType lab)
+
+instance (Eq lab, GEq s) => GEq (AnyPartLabel lty s lab) where
+    geq (AnyPartLabel (PartLabel lab tidx)) (AnyPartLabel (PartLabel lab' tidx'))
+      | Just Refl <- geq lab lab'
+      , Just Refl <- geq tidx tidx'
+      = Just Refl
+      | otherwise
+      = Nothing
+
+instance (Ord lab, GCompare s) => GCompare (AnyPartLabel lty s lab) where
+    gcompare (AnyPartLabel (PartLabel lab tidx)) (AnyPartLabel (PartLabel lab' tidx')) =
+        case gcompare lab lab' of
+          GEQ -> case gcompare tidx tidx' of
+                   GEQ -> GEQ
+                   r -> r
+          GLT -> GLT
+          GGT -> GGT
+
 
 -- Convenience function like 'scalarType', except for tuple types
 class IsTuple t where tupleType :: TypeR t
@@ -108,9 +141,18 @@ nilLabel ty = DLabel ty ()
 class    IsTupleType scalar s              where toTupleType :: s t -> TupR scalar t
 instance IsTupleType ScalarType TypeR      where toTupleType = id
 instance IsTupleType ScalarType ScalarType where toTupleType = TupRsingle
+instance IsTupleType ArrayR ArraysR where toTupleType = id
+instance IsTupleType ArrayR ArrayR  where toTupleType = TupRsingle
 
-tupleLabel' :: IsTupleType scalar s => DLabel lty s lab t -> DLabel lty (TupR scalar) lab t
-tupleLabel' (DLabel ty lab) = DLabel (toTupleType ty) lab
+-- Only allowed for node labels, since env labels can only usefully refer to
+-- non-tuple values due to mandatory let-destructuring. This restriction is not
+-- syntactically necessary, but semantically it might prevent mishaps.
+tupleLabel :: IsTupleType scalar s => DLabel NodeLabel s lab t -> DLabel NodeLabel (TupR scalar) lab t
+tupleLabel (DLabel ty lab) = DLabel (toTupleType ty) lab
+
+-- Same as tupleLabel, but for if you know you have a scalar label in hand.
+tupleLabel' :: DLabel NodeLabel s lab t -> DLabel NodeLabel (TupR s) lab t
+tupleLabel' (DLabel ty lab) = DLabel (TupRsingle ty) lab
 
 
 
@@ -140,6 +182,19 @@ data TupleIdx t t' where
     TIRight :: TupleIdx b t -> TupleIdx (a, b) t
 
 deriving instance Show (TupleIdx t t')
+
+instance GEq (TupleIdx t) where
+    geq tidx tidx' | GEQ <- gcompare tidx tidx' = Just Refl
+                   | otherwise = Nothing
+
+instance GCompare (TupleIdx t) where
+    gcompare TIHere TIHere = GEQ
+    gcompare (TILeft tidx) (TILeft tidx') = gcompare tidx tidx'
+    gcompare (TIRight tidx) (TIRight tidx') = gcompare tidx tidx'
+    gcompare TIHere _ = GLT
+    gcompare _ TIHere = GGT
+    gcompare (TILeft _) _ = GLT
+    gcompare _ (TILeft _) = GGT
 
 -- TODO: move to Shows
 showScalar :: ScalarType t -> t -> String
@@ -228,6 +283,16 @@ zipWithTupR f (TupRsingle a) (TupRsingle b) = TupRsingle (f a b)
 zipWithTupR f (TupRpair a1 a2) (TupRpair b1 b2) = TupRpair (zipWithTupR f a1 b1) (zipWithTupR f a2 b2)
 zipWithTupR _ _ _ = error "impossible GADTs"
 
+zipWithTupRcombine :: a -> (a -> a -> a) -> (forall t'. s1 t' -> s2 t' -> a) -> TupR s1 t -> TupR s2 t -> a
+zipWithTupRcombine z _ _ TupRunit TupRunit = z
+zipWithTupRcombine _ _ f (TupRsingle a) (TupRsingle b) = f a b
+zipWithTupRcombine z c f (TupRpair a1 a2) (TupRpair b1 b2) =
+    c (zipWithTupRcombine z c f a1 b1) (zipWithTupRcombine z c f a2 b2)
+zipWithTupRcombine _ _ _ _ _ = error "Impossible GADTs"
+
+zipTupRmap :: (HasCallStack, GCompare s1) => TupR s1 t -> TupR s2 t -> DMap s1 s2
+zipTupRmap = zipWithTupRcombine mempty (DMap.unionWithKey (error "Overlapping keys in zipTupRmap")) DMap.singleton
+
 prjT :: Idx env t -> TagVal s env -> s t
 prjT ZeroIdx (TPush _ x) = x
 prjT (SuccIdx idx) (TPush env _) = prjT idx env
@@ -250,23 +315,6 @@ uniqueLabVal LEmpty = True
 uniqueLabVal (LPush env (DLabel _ lab)) =
     not (labValContains env lab) && uniqueLabVal env
 
-data FoundTag s env = forall t. FoundTag (s t) (Idx env t)
-
-labValFind' :: Eq lab => LabVal lty s lab env -> lab -> Maybe (FoundTag s env)
-labValFind' LEmpty _ = Nothing
-labValFind' (LPush env (DLabel ty lab)) target
-    | lab == target = Just (FoundTag ty ZeroIdx)
-    | otherwise =
-        case labValFind' env target of
-            Just (FoundTag ty' idx) -> Just (FoundTag ty' (SuccIdx idx))
-            Nothing -> Nothing
-
--- Only allowed for node labels, since env labels can only usefully refer to
--- non-tuple values due to mandatory let-destructuring. This restriction is not
--- syntactically necessary, but semantically it might prevent mishaps.
-tupleLabel :: DLabel NodeLabel s lab t -> DLabel NodeLabel (TupR s) lab t
-tupleLabel (DLabel ty lab) = DLabel (TupRsingle ty) lab
-
 fmapLabel :: (lab -> lab') -> DLabel lty s lab t -> DLabel lty s lab' t
 fmapLabel f (DLabel ty lab) = DLabel ty (f lab)
 
@@ -287,17 +335,34 @@ namifyLHS seed (LeftHandSidePair lhs1 lhs2) =
         (descr2, descrs2, seed2) = namifyLHS seed1 lhs2
     in ("(" ++ descr1 ++ ", " ++ descr2 ++ ")", descrs2 ++ descrs1,seed2)
 
--- TODO: this is quadratic
-insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
-insertFst TIHere = TILeft TIHere
-insertFst (TILeft ti) = TILeft (insertFst ti)
-insertFst (TIRight ti) = TIRight (insertFst ti)
+-- TODO: this is linear, making repeated use of smartFst etc quadratic
+composeTIdx :: TupleIdx t1 t2 -> TupleIdx t2 t3 -> TupleIdx t1 t3
+composeTIdx TIHere ti = ti
+composeTIdx (TILeft ti) ti' = TILeft (composeTIdx ti ti')
+composeTIdx (TIRight ti) ti' = TIRight (composeTIdx ti ti')
 
--- TODO: this is quadratic
+insertFst :: TupleIdx t (t1, t2) -> TupleIdx t t1
+insertFst ti = composeTIdx ti (TILeft TIHere)
+
 insertSnd :: TupleIdx t (t1, t2) -> TupleIdx t t2
-insertSnd TIHere = TIRight TIHere
-insertSnd (TILeft ti) = TILeft (insertSnd ti)
-insertSnd (TIRight ti) = TIRight (insertSnd ti)
+insertSnd ti = composeTIdx ti (TIRight TIHere)
+
+data TuplifyWithTrace b f = forall t. TuplifyWithTrace (TupR f t) [(b, Some (Product f (TupleIdx t)))]
+
+-- This function is ridiculously generic for not really a good reason.
+tuplify' :: Ord b => [a] -> (a -> Some f) -> (a -> b) -> TuplifyWithTrace b f
+tuplify' values toF toKey =
+    foldl' (\(TuplifyWithTrace tup traces) value ->
+                 case toF value of
+                   Some x ->
+                       let newTrace = (toKey value, Some (Product.Pair x (TIRight TIHere)))
+                       in TuplifyWithTrace (TupRpair tup (TupRsingle x))
+                                           (newTrace : map (fmap (mapSome (mapProductSnd TILeft))) traces))
+           (TuplifyWithTrace TupRunit [])
+           values
+
+tuplify :: [Some f] -> Some (TupR f)
+tuplify l | TuplifyWithTrace tup _ <- tuplify' l id (const ()) = Some tup
 
 
 newtype IdGen a = IdGen (State Int a)
@@ -319,11 +384,61 @@ lpushLabTup (LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) labelenv =
     lpushLabTup lhs2 labs2 (lpushLabTup lhs1 labs1 labelenv)
 lpushLabTup _ _ _ = error "lpushLabTup: impossible GADTs"
 
+lpushLHS_parts :: TagVal (AnyPartLabel NodeLabel (TupR s) Int) env -> DLabel NodeLabel (TupR s) Int tfull -> TupleIdx tfull t -> LeftHandSide s t env env' -> TagVal (AnyPartLabel NodeLabel (TupR s) Int) env'
+lpushLHS_parts env' referLab ti (LeftHandSidePair lhs1 lhs2) =
+    lpushLHS_parts (lpushLHS_parts env' referLab (insertFst ti) lhs1) referLab (insertSnd ti) lhs2
+lpushLHS_parts env' referLab ti (LeftHandSideSingle _) =
+    TPush env' (AnyPartLabel (PartLabel referLab ti))
+lpushLHS_parts env' _ _ (LeftHandSideWildcard _) = env'
+
+
+class Matchable s where
+    matchMatchable :: s t -> s t' -> Maybe (t :~: t')
+instance Matchable ScalarType where matchMatchable = matchScalarType
+instance Matchable ArrayR     where matchMatchable = matchArrayR
+instance Matchable s => Matchable (TupR s) where
+    matchMatchable = matchTupR matchMatchable
+
+labValFind :: (Matchable s, Show (s t), Eq lab, Show lab) => LabVal lty s lab env -> DLabel lty s lab t -> Maybe (Var s env t)
+labValFind LEmpty _ = Nothing
+labValFind (LPush env (DLabel ty lab)) target@(DLabel ty2 lab2)
+  | lab == lab2 = case matchMatchable ty ty2 of
+                    Just Refl -> Just (Var ty ZeroIdx)
+                    _ -> error $ "labValFind: label " ++ showDLabel target ++ " found but has wrong type"
+  | otherwise = (\(Var ty' idx) -> Var ty' (SuccIdx idx)) <$> labValFind env target
+
+labValFinds :: (Matchable s, forall t'. Show (s t'), Eq lab, Show lab) => LabVal lty s lab env -> TupR (DLabel lty s lab) t -> Maybe (Vars s env t)
+labValFinds _ TupRunit = Just TupRunit
+labValFinds labelenv (TupRsingle lab) = TupRsingle <$> labValFind labelenv lab
+labValFinds labelenv (TupRpair labs1 labs2) =
+    TupRpair <$> labValFinds labelenv labs1 <*> labValFinds labelenv labs2
+
+resolveEnvLab :: (HasCallStack, forall t'. Show (s t'), Eq lab, Show lab, Matchable s) => Context s tag lab env -> DLabel EnvLabel s lab t -> Var s env t
+resolveEnvLab (Context labelenv _) lab
+  | Just var <- labValFind labelenv lab = var
+  | otherwise = error $ "resolveEnvLab: not found: " ++ showDLabel lab
+
+resolveEnvLabs :: (HasCallStack, forall t'. Show (s t'), Eq lab, Show lab, Matchable s) => Context s tag lab env -> TupR (DLabel EnvLabel s lab) t -> Vars s env t
+resolveEnvLabs (Context labelenv _) labs
+  | Just vars <- labValFinds labelenv labs = vars
+  | otherwise = error $ "resolveEnvLabs: not found: " ++ showTupR showDLabel labs
+
 
 pvalPushLHS :: LeftHandSide s t env env' -> PartialVal s topenv env -> PartialVal s topenv env'
 pvalPushLHS (LeftHandSideWildcard _) tv = tv
 pvalPushLHS (LeftHandSideSingle sty) tv = PTPush tv sty
 pvalPushLHS (LeftHandSidePair lhs1 lhs2) tv = pvalPushLHS lhs2 (pvalPushLHS lhs1 tv)
+
+
+indexIntoLHS :: LeftHandSide s t env env' -> TupleIdx t t' -> Maybe (Idx env' t')
+indexIntoLHS (LeftHandSideWildcard _) _ = Nothing  -- ignored or out of scope
+indexIntoLHS (LeftHandSideSingle _) TIHere = Just ZeroIdx
+indexIntoLHS (LeftHandSideSingle _) _ = Nothing  -- out of scope
+indexIntoLHS (LeftHandSidePair lhs1 lhs2) (TILeft ti) =
+    (weakenWithLHS lhs2 >:>) <$> indexIntoLHS lhs1 ti
+indexIntoLHS (LeftHandSidePair _ lhs2) (TIRight ti) = indexIntoLHS lhs2 ti
+indexIntoLHS (LeftHandSidePair _ _) TIHere =
+    error "indexIntoLHS: TupleIdx doesn't point to a scalar"
 
 
 -- TODO: Is PDAux actually used anywhere? If not, remove the constructor and the other Aux stuff
@@ -338,7 +453,7 @@ type PDExp = PD PDAuxTagExp
 type PDAcc = PD PDAuxTagAcc
 
 type BindMap s tag lab =
-    DMap (DLabel NodeLabel (TupR s) (PD tag lab))
+    DMap (CMapKey s (PD tag lab))
          (TupR (DLabel EnvLabel s lab))
 type EBindMap lab = BindMap ScalarType PDAuxTagExp lab
 type ABindMap lab = BindMap ArrayR PDAuxTagAcc lab
@@ -368,17 +483,19 @@ showLabelenv (LPush env lab) = "[" ++ go env ++ showDLabel lab ++ "]"
 showBindmap :: (Ord lab, Show lab, Show tag, Ord tag, forall t. Show (s t), forall t. Show (TupR s t))
             => BindMap s tag lab -> String
 showBindmap bindmap =
-    let tups = sortOn fst [(lab, (showDLabel dlab, showTupR showDLabel labs))
-                          | dlab@(DLabel _ lab) :=> labs <- DMap.assocs bindmap]
+    let tups = sortOn fst [(sortKey, (showCMapKey showDLabel dlab, showTupR showDLabel labs))
+                          | dlab :=> labs <- DMap.assocs bindmap
+                          , let sortKey = case dlab of Argument _ -> Nothing
+                                                       Local (DLabel _ lab) -> Just lab]
         s = intercalate ", " ["(" ++ dlabshow ++ ") :=> " ++ labsshow
                              | (_, (dlabshow, labsshow)) <- tups]
     in "[" ++ s ++ "]"
 
-filterBindmap :: (GCompare s, GCompare (TupR s), Ord tag, Ord lab)
+filterBindmap :: (Matchable s, GCompare s, GCompare (TupR s), Ord tag, Ord lab)
               => [Some (DLabel NodeLabel (TupR s) (PD tag lab))]
               -> BindMap s tag lab
               -> BindMap s tag lab
-filterBindmap labs bm = DMap.fromList [lab :=> bm DMap.! lab | Some lab <- labs]
+filterBindmap labs bm = DMap.fromList [Local lab :=> bm DMap.! Local lab | Some lab <- labs]
 
 reassignBindmap :: (GCompare s, Ord lab)
                 => TupR (DLabel EnvLabel s lab) t
@@ -408,8 +525,52 @@ dmapDisjointUnions :: (HasCallStack, GCompare k) => [DMap k v] -> DMap k v
 dmapDisjointUnions =
     DMap.unionsWithKey (error "dmapDisjointUnions: overlapping entries")
 
-mapDisjointUnions :: (HasCallStack, Ord k) => [Map.Map k v] -> Map.Map k v
-mapDisjointUnions = Map.unionsWith (error "mapDisjointUnions: overlapping entries")
+ctxPushS :: (Matchable s, Ord tag, GCompare s, GCompare (TupR s))
+         => DLabel NodeLabel s (PD tag Int) t -> DLabel EnvLabel s Int t -> Context s tag Int env -> Context s tag Int (env, t)
+ctxPushS nodelab envlab =
+    ctxPush (LeftHandSideSingle (labelType nodelab)) (tupleLabel' nodelab) (TupRsingle envlab)
+
+ctxPush :: (Matchable s, Ord tag, GCompare s, GCompare (TupR s))
+        => LeftHandSide s t env env' -> DLabel NodeLabel (TupR s) (PD tag Int) t -> TupR (DLabel EnvLabel s Int) t -> Context s tag Int env -> Context s tag Int env'
+ctxPush lhs nodelab envlabs (Context labelenv bindmap) =
+    Context (lpushLabTup lhs envlabs labelenv) (DMap.insert (Local nodelab) envlabs bindmap)
+
+ctxPushEnvOnly :: (Ord tag, GCompare s, GCompare (TupR s))
+        => LeftHandSide s t env env' -> TupR (DLabel EnvLabel s Int) t -> Context s tag Int env -> Context s tag Int env'
+ctxPushEnvOnly lhs envlabs (Context labelenv bindmap) = Context (lpushLabTup lhs envlabs labelenv) bindmap
+
+ctxPushSEnvOnly :: (Ord tag, GCompare s, GCompare (TupR s))
+                => DLabel EnvLabel s Int t -> Context s tag Int env -> Context s tag Int (env, t)
+ctxPushSEnvOnly envlab = ctxPushEnvOnly (LeftHandSideSingle (labelType envlab)) (TupRsingle envlab)
+
+-- Find the primal of a node in the bindmap
+findPrimalBMap :: (HasCallStack, IsTupleType s s_lab, Matchable s, GCompare s, GCompare (TupR s), Show lab, Ord lab, Ord tag)
+               => Context s tag lab env
+               -> DLabel NodeLabel s_lab lab t
+               -> TupR (DLabel EnvLabel s lab) t
+findPrimalBMap (Context _ bindmap) lbl =
+    case DMap.lookup (Local (fmapLabel P (tupleLabel lbl))) bindmap of
+      Just labs -> labs
+      Nothing -> error $ "findPrimalBMap: not found: L" ++ show (labelLabel lbl)
+
+findArgumentPrimalBMap :: (HasCallStack, Matchable s, GCompare s, GCompare (TupR s), Ord lab, Ord tag)
+                       => Context s tag lab env
+                       -> TupR s args
+                       -> TupR (DLabel EnvLabel s lab) args
+findArgumentPrimalBMap (Context _ bindmap) argsty =
+    case DMap.lookup (Argument argsty) bindmap of
+      Just labs -> labs
+      Nothing -> error $ "findArgumentPrimalBMap: not found"
+
+-- Find the adjoint of a node in the bindmap
+findAdjointBMap :: (HasCallStack, IsTupleType s s_lab, Matchable s, GCompare s, GCompare (TupR s), Show lab, Ord lab, Ord tag)
+                => Context s tag lab env
+                -> DLabel NodeLabel s_lab lab t
+                -> TupR (DLabel EnvLabel s lab) t
+findAdjointBMap (Context _ bindmap) lbl =
+    case DMap.lookup (Local (fmapLabel D (tupleLabel lbl))) bindmap of
+      Just labs -> labs
+      Nothing -> error $ "findAdjointBMap: not found: L" ++ show (labelLabel lbl)
 
 
 -- TODO: make this 'type AnyLabel lty s lab = Exists (DLabel lty s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
@@ -437,8 +598,7 @@ instance (Ord lab, GCompare s) => Ord (AnyLabel lty s lab) where
           EQ | GEQ <- gcompare ty1 ty2 -> EQ
              | otherwise -> error "Ord AnyLabel: labels match, but types do not!"
 
-instance (Show lab, forall t. Show (s t)) => Show (AnyLabel lty s lab) where
-    showsPrec p (AnyLabel lab) = showParen (p > 10) (showString "AnyLabel " . showsPrec 11 lab)
+deriving instance (Show lab, forall t. Show (s t)) => Show (AnyLabel lty s lab)
 
 
 data EnvCapture s tag env lab =
@@ -459,7 +619,7 @@ data EnvInstantiator s tag lab tmp =
                   -> Vars s env1 tmp
                   -> BindMap s tag lab)
 
-captureEnvironmentSlice :: (GCompare s, GCompare (TupR s), Ord tag) => Context s tag Int topenv -> Context s tag Int env -> EnvCapture s tag env Int
+captureEnvironmentSlice :: (Matchable s, GCompare s, GCompare (TupR s), Ord tag) => Context s tag Int topenv -> Context s tag Int env -> EnvCapture s tag env Int
 captureEnvironmentSlice (Context toplabelenv topbindmap) (Context origlabelenv origbindmap)
   | let barrierLab = case toplabelenv of
                        LEmpty -> Nothing
@@ -502,3 +662,54 @@ mapProductFst f (Product.Pair x y) = Product.Pair (f x) y
 
 mapProductSnd :: (forall t. g t -> h t) -> Product f g a -> Product f h a
 mapProductSnd f (Product.Pair x y) = Product.Pair x (f y)
+
+
+data LetBoundVars s env t t' =
+    forall env'. LetBoundVars (LeftHandSide s t env env') (Vars s env' t')
+
+lhsCopy :: TupR s t -> LetBoundVars s env t t
+lhsCopy t
+  | DeclareVars lhs _ varsgen <- declareVars t
+  = LetBoundVars lhs (varsgen weakenId)
+
+
+-- Perhaps this should be HList, but really that API is too complicated. Let's keep it simple.
+infixr :@
+data TypedList f tys where
+    TLNil :: TypedList f '[]
+    (:@) :: f t -> TypedList f tys -> TypedList f (t ': tys)
+
+tlmap :: (forall t. f t -> g t) -> TypedList f tys -> TypedList g tys
+tlmap _ TLNil = TLNil
+tlmap f (x :@ xs) = f x :@ tlmap f xs
+
+-- Key for the contribution map in the dual phase. Either a label of the
+-- right-hand side from the original expression/program, or a reference to the
+-- argument.
+-- Also used as key for the bindmap, since there we need to store the location
+-- of the argument as well (to be able to locate the right primal vars to
+-- generate zeros in the Arg contributions, stupid as hell).
+-- TODO: Since it's also used as key of the bindmap, better name please.
+data CMapKey s lab t = Argument (TupR s t) | Local (DLabel NodeLabel (TupR s) lab t)
+
+deriving instance (Show (TupR s t), Show lab) => Show (CMapKey s lab t)
+
+instance (GEq s, GEq (TupR s), Eq lab, Matchable (TupR s)) => GEq (CMapKey s lab) where
+    geq (Argument t1) (Argument t2) = matchMatchable t1 t2
+    geq (Local l1) (Local l2) = geq l1 l2
+    geq _ _ = Nothing
+
+instance (GCompare s, GCompare (TupR s), Ord lab, Matchable (TupR s)) => GCompare (CMapKey s lab) where
+    gcompare (Argument t1) (Argument t2) = gcompare t1 t2
+    gcompare (Local l1) (Local l2) = gcompare l1 l2
+    gcompare (Argument _) (Local _) = GLT
+    gcompare (Local _) (Argument _) = GGT
+
+cmapKeyType :: CMapKey s lab t -> TupR s t
+cmapKeyType (Argument ty) = ty
+cmapKeyType (Local lab) = labelType lab
+
+showCMapKey :: (Show (TupR s t), Show lab)
+            => (DLabel NodeLabel (TupR s) lab t -> String) -> CMapKey s lab t -> String
+showCMapKey _ (Argument ty) = "A :: " ++ show ty
+showCMapKey f (Local lab) = f lab
