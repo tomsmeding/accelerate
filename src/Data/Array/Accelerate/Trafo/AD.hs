@@ -73,7 +73,7 @@ convertExp e =
 
 convertAccEntry :: Acc arrs -> Acc arrs
 convertAccEntry a =
-    let result = convertAcc (trace ("\nComputation before AD pass:\n" ++ show a) a)
+    let result = convertAcc (trace ("Computation before AD pass:\n" ++ show a) a)
     in trace ("Computation after AD pass:\n" ++ show result ++ "\n") result
 
 convertAfunEntry :: Afun t -> Afun t
@@ -125,8 +125,7 @@ convertPAcc (GradientA _ sty (Alam lhs (Abody body)) arg)
               error "Body of gradientA not a closed expression"
   | otherwise =
       error $ "gradientA expression must produce (Array Z Float), other types currently unsupported: " ++ show sty
-convertPAcc acc =
-  internalError ("convertAcc: Cannot convert Acc node <" ++ showPreAccOp acc ++ ">")
+convertPAcc (GradientA _ _ _ _) = error "GradientA is being worked on!"
 
 convertFun :: OpenFun env aenv t -> OpenFun env aenv t
 convertFun (Lam lhs f) = Lam lhs (convertFun f)

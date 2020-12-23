@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 module Data.Array.Accelerate.Trafo.AD.Debug where
 
-#undef DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 import qualified Debug.Trace as Trace

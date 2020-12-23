@@ -29,7 +29,7 @@ import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Trafo.AD.Acc as D
 import qualified Data.Array.Accelerate.Trafo.AD.Additive as D (zeroForType)
 import qualified Data.Array.Accelerate.Trafo.AD.Common as D
-import Data.Array.Accelerate.Trafo.AD.Common (labelType, magicLabel, nilLabel, scalarLabel, tupleLabel)
+import Data.Array.Accelerate.Trafo.AD.Common (labelType, magicLabel, nilLabel, scalarLabel)
 import Data.Array.Accelerate.Trafo.AD.Common (PartialVal(..), pvalPushLHS)
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
 
@@ -71,7 +71,7 @@ translateAcc (A.OpenAcc expr) = case expr of
     A.Backpermute shr dim f e ->
         D.Backpermute (nilLabel (ArrayR shr (arrayRtype (A.arrayR e)))) (translateExp dim) (translateFun f) (translateAcc e)
     A.Alet lhs def body -> D.Alet lhs (translateAcc def) (translateAcc body)
-    A.Avar var@(A.Var ty _) -> D.Avar (nilLabel ty) var (nilLabel ty)
+    A.Avar var@(A.Var ty _) -> D.Avar (nilLabel ty) var (D.PartLabel (nilLabel (TupRsingle ty)) D.TIHere)
     _ -> internalError ("AD.translateAcc: Cannot perform AD on Acc node <" ++ A.showPreAccOp expr ++ ">")
   where
     toPairedBinop :: D.OpenFun env aenv lab alab tenv (t1 -> t2 -> t3) -> D.OpenFun env aenv lab alab tenv ((t1, t2) -> t3)
@@ -94,7 +94,7 @@ translateExp expr = case expr of
     A.Const ty con -> D.Const (nilLabel ty) con
     A.PrimApp f e -> D.PrimApp (nilLabel (A.expType expr)) f (translateExp e)
     A.PrimConst c -> D.PrimConst (nilLabel (SingleScalarType (A.primConstType c))) c
-    A.Evar (A.Var rep idx) -> D.Var (nilLabel rep) (A.Var rep idx) (D.PartLabel (tupleLabel (nilLabel rep)) D.TIHere)
+    A.Evar (A.Var rep idx) -> D.smartVar (A.Var rep idx)
     A.Let lhs def body -> D.Let lhs (translateExp def) (translateExp body)
     A.Nil -> D.Nil magicLabel
     A.Cond c t e -> D.Cond (nilLabel (A.expType t)) (translateExp c) (translateExp t) (translateExp e)
@@ -111,7 +111,7 @@ translateExpInPVal pv expr = case expr of
     A.PrimApp f e -> D.PrimApp (nilLabel (A.expType expr)) f (translateExpInPVal pv e)
     A.PrimConst c -> D.PrimConst (nilLabel (SingleScalarType (A.primConstType c))) c
     A.Evar var -> case D.eCheckLocalP matchScalarType var pv of
-        Right var'@(A.Var ty _) -> D.Var (nilLabel ty) var' (D.PartLabel (tupleLabel (nilLabel ty)) D.TIHere)
+        Right var'@(A.Var _ _) -> D.smartVar var'
         Left topvar@(A.Var ty _) -> D.FreeVar (nilLabel ty) topvar
     A.Let lhs def body -> D.Let lhs (translateExpInPVal pv def) (translateExpInPVal (pvalPushLHS lhs pv) body)
     A.Nil -> D.Nil magicLabel
@@ -155,8 +155,8 @@ untranslateLHSboundExp toplhs topexpr topweak
         D.Index _ (Right _) _ _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position"
         D.ShapeSize _ sht e -> A.ShapeSize sht (go e w pv)
         D.Get _ path e
-          | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
-          -> A.Let lhs (go e w pv) body
+          | D.LetBoundVars lhs vars <- euntranslateGet (D.etypeOf e) path
+          -> A.Let lhs (go e w pv) (a_evars vars)
         D.Undef lab -> A.Undef (labelType lab)
         D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
 
@@ -188,8 +188,8 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Index _ (Right _) _ _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
         D.ShapeSize _ sht e -> A.ShapeSize sht (go e pv)
         D.Get _ path e
-          | LetBoundExpE lhs body <- euntranslateGet (D.etypeOf e) path
-          -> A.Let lhs (go e pv) body
+          | D.LetBoundVars lhs vars <- euntranslateGet (D.etypeOf e) path
+          -> A.Let lhs (go e pv) (a_evars vars)
         D.Undef lab -> A.Undef (labelType lab)
         D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
 
@@ -285,9 +285,9 @@ untranslateLHSboundAcc toplhs topexpr
         D.Backpermute (labelType -> ArrayR sht _) dim f e -> A.Backpermute sht (untranslateClosedExpA dim pv) (untranslateClosedFunA f pv) (go e pv)
         D.Permute _ cf def pf e -> A.Permute (untranslateClosedFunA cf pv) (go def pv) (untranslateClosedFunA pf pv) (go e pv)
         D.Aget _ path e
-          | LetBoundExpA lhs body <- auntranslateGet (D.atypeOf e) path
-          -> A.Alet lhs (go e pv) body
-        D.Aarg _ _ -> internalError "AD.untranslateLHSboundAcc: Unexpected Arg in untranslate!"
+          | D.LetBoundVars lhs vars <- auntranslateGet (D.atypeOf e) path
+          -> A.Alet lhs (go e pv) (a_avars vars)
+        D.Aarg _ _ _ -> internalError "AD.untranslateLHSboundAcc: Unexpected Arg in untranslate!"
         D.Map _ _ _ -> error "Unexpected Map shape in untranslate"
         D.ZipWith _ _ _ _ -> error "Unexpected ZipWith shape in untranslate"
         D.Sum _ _ -> error "Unexpected Sum shape in untranslate"
@@ -420,47 +420,27 @@ a_evars TupRunit = A.Nil
 a_evars (TupRsingle var) = A.Evar var
 a_evars (TupRpair vars1 vars2) = A.Pair (a_evars vars1) (a_evars vars2)
 
--- TODO: AD.Exp exports a similar type with the same name; however, this one is for the Accelerate AST, not the AD AST. Make that clear in the name.
-data LetBoundExpE env aenv t s =
-    forall env'. LetBoundExpE (A.ELeftHandSide t env env') (A.OpenExp env' aenv s)
+a_avars :: A.ArrayVars aenv t -> A.OpenAcc aenv t
+a_avars TupRunit = A.OpenAcc A.Anil
+a_avars (TupRsingle var@(A.Var ArrayR{} _)) = A.OpenAcc (A.Avar var)
+a_avars (TupRpair vars1 vars2) = A.OpenAcc (A.Apair (a_avars vars1) (a_avars vars2))
 
-euntranslateGet :: TypeR t -> D.TupleIdx t s -> LetBoundExpE env aenv t s
-euntranslateGet ty D.TIHere = elhsCopy ty
+euntranslateGet :: TypeR t -> D.TupleIdx t t' -> D.LetBoundVars ScalarType env t t'
+euntranslateGet ty D.TIHere = D.lhsCopy ty
 euntranslateGet (TupRpair t1 t2) (D.TILeft path)
-  | LetBoundExpE lhs1 ex1 <- euntranslateGet t1 path
-  = LetBoundExpE (A.LeftHandSidePair lhs1 (A.LeftHandSideWildcard t2)) ex1
+  | D.LetBoundVars lhs1 vars1 <- euntranslateGet t1 path
+  = D.LetBoundVars (A.LeftHandSidePair lhs1 (A.LeftHandSideWildcard t2)) vars1
 euntranslateGet (TupRpair t1 t2) (D.TIRight path)
-  | LetBoundExpE lhs2 ex2 <- euntranslateGet t2 path
-  = LetBoundExpE (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs2) ex2
+  | D.LetBoundVars lhs2 vars2 <- euntranslateGet t2 path
+  = D.LetBoundVars (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs2) vars2
 euntranslateGet _ _ = error "euntranslateGet: impossible GADTs"
 
-elhsCopy :: TypeR t -> LetBoundExpE env aenv t t
-elhsCopy TupRunit = LetBoundExpE (A.LeftHandSideWildcard TupRunit) A.Nil
-elhsCopy (TupRsingle sty) = LetBoundExpE (A.LeftHandSideSingle sty) (A.Evar (A.Var sty A.ZeroIdx))
-elhsCopy (TupRpair t1 t2)
-  | LetBoundExpE lhs1 ex1 <- elhsCopy t1
-  , LetBoundExpE lhs2 ex2 <- elhsCopy t2
-  = let ex1' = A.weakenE (A.weakenWithLHS lhs2) ex1
-    in LetBoundExpE (A.LeftHandSidePair lhs1 lhs2) (A.Pair ex1' ex2)
-
-data LetBoundExpA aenv t s =
-    forall aenv'. LetBoundExpA (A.ALeftHandSide t aenv aenv') (A.OpenAcc aenv' s)
-
-auntranslateGet :: ArraysR t -> D.TupleIdx t s -> LetBoundExpA aenv t s
-auntranslateGet ty D.TIHere = alhsCopy ty
+auntranslateGet :: ArraysR t -> D.TupleIdx t s -> D.LetBoundVars ArrayR aenv t s
+auntranslateGet ty D.TIHere = D.lhsCopy ty
 auntranslateGet (TupRpair t1 t2) (D.TILeft path)
-  | LetBoundExpA lhs1 ex1 <- auntranslateGet t1 path
-  = LetBoundExpA (A.LeftHandSidePair lhs1 (A.LeftHandSideWildcard t2)) ex1
+  | D.LetBoundVars lhs1 ex1 <- auntranslateGet t1 path
+  = D.LetBoundVars (A.LeftHandSidePair lhs1 (A.LeftHandSideWildcard t2)) ex1
 auntranslateGet (TupRpair t1 t2) (D.TIRight path)
-  | LetBoundExpA lhs2 ex2 <- auntranslateGet t2 path
-  = LetBoundExpA (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs2) ex2
+  | D.LetBoundVars lhs2 ex2 <- auntranslateGet t2 path
+  = D.LetBoundVars (A.LeftHandSidePair (A.LeftHandSideWildcard t1) lhs2) ex2
 auntranslateGet _ _ = error "auntranslateGet: impossible GADTs"
-
-alhsCopy :: ArraysR t -> LetBoundExpA aenv t t
-alhsCopy TupRunit = LetBoundExpA (A.LeftHandSideWildcard TupRunit) (A.OpenAcc A.Anil)
-alhsCopy (TupRsingle sty@ArrayR{}) = LetBoundExpA (A.LeftHandSideSingle sty) (A.OpenAcc (A.Avar (A.Var sty A.ZeroIdx)))
-alhsCopy (TupRpair t1 t2)
-  | LetBoundExpA lhs1 ex1 <- alhsCopy t1
-  , LetBoundExpA lhs2 ex2 <- alhsCopy t2
-  = let ex1' = A.weaken (A.weakenWithLHS lhs2) ex1
-    in LetBoundExpA (A.LeftHandSidePair lhs1 lhs2) (A.OpenAcc (A.Apair ex1' ex2))

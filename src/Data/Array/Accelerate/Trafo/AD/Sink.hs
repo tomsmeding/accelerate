@@ -68,7 +68,7 @@ sinkAcc k (Alet lhs rhs e)
   | A.Exists lhs' <- rebuildLHS lhs =
       Alet lhs' (sinkAcc k rhs) (sinkAcc (A.sinkWithLHS lhs lhs' k) e)
 sinkAcc k (Avar lab (A.Var sty idx) referLab) = Avar lab (A.Var sty (k A.>:> idx)) referLab
-sinkAcc _ (Aarg lab idx) = Aarg lab idx
+sinkAcc _ (Aarg lab argsty tidx) = Aarg lab argsty tidx
 
 aCheckLocal :: A.ArrayVar env t -> TagVal A.ArrayR env2 -> Maybe (A.ArrayVar env2 t)
 aCheckLocal _ TEmpty = Nothing
@@ -163,7 +163,7 @@ aCheckClosedInTagval tv expr = case expr of
       | A.Exists lhs' <- rebuildLHS lhs ->
           Alet lhs' <$> aCheckClosedInTagval tv rhs <*> aCheckClosedInTagval (valPushLHS lhs' tv) e
     Avar lab var referLab -> Avar lab <$> aCheckLocal var tv <*> return referLab
-    Aarg lab idx -> Just (Aarg lab idx)
+    Aarg lab argsty tidx -> Just (Aarg lab argsty tidx)
 
 valPushLHS :: A.LeftHandSide s t env env' -> TagVal s env -> TagVal s env'
 valPushLHS (A.LeftHandSideWildcard _) tv = tv
