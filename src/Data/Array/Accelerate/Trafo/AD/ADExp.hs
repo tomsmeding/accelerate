@@ -552,7 +552,7 @@ dual :: Show alab
      -> OpenExp progenv aenv Int alab args tenv t
      -> IdGen (DualResult env aenv alab args tenv)
 dual ctx = \case
-    -- e | trace ("exp dual: " ++ head (words (show e))) False -> undefined
+    e | trace ("exp dual: " ++ head (words (show e))) False -> undefined
 
     PrimApp lab oper arg
       -- If 'oper' has integral arguments or an integral result, we have no
@@ -635,14 +635,15 @@ dual ctx = \case
         let condLabs = findPrimalBMap ctx (elabelOf arg1)
             adjointLabs = findAdjointBMap ctx lab
             Context labelenv bindmap = ctx
-            ctxInT = Context labelenv
-                             (DMap.insert (Local (fmapLabel D (elabelOf argT))) adjointLabs bindmap)
-            ctxInE = Context labelenv
-                             (DMap.insert (Local (fmapLabel D (elabelOf argE))) adjointLabs bindmap)
+        -- These labels will contain the adjoints of the branches
+        (Exists envlhsT, envlabsT) <- genSingleIds (etypeOf argT)
+        (Exists envlhsE, envlabsE) <- genSingleIds (etypeOf argE)
+        let ctxInT = ctxPush envlhsT (fmapLabel D (elabelOf argT)) envlabsT ctx
+            ctxInE = ctxPush envlhsE (fmapLabel D (elabelOf argE)) envlabsE ctx
         DualResult (EBuilder ctxT fT) storesT compdT cmapT <- dual ctxInT argT
         DualResult (EBuilder ctxE fE) storesE compdE cmapE <- dual ctxInE argE
-        Some' tmplabsT <- returnSome (tuplify (intersectOrd storesT compdT))
-        Some' tmplabsE <- returnSome (tuplify (intersectOrd storesE compdE))
+        Some' tmplabsT <- returnSome (tuplify (intersectOrd storesT (enumerateTupR envlabsT ++ compdT)))
+        Some' tmplabsE <- returnSome (tuplify (intersectOrd storesE (enumerateTupR envlabsE ++ compdE)))
         let tmptyT = fmapTupR labelType tmplabsT
             tmptyE = fmapTupR labelType tmplabsE
             branchty = TupRpair tmptyT tmptyE
@@ -655,17 +656,32 @@ dual ctx = \case
                           [bindmap
                           ,let Context _ bm = ctxT in bm DMap.\\ bindmap
                           ,let Context _ bm = ctxE in bm DMap.\\ bindmap]
+        traceM (unlines ["!dual Cond[" ++ showDLabel lab ++ "]:"
+                        ,"  adjointLabs = " ++ showTupR showDLabel adjointLabs
+                        ,"  envlabsT = " ++ showTupR showDLabel envlabsT
+                        ,"  envlabsE = " ++ showTupR showDLabel envlabsE
+                        ,"  tmplabsT = " ++ showTupR showDLabel tmplabsT
+                        ,"  tmplabsE = " ++ showTupR showDLabel tmplabsE
+                        ,"  bmT = " ++ showBindmap (let Context _ bm = ctxT in bm DMap.\\ bindmap)
+                        ,"  bmE = " ++ showBindmap (let Context _ bm = ctxE in bm DMap.\\ bindmap)
+                        ,"  storesT = " ++ show storesT
+                        ,"  storesE = " ++ show storesE
+                        ,"  labelenv' = " ++ showLabelenv labelenv'
+                        ,"  bindmap' = " ++ showBindmap bindmap'
+                        ])
         return $ DualResult
             (EBuilder (Context labelenv' bindmap')
                       (Let branchlhs
                            (Cond (nilLabel branchty)
                                  (evars (resolveEnvLabs ctx condLabs))
-                                 (fT (smartPair
-                                         (evars (resolveEnvLabs ctxT tmplabsT))
-                                         (zeroForType tmptyE)))
-                                 (fE (smartPair
-                                         (zeroForType tmptyT)
-                                         (evars (resolveEnvLabs ctxE tmplabsE)))))))
+                                 (Let envlhsT (evars (resolveEnvLabs ctx adjointLabs))
+                                      (fT (smartPair
+                                              (evars (resolveEnvLabs ctxT tmplabsT))
+                                              (zeroForType tmptyE))))
+                                 (Let envlhsE (evars (resolveEnvLabs ctx adjointLabs))
+                                      (fE (smartPair
+                                              (zeroForType tmptyT)
+                                              (evars (resolveEnvLabs ctxE tmplabsE))))))))
             (storesT ++ storesE)  -- don't need to store this node
             (enumerateTupR tmplabsT ++ enumerateTupR tmplabsE)
             (cmapT `unionCMap` cmapE)
