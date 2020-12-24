@@ -35,7 +35,7 @@ simplifyAcc a = let res = snd (goAcc a SNil)
 
 simplifyExp :: Show alab => OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t
 simplifyExp a = let res = snd (goExp a (SNil, SNil))
-                in trace ("simplify result:\n" ++ prettyPrint res) res
+                in trace ("simplify input:\n" ++ prettyPrint a) $ trace ("simplify result:\n" ++ prettyPrint res) res
 -- simplifyExp = snd . flip goExp (SNil, SNil)
 -- simplifyExp = id
 

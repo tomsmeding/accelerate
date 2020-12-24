@@ -25,7 +25,6 @@ import qualified Data.Functor.Product as Product
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
-import qualified Data.Set as Set
 import Data.Some
 import Data.Type.Equality
 import GHC.Stack (HasCallStack)
@@ -389,7 +388,7 @@ primal :: Show alab
        -> OpenExp progenv aenv Int alab args tenv t
        -> IdGen (PrimalResult env aenv alab args tenv t)
 primal ctx = \case
-    e | trace ("exp primal: " ++ head (words (show e))) False -> undefined
+    -- e | trace ("exp primal: " ++ head (words (show e))) False -> undefined
 
     Const lab value ->
         simplePrimal TLNil ctx lab (\_ lab' _ -> Const lab' value)
@@ -553,7 +552,7 @@ dual :: Show alab
      -> OpenExp progenv aenv Int alab args tenv t
      -> IdGen (DualResult env aenv alab args tenv)
 dual ctx = \case
-    e | trace ("exp dual: " ++ head (words (show e))) False -> undefined
+    -- e | trace ("exp dual: " ++ head (words (show e))) False -> undefined
 
     PrimApp lab oper arg
       -- If 'oper' has integral arguments or an integral result, we have no
@@ -656,18 +655,6 @@ dual ctx = \case
                           [bindmap
                           ,let Context _ bm = ctxT in bm DMap.\\ bindmap
                           ,let Context _ bm = ctxE in bm DMap.\\ bindmap]
-        traceM (unlines ["dual cond:"
-                        ,"  expression = " ++ show (Cond lab arg1 argT argE)
-                        ,"  adjointLabs = " ++ showTupR showDLabel adjointLabs
-                        ,"  tmplabsT = " ++ showTupR showDLabel tmplabsT
-                        ,"  tmplabsE = " ++ showTupR showDLabel tmplabsE
-                        ,"  bmT = " ++ showBindmap (let Context _ bm = ctxT in bm DMap.\\ bindmap)
-                        ,"  bmE = " ++ showBindmap (let Context _ bm = ctxE in bm DMap.\\ bindmap)
-                        ,"  storesT = " ++ show storesT
-                        ,"  storesE = " ++ show storesE
-                        ,"  labelenv' = " ++ showLabelenv labelenv'
-                        ,"  bindmap' = " ++ showBindmap bindmap'
-                        ])
         return $ DualResult
             (EBuilder (Context labelenv' bindmap')
                       (Let branchlhs
@@ -816,9 +803,6 @@ sortUniq = uniq . sort
     uniq (x:y:xs) | x == y = uniq (x:xs)
                   | otherwise = x : uniq (y:xs)
     uniq l = l
-
-intersectOrd :: Ord a => [a] -> [a] -> [a]
-intersectOrd a b = Set.toList (Set.fromList a `Set.intersection` Set.fromList b)
 
 -- Data.Some (Some) is not like this because it's a newtype for performance.
 data Some' f = forall a. Some' (f a)

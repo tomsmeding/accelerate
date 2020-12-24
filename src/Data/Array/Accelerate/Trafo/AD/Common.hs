@@ -25,6 +25,7 @@ import Data.GADT.Compare
 import Data.GADT.Show
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import qualified Data.Set as Set
 import Data.Some (Some, pattern Some, mkSome, mapSome)
 import Data.Typeable ((:~:)(Refl))
 import Data.Void
@@ -491,6 +492,9 @@ showBindmap bindmap =
                              | (_, (dlabshow, labsshow)) <- tups]
     in "[" ++ s ++ "]"
 
+showCMap :: (forall t'. Show (TupR s t')) => DMap (CMapKey s Int) f -> String
+showCMap mp = "[" ++ intercalate ", " [showCMapKey showDLabel k ++ " :=> {\\...}" | Some k <- DMap.keys mp] ++ "]"
+
 filterBindmap :: (Matchable s, GCompare s, GCompare (TupR s), Ord tag, Ord lab)
               => [Some (DLabel NodeLabel (TupR s) (PD tag lab))]
               -> BindMap s tag lab
@@ -713,3 +717,7 @@ showCMapKey :: (Show (TupR s t), Show lab)
             => (DLabel NodeLabel (TupR s) lab t -> String) -> CMapKey s lab t -> String
 showCMapKey _ (Argument ty) = "A :: " ++ show ty
 showCMapKey f (Local lab) = f lab
+
+
+intersectOrd :: Ord a => [a] -> [a] -> [a]
+intersectOrd a b = Set.toList (Set.fromList a `Set.intersection` Set.fromList b)

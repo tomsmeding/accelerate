@@ -153,6 +153,10 @@ compareAD'2 egen gen1 gen2 func = withShrinks 10 $ property $ do
 -- Array tests
 -- -----------
 
+prop_acond_0 :: Property
+prop_acond_0 = compareAD' nil sized_vec $ \() a ->
+  A.sum (A.acond (A.the (A.sum a) A.> 0) a (A.map (*2) a))
+
 prop_acond_1 :: Property
 prop_acond_1 = compareAD' nil sized_vec $ \() a ->
   let b = A.map (*2) a

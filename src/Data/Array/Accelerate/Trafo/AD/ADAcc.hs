@@ -113,7 +113,7 @@ reverseADA paramlhs expr = evalIdGen $ do
     let dualCtxIn = let Context labelenv bindmap = ctxPush adjlhs (fmapLabel D (alabelOf expr')) adjlabs primalCtx
                         argsLabs = findPrimalBMap (Context labelenv bindmap) argsRHSlabel
                     in Context labelenv (DMap.insert (Argument paramty) argsLabs bindmap)
-    DualResult (ABuilder dualCtx dualBuilder) _ dualCMap <- dual dualCtxIn expr'
+    DualResult (ABuilder dualCtx dualBuilder) _ _ dualCMap <- dual dualCtxIn expr'
     let argpvars = resolveEnvLabs dualCtx (findPrimalBMap dualCtx argsRHSlabel)
         (gradient, _) = collectAdjointCMap dualCMap (Argument paramty) argpvars dualCtx
 
@@ -485,6 +485,7 @@ instance Semigroup (AdjList lab alab args t) where
 data DualResult aenv alab args =
     DualResult (ABuilder aenv alab args)   -- Dual builder
                [Some (ADLabel Int)]        -- To-store "set" (really list)
+               [Some (ADLabel Int)]        -- Computed "set" (really list)
                (DMap (CMapKey ArrayR Int)  -- Contribution map (only for let-bound things and array indexing)
                      (AdjList () alab args))
 
@@ -493,7 +494,7 @@ dual :: AContext Int aenv
      -> IdGen (DualResult aenv Int args)
 dual ctx = \case
     Aconst _ _ ->
-        return (DualResult (ABuilder ctx id) [] mempty)
+        return (DualResult (ABuilder ctx id) [] [] mempty)
 
     Apair lab arg1 arg2 -> do
         let adjointLabs = findAdjointBMap ctx lab
@@ -502,18 +503,66 @@ dual ctx = \case
         (Exists lhs2, envlabs2) <- genSingleIds (atypeOf arg2)
         let ctx' = ctx & ctxPush lhs1 (fmapLabel D (alabelOf arg1)) envlabs1
                        & ctxPush lhs2 (fmapLabel D (alabelOf arg2)) envlabs2
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
-        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx1 arg2
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx2 f2) stores2 compd2 cmap2 <- dual ctx1 arg2
         return $ DualResult
             (ABuilder ctx2 (Alet (LeftHandSidePair lhs1 lhs2) adjoint
                             . f1 . f2))
             (stores1 ++ stores2)  -- don't need to store this node
+            (enumerateTupR envlabs1 ++ enumerateTupR envlabs2 ++ compd1 ++ compd2)
             (cmap1 `unionCMap` cmap2)
 
     Anil _ ->
-        return (DualResult (ABuilder ctx id) [] mempty)
+        return (DualResult (ABuilder ctx id) [] [] mempty)
 
-    Acond _ _ _ _ -> error "Acond"
+    Acond lab condexp argT argE -> do
+        let adjointLabs = findAdjointBMap ctx lab
+            Context labelenv bindmap = ctx
+            ctxInT = Context labelenv
+                             (DMap.insert (Local (fmapLabel D (alabelOf argT))) adjointLabs bindmap)
+            ctxInE = Context labelenv
+                             (DMap.insert (Local (fmapLabel D (alabelOf argE))) adjointLabs bindmap)
+        DualResult (ABuilder ctxT fT) storesT compdT cmapT <- dual ctxInT argT
+        DualResult (ABuilder ctxE fE) storesE compdE cmapE <- dual ctxInE argE
+        Some' tmplabsT <- returnSome (tuplify (intersectOrd storesT compdT))
+        Some' tmplabsE <- returnSome (tuplify (intersectOrd storesE compdE))
+        let tmptyT = fmapTupR labelType tmplabsT
+            tmptyE = fmapTupR labelType tmplabsE
+            branchty = TupRpair tmptyT tmptyE
+        LetBoundVars lhsT _ <- return (lhsCopy tmptyT)
+        LetBoundVars lhsE _ <- return (lhsCopy tmptyE)
+        let branchlhs = LeftHandSidePair lhsT lhsE
+            labelenv' = labelenv & lpushLabTup lhsT tmplabsT
+                                 & lpushLabTup lhsE tmplabsE
+            bindmap' = dmapDisjointUnions
+                          [bindmap
+                          ,let Context _ bm = ctxT in bm DMap.\\ bindmap
+                          ,let Context _ bm = ctxE in bm DMap.\\ bindmap]
+        traceM (unlines ["!dual Acond[" ++ showDLabel lab ++ "]:"
+                        ,"  adjointLabs = " ++ showTupR showDLabel adjointLabs
+                        ,"  tmplabsT = " ++ showTupR showDLabel tmplabsT
+                        ,"  tmplabsE = " ++ showTupR showDLabel tmplabsE
+                        ,"  bmT = " ++ showBindmap (let Context _ bm = ctxT in bm DMap.\\ bindmap)
+                        ,"  bmE = " ++ showBindmap (let Context _ bm = ctxE in bm DMap.\\ bindmap)
+                        ,"  storesT = " ++ show storesT
+                        ,"  storesE = " ++ show storesE
+                        ,"  labelenv' = " ++ showLabelenv labelenv'
+                        ,"  bindmap' = " ++ showBindmap bindmap'
+                        ])
+        return $ DualResult
+            (ABuilder (Context labelenv' bindmap')
+                      (Alet branchlhs
+                            (Acond (nilLabel branchty)
+                                   (resolveAlabs ctx condexp)
+                                   (fT (smartApair
+                                           (avars (resolveEnvLabs ctxT tmplabsT))
+                                           (emptiesForType tmptyE)))
+                                   (fE (smartApair
+                                           (emptiesForType tmptyT)
+                                           (avars (resolveEnvLabs ctxE tmplabsE)))))))
+            (storesT ++ storesE)  -- don't need to store this node
+            (enumerateTupR tmplabsT ++ enumerateTupR tmplabsE)
+            (cmapT `unionCMap` cmapE)
 
     -- The expression determining the shape has an integral result, and can thus be
     -- ignored here. All that we do is collect the indexing contributions.
@@ -533,6 +582,7 @@ dual ctx = \case
                                               adjoint
                                               (avars (resolveEnvLabs ctx (findPrimalBMap ctx tmplab)))))))
             []  -- don't need to store this node
+            [Some envlab1]
             (indexingContributions envlab1 idxInsts)
 
     Map lab (ELSplit (SplitLambdaAD _ dualLambda fvlabs _ idxadjty idxInsts) tmplab) arg1 -> do
@@ -545,7 +595,15 @@ dual ctx = \case
         envlab2 <- genSingleId iaarrty
         let ctx' = ctx & ctxPushS (fmapLabel D (alabelOf1 arg1)) envlab1
                        & ctxPushSEnvOnly envlab2
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
+        traceM (unlines ["!dual Map[" ++ showDLabel lab ++ "]:"
+                        ,"  adjointLabs = " ++ showTupR showDLabel adjointLabs
+                        ,"  envlab1 = " ++ showDLabel envlab1 ++ "  (adjoint of node " ++ showDLabel (alabelOf arg1) ++ ")"
+                        ,"  envlab2 = " ++ showDLabel envlab2
+                        ,"  stores = " ++ show stores1
+                        ,"  computed = " ++ show (Some envlab1 : Some envlab2 : compd1)
+                        ,"  out cmap = " ++ showCMap (cmap1 `unionCMap` indexingContributions envlab2 idxInsts)
+                        ])
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSidePair (LeftHandSideSingle (atypeOf1 arg1))
                                                    (LeftHandSideSingle iaarrty))
@@ -558,6 +616,7 @@ dual ctx = \case
                                         in smartApair (mapFst var) (mapSnd var)))
                             . f1))
             stores1  -- don't need to store this node
+            (Some envlab1 : Some envlab2 : compd1)
             (cmap1 `unionCMap` indexingContributions envlab2 idxInsts)
 
     ZipWith lab (ELSplit (SplitLambdaAD _ dualLambda fvlabs _ idxadjty idxInsts) tmplab) arg1 arg2 -> do
@@ -573,8 +632,8 @@ dual ctx = \case
         let ctx' = ctx & ctxPushS (fmapLabel D (alabelOf1 arg1)) envlab1
                        & ctxPushS (fmapLabel D (alabelOf1 arg2)) envlab2
                        & ctxPushSEnvOnly envlab3
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
-        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx1 arg2
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx2 f2) stores2 compd2 cmap2 <- dual ctx1 arg2
         return $ DualResult
             (ABuilder ctx2 (Alet (LeftHandSidePair (LeftHandSidePair (LeftHandSideSingle (atypeOf1 arg1))
                                                                      (LeftHandSideSingle (atypeOf1 arg2)))
@@ -590,6 +649,7 @@ dual ctx = \case
                                                       (mapSnd var)))
                             . f1 . f2))
             (stores1 ++ stores2)  -- don't need to store this node
+            (Some envlab1 : Some envlab2 : Some envlab3 : compd1 ++ compd2)
             (cmap1 `unionCMap` cmap2 `unionCMap` indexingContributions envlab3 idxInsts)
 
     -- Fold lab combfun (Just initexp) arg1 -> do
@@ -649,7 +709,14 @@ dual ctx = \case
             pvar = resolveEnvLab ctx (untupleA (findPrimalBMap ctx (alabelOf arg1)))
         envlab1 <- genSingleId (atypeOf1 arg1)
         let ctx' = ctxPushS (fmapLabel D (alabelOf1 arg1)) envlab1 ctx
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
+        traceM (unlines ["!dual Sum[" ++ showDLabel lab ++ "]:"
+                        ,"  adjointLabs = " ++ showTupR showDLabel adjointLabs
+                        ,"  envlab1 = " ++ showDLabel envlab1 ++ "  (adjoint of node " ++ showDLabel (alabelOf arg1) ++ ")"
+                        ,"  stores = " ++ show stores1
+                        ,"  computed = " ++ show (Some envlab1 : compd1)
+                        ,"  out cmap = " ++ showCMap cmap1
+                        ])
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle (atypeOf1 arg1))
                                  (Replicate (nilLabel (atypeOf1 arg1))
@@ -658,6 +725,7 @@ dual ctx = \case
                                             adjoint)
                             . f1))
             stores1  -- don't need to store this node
+            (Some envlab1 : compd1)
             cmap1
 
     Replicate lab slixspec _ arg1 -> do
@@ -666,7 +734,7 @@ dual ctx = \case
             argty@(ArrayR _ eltty) = atypeOf1 arg1
         envlab1 <- genSingleId argty
         let ctx' = ctxPushS (fmapLabel D (alabelOf1 arg1)) envlab1 ctx
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle argty)
                                  (Reduce (nilLabel (atypeOf1 arg1))
@@ -675,6 +743,7 @@ dual ctx = \case
                                          adjoint)
                             . f1))
             stores1  -- don't need to store this node
+            (Some envlab1 : compd1)
             cmap1
 
     Slice lab slixspec arg1 slexp -> do
@@ -684,7 +753,7 @@ dual ctx = \case
             argpvar = resolveEnvLab ctx (untupleA (findPrimalBMap ctx (alabelOf arg1)))
         envlab1 <- genSingleId argty
         let ctx' = ctxPushS (fmapLabel D (alabelOf1 arg1)) envlab1 ctx
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle argty)
                                  (Generate (nilLabel argty)
@@ -692,6 +761,7 @@ dual ctx = \case
                                            (ELPlain (sliceDualLambda slixspec adjointVar (resolveAlabs ctx slexp))))
                             . f1))
             stores1  -- don't need to store this node
+            (Some envlab1 : compd1)
             cmap1
 
     Reshape lab _ arg1 -> do
@@ -701,12 +771,13 @@ dual ctx = \case
             argpvar = resolveEnvLab ctx (untupleA (findPrimalBMap ctx (alabelOf arg1)))
         envlab1 <- genSingleId argty
         let ctx' = ctxPushS (fmapLabel D (alabelOf1 arg1)) envlab1 ctx
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle argty)
                                  (Reshape (nilLabel argty) (smartShape argpvar) adjoint)
                             . f1))
             stores1  -- don't need to store this node
+            (Some envlab1 : compd1)
             cmap1
 
     Backpermute lab _ (Lam funLHS (Body funBody)) arg1 -> do
@@ -716,7 +787,7 @@ dual ctx = \case
             argpvar = resolveEnvLab ctx (untupleA (findPrimalBMap ctx (alabelOf arg1)))
         envlab1 <- genSingleId argty
         let ctx' = ctxPushS (fmapLabel D (alabelOf1 arg1)) envlab1 ctx
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle argty)
                                  (Permute (nilLabel (atypeOf1 arg1))
@@ -726,6 +797,7 @@ dual ctx = \case
                                           adjoint)
                             . f1))
             stores1  -- don't need to store this node
+            (Some envlab1 : compd1)
             cmap1
 
     Aget lab tidx arg1 -> do
@@ -735,55 +807,76 @@ dual ctx = \case
             argpvars = resolveEnvLabs ctx (findPrimalBMap ctx (alabelOf arg1))
         (Exists envlhs, envlabs1) <- genSingleIds argty
         let ctx' = ctxPush envlhs (fmapLabel D (alabelOf arg1)) envlabs1 ctx
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
         return $ DualResult
             (ABuilder ctx1 (Alet envlhs
                                  (oneHotTup argty tidx argpvars adjoint)
                             . f1))
             stores1  -- don't need to store this node
+            (enumerateTupR envlabs1 ++ compd1)
             cmap1
 
     Alet _ arg1 arg2 -> do
         -- The parent has already stored the adjoint for the body, so we can
         -- directly traverse it.
-        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx arg2
+        DualResult (ABuilder ctx2 f2) stores2 compd2 cmap2 <- dual ctx arg2
         -- Now we need to collect the contributions to the RHS, and traverse it
         -- with (a promise of) its adjoint stored in the context.
         (Exists lhs, envlabs) <- genSingleIds (atypeOf arg1)
         let ctx' = ctxPush lhs (fmapLabel D (alabelOf arg1)) envlabs ctx2
             pvars = resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf arg1))
             (rhsAdjoint, cmap2') = collectAdjointCMap cmap2 (Local (alabelOf arg1)) pvars ctx2
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' arg1
+        DualResult (ABuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
+        traceM (unlines ["!dual Let[let " ++ showDLabel (alabelOf arg1) ++ " in " ++ showDLabel (alabelOf arg2) ++ "]:"
+                        ,"  envlabs = " ++ showTupR showDLabel envlabs
+                        ,"  cmap2 ! " ++ show (labelLabel (alabelOf arg1)) ++ " has " ++ show (maybe 0 (\(AdjList f) -> length (f ctx')) (DMap.lookup (Local (alabelOf arg1)) cmap2)) ++ " entries"
+                        ,"  stores = " ++ show (stores1 ++ stores2)
+                        ,"  computed = " ++ show (compd2 ++ enumerateTupR envlabs ++ compd1)
+                        ,"  out cmap = " ++ showCMap (cmap1 `unionCMap` cmap2')
+                        ])
         return $ DualResult
             (ABuilder ctx1 (f2 . Alet lhs rhsAdjoint . f1))
             (stores1 ++ stores2)  -- don't need to store the right-hand side's adjoint
+            (compd2 ++ enumerateTupR envlabs ++ compd1)
             (cmap1 `unionCMap` cmap2')
 
     Avar lab _ (PartLabel referLab referPart) -> do
         let adjointLabs = findAdjointBMap ctx lab
+            cmap = DMap.singleton (Local referLab) (AdjList (\ctx' ->
+                      -- Re-lookup the env labels, in case the bindmap changed. I
+                      -- don't think that can ever happen, but let's be robust.
+                      let adjointLabs' = findAdjointBMap ctx' lab
+                          adjoint = avars (resolveEnvLabs ctx' adjointLabs')
+                          pvars = resolveEnvLabs ctx' (findPrimalBMap ctx' referLab)
+                      in [oneHotTup (labelType referLab) referPart pvars adjoint]))
+        traceM (unlines ["!dual Avar[" ++ showDLabel lab ++ "]:"
+                        ,"  adjointLabs = stores = " ++ showTupR showDLabel adjointLabs
+                        ,"  out cmap = " ++ showCMap cmap
+                        ])
         return $ DualResult
             (ABuilder ctx id)
-            (enumerateTupR adjointLabs)  -- store this node! We need to keep the contribution around.
-            (DMap.singleton (Local referLab) (AdjList (\ctx' ->
-                -- Re-lookup the env labels, in case the bindmap changed. I
-                -- don't think that can ever happen, but let's be robust.
-                let adjointLabs' = findAdjointBMap ctx' lab
-                    adjoint = avars (resolveEnvLabs ctx' adjointLabs')
-                    pvars = resolveEnvLabs ctx' (findPrimalBMap ctx' referLab)
-                in [oneHotTup (labelType referLab) referPart pvars adjoint])))
+            (enumerateTupR adjointLabs)  -- Store this node! We need to keep the contribution around.
+            []                           -- But note that we didn't actually _compute_ anything.
+            cmap
 
     Aarg lab argsty tidx -> do
         let adjointLabs = findAdjointBMap ctx lab
+            cmap = DMap.singleton (Argument argsty) (AdjList (\ctx' ->
+                      -- Re-lookup the env labels, in case the bindmap changed. I
+                      -- don't think that can ever happen, but let's be robust.
+                      let adjointLabs' = findAdjointBMap ctx' lab
+                          adjoint = avars (resolveEnvLabs ctx' adjointLabs')
+                          pvars = resolveEnvLabs ctx' (findArgumentPrimalBMap ctx' argsty)
+                      in [oneHotTup argsty tidx pvars adjoint]))
+        traceM (unlines ["!dual Aarg[" ++ showDLabel lab ++ "]:"
+                        ,"  adjointLabs = stores = " ++ showTupR showDLabel adjointLabs
+                        ,"  out cmap = " ++ showCMap cmap
+                        ])
         return $ DualResult
             (ABuilder ctx id)
-            (enumerateTupR adjointLabs)  -- store this node! We need to keep the contribution around.
-            (DMap.singleton (Argument argsty) (AdjList (\ctx' ->
-                -- Re-lookup the env labels, in case the bindmap changed. I
-                -- don't think that can ever happen, but let's be robust.
-                let adjointLabs' = findAdjointBMap ctx' lab
-                    adjoint = avars (resolveEnvLabs ctx' adjointLabs')
-                    pvars = resolveEnvLabs ctx' (findArgumentPrimalBMap ctx' argsty)
-                in [oneHotTup argsty tidx pvars adjoint])))
+            (enumerateTupR adjointLabs)  -- Store this node! We need to keep the contribution around.
+            []                           -- But note that we didn't actually _compute_ anything.
+            cmap
 
     Scan _ _ _ _ _ -> error "AD: Scan currently unsupported"
     Scan' _ _ _ _ _ -> error "AD: Scan' currently unsupported"
