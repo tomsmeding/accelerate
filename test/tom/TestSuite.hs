@@ -58,10 +58,11 @@ uniqueMax :: (A.Elt a, Ord a, Fractional a) => A.Vector a -> Bool
 uniqueMax v = let m = maximum (A.toList v)
               in sum (map (fromEnum . (>= m - 0.5)) (A.toList v)) <= 1
 
+restrictAll :: (A.Elt a, RealFrac a) => (a -> Bool) -> A.Vector a -> Bool
+restrictAll f = all f . A.toList
+
 allNiceRound :: (A.Elt a, RealFrac a) => A.Vector a -> Bool
-allNiceRound =
-  all (\x -> let x' = x - fromIntegral (round x :: Int) in -0.4 < x' && x' < 0.4)
-    . A.toList
+allNiceRound = restrictAll (\x -> let x' = x - fromIntegral (round x :: Int) in -0.4 < x' && x' < 0.4)
 
 
 -- This is not a typeclass because the types don't work out.
@@ -163,7 +164,7 @@ prop_acond_1 = compareAD' nil sized_vec $ \() a ->
       A.T2 a1 _ = A.acond (A.the (A.sum a) A.> 0) (A.T2 a b) (A.T2 b a)
   in A.sum (A.map (\x -> x * A.toFloating (A.indexHead (A.shape a1))) b)
 
--- This property, as well as prop_acond_2b, test ATTEMPT TO that Cond isn't
+-- This property, as well as prop_acond_2b, ATTEMPTS TO test that Cond isn't
 -- over-eager in finding the contents of its branches.
 -- The tests apparently don't test well enough, because they don't find the bug.
 prop_acond_2a :: Property
@@ -379,6 +380,14 @@ prop_nonfloat_lambda_friendly = compareAD' nil (Gen.filter allNiceRound sized_ve
 -- Expression tests
 -- ----------------
 
+prop_cond_0 :: Property
+prop_cond_0 = compareADE sized_vec $ \x ->
+  A.cond (x A.> 0) x (2 * x)
+
+prop_cond_0_friendly :: Property
+prop_cond_0_friendly = compareADE (Gen.filter (restrictAll (\x -> abs x > 0.01)) sized_vec) $ \x ->
+  A.cond (x A.> 0) x (2 * x)
+
 prop_cond_1 :: Property
 prop_cond_1 = compareADE sized_vec $ \x ->
   let y = A.cond (x A.> 0) (A.sin (x * x)) (x * x * A.exp x)  -- derivative continuous at 0
@@ -405,6 +414,14 @@ prop_cond_3b = compareADE sized_vec $ \x ->
   let a = 2 * x
       y = A.cond (x A.<= 2) (a + 1) (2 * a - 1)
   in y * a
+
+prop_cond_4 :: Property
+prop_cond_4 = compareADE sized_vec $ \x ->
+  let a = A.cond (x A.>= 1) (A.log x + 1)  -- continuous
+                            (A.cond (x - 2 A.< -3) (A.exp (x + 1) - 2) x)
+      y = 2 * A.exp a
+      b = A.cond (a A.< (-1)) (a + y) y  -- not continuous
+  in a * b
 
 prop_ignore_argument :: Property
 prop_ignore_argument = compareADE sized_vec $ \_ -> 42.0

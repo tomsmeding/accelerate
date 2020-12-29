@@ -18,7 +18,7 @@ import Data.GADT.Show
 import Data.Some
 
 import Data.Array.Accelerate.Representation.Array
-import Data.Array.Accelerate.Representation.Shape (ShapeR, shapeType)
+import Data.Array.Accelerate.Representation.Shape (ShapeR(..), shapeType)
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.AST as A
@@ -604,8 +604,17 @@ smartMul ty a b = PrimApp (nilLabel (TupRsingle (SingleScalarType (NumSingleType
 smartFDiv :: FloatingType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t
 smartFDiv ty a b = PrimApp (nilLabel (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType ty))))) (A.PrimFDiv ty) (smartPair a b)
 
+smartLAnd :: OpenExp env aenv () alab args tenv A.PrimBool -> OpenExp env aenv () alab args tenv A.PrimBool -> OpenExp env aenv () alab args tenv A.PrimBool
+smartLAnd a b = PrimApp magicLabel A.PrimLAnd (smartPair a b)
+
+smartEq :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv A.PrimBool
+smartEq ty a b = PrimApp magicLabel (A.PrimEq ty) (smartPair a b)
+
 smartGt :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv A.PrimBool
 smartGt ty a b = PrimApp magicLabel (A.PrimGt ty) (smartPair a b)
+
+smartMin :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t
+smartMin ty a b = PrimApp (nilLabel (TupRsingle (SingleScalarType ty))) (A.PrimMin ty) (smartPair a b)
 
 smartVar :: A.ExpVar env t -> OpenExp env aenv () alab args tenv t
 smartVar var@(A.Var ty _) = Var (nilLabel ty) var (PartLabel (tupleLabel (nilLabel ty)) TIHere)
@@ -613,8 +622,9 @@ smartVar var@(A.Var ty _) = Var (nilLabel ty) var (PartLabel (tupleLabel (nilLab
 smartCond :: OpenExp env aenv () alab args tenv A.PrimBool -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t
 smartCond e1 e2 e3 = Cond (nilLabel (etypeOf e2)) e1 e2 e3
 
-smartShape :: A.ArrayVar aenv (Array sh e) -> OpenExp env aenv () alab args tenv sh
-smartShape var@(A.Var (ArrayR sht _) _) = Shape (nilLabel (shapeType sht)) (Left var)
+smartShape :: Either (A.ArrayVar aenv (Array sh e)) (AAnyPartLabelN alab (Array sh e)) -> OpenExp env aenv () alab args tenv sh
+smartShape (Left var@(A.Var (ArrayR sht _) _)) = Shape (nilLabel (shapeType sht)) (Left var)
+smartShape (Right lab@(AnyPartLabel partl)) = Shape (nilLabel (shapeType (arrayRshape (untupleA (partLabelSmallType partl))))) (Right lab)
 
 -- TODO: make smartGet not quadratic when used repeatedly
 smartGet :: TupleIdx t t' -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t'
