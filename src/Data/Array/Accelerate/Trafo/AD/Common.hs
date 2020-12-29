@@ -365,6 +365,10 @@ tuplify' values toF toKey =
 tuplify :: [Some f] -> Some (TupR f)
 tuplify l | TuplifyWithTrace tup _ <- tuplify' l id (const ()) = Some tup
 
+-- TODO: apply this trick in more places where we _know_ it's not a tuple based on the type information
+untupleA :: TupR s (Array sh t) -> s (Array sh t)
+untupleA (TupRsingle x) = x
+
 
 newtype IdGen a = IdGen (State Int a)
   deriving (Functor, Applicative, Monad, MonadState Int)
@@ -495,6 +499,9 @@ showBindmap bindmap =
 showCMap :: (forall t'. Show (TupR s t')) => DMap (CMapKey s Int) f -> String
 showCMap mp = "[" ++ intercalate ", " [showCMapKey showDLabel k ++ " :=> {\\...}" | Some k <- DMap.keys mp] ++ "]"
 
+showProduct :: (forall t'. f t' -> String) -> (forall t'. g t' -> String) -> Product f g t -> String
+showProduct fs gs (Product.Pair a b) = "Product (" ++ fs a ++ ") (" ++ gs b ++ ")"
+
 filterBindmap :: (Matchable s, GCompare s, GCompare (TupR s), Ord tag, Ord lab)
               => [Some (DLabel NodeLabel (TupR s) (PD tag lab))]
               -> BindMap s tag lab
@@ -553,28 +560,32 @@ findPrimalBMap :: (HasCallStack, IsTupleType s s_lab, Matchable s, GCompare s, G
                -> DLabel NodeLabel s_lab lab t
                -> TupR (DLabel EnvLabel s lab) t
 findPrimalBMap (Context _ bindmap) lbl =
-    case DMap.lookup (Local (fmapLabel P (tupleLabel lbl))) bindmap of
-      Just labs -> labs
-      Nothing -> error $ "findPrimalBMap: not found: L" ++ show (labelLabel lbl)
+    fromMaybe (error ("findPrimalBMap: not found: L" ++ show (labelLabel lbl)))
+              (DMap.lookup (Local (fmapLabel P (tupleLabel lbl))) bindmap)
 
 findArgumentPrimalBMap :: (HasCallStack, Matchable s, GCompare s, GCompare (TupR s), Ord lab, Ord tag)
                        => Context s tag lab env
                        -> TupR s args
                        -> TupR (DLabel EnvLabel s lab) args
 findArgumentPrimalBMap (Context _ bindmap) argsty =
-    case DMap.lookup (Argument argsty) bindmap of
-      Just labs -> labs
-      Nothing -> error $ "findArgumentPrimalBMap: not found"
+    fromMaybe (error "findArgumentPrimalBMap: not found")
+              (DMap.lookup (Argument argsty) bindmap)
 
 -- Find the adjoint of a node in the bindmap
 findAdjointBMap :: (HasCallStack, IsTupleType s s_lab, Matchable s, GCompare s, GCompare (TupR s), Show lab, Ord lab, Ord tag)
                 => Context s tag lab env
                 -> DLabel NodeLabel s_lab lab t
                 -> TupR (DLabel EnvLabel s lab) t
-findAdjointBMap (Context _ bindmap) lbl =
-    case DMap.lookup (Local (fmapLabel D (tupleLabel lbl))) bindmap of
-      Just labs -> labs
-      Nothing -> error $ "findAdjointBMap: not found: L" ++ show (labelLabel lbl)
+findAdjointBMap ctx lbl =
+    fromMaybe (error ("findAdjointBMap: not found: L" ++ show (labelLabel lbl)))
+              (findAdjointBMap' ctx lbl)
+
+-- Find the adjoint of a node in the bindmap, optionally
+findAdjointBMap' :: (IsTupleType s s_lab, Matchable s, GCompare s, GCompare (TupR s), Ord lab, Ord tag)
+                 => Context s tag lab env
+                 -> DLabel NodeLabel s_lab lab t
+                 -> Maybe (TupR (DLabel EnvLabel s lab) t)
+findAdjointBMap' (Context _ bindmap) lbl = DMap.lookup (Local (fmapLabel D (tupleLabel lbl))) bindmap
 
 
 -- TODO: make this 'type AnyLabel lty s lab = Exists (DLabel lty s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.

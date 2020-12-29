@@ -25,6 +25,7 @@ import qualified Data.Functor.Product as Product
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
+import Data.Maybe (fromMaybe)
 import Data.Some
 import Data.Type.Equality
 import GHC.Stack (HasCallStack)
@@ -174,7 +175,6 @@ reverseAD :: Show alab
           -> ReverseADResE aenv alab tenv t
 reverseAD paramlhs expr = evalIdGen $ do
     let paramty = lhsToTupR paramlhs
-        resty = etypeOf expr
         argsRHS = untupleExps
                       (zipWithTupR (\ty tidx -> Arg (nilLabel ty) paramty tidx)
                                    paramty
@@ -182,21 +182,19 @@ reverseAD paramlhs expr = evalIdGen $ do
         closedExpr = Let paramlhs argsRHS (generaliseArgs expr)
     expr' <- enlabelExp TEmpty closedExpr
 
-    traceM ("exp labeled: " ++ prettyPrint expr')
+    traceM ("exp labeled:\n" ++ prettyPrint expr')
 
     PrimalResult (EBuilder primalCtx primalBuilder) _ _ <-
         primal (Context LEmpty mempty) expr'
 
-    (Exists adjlhs, adjlabs) <- genSingleIds resty
-    let dualCtxIn = ctxPush adjlhs (fmapLabel D (elabelOf expr')) adjlabs primalCtx
-    DualResult (EBuilder dualCtx dualBuilder) _ _ dualCMap <- dual dualCtxIn expr'
+    let cmap0 = DMap.singleton (Local (elabelOf expr')) (AdjList (\_ -> [Const scalarLabel 1.0]))
+    DualResult (EBuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx cmap0 expr'
     let (gradient, _) = collectAdjointCMap dualCMap (Argument paramty) dualCtx
 
     return $ ReverseADResE
         paramlhs
         (realiseArgs paramlhs
             (primalBuilder
-             . Let adjlhs (Const scalarLabel 1.0)
              . dualBuilder
              $ gradient))
 
@@ -216,6 +214,8 @@ splitLambdaAD (Lam paramlhs (Body expr))
   = evalIdGen $ do
       expr' <- enlabelExp TEmpty closedExpr
 
+      traceM ("exp labeled:\n" ++ prettyPrint expr')
+
       PrimalResult (EBuilder primalCtx primalBuilder) primalStores primalOutput <-
           primal (Context LEmpty mempty) expr'
       Some' primalTmplabs <- returnSome (tuplify primalStores)
@@ -226,11 +226,14 @@ splitLambdaAD (Lam paramlhs (Body expr))
       let dualLabelenv = LEmpty & lpushLabTup adjlhs adjlabs
                                 & lpushLabTup tmplhs primalTmplabs
           dualBindmap = DMap.insert (Local (fmapLabel D (elabelOf expr'))) adjlabs
-                            (let Context _ bm = primalCtx in bm)
-      DualResult (EBuilder dualCtx dualBuilder) _ _ dualCMap <-
-          dual (Context dualLabelenv dualBindmap) expr'
+                                    (let Context _ bm = primalCtx in bm)
+          dualCMapIn = DMap.singleton (Local (elabelOf expr'))
+                                      (AdjList (\ctx2 -> [evars (resolveEnvLabs ctx2 adjlabs)]))
+      DualResult (EBuilder dualCtx dualBuilder) _ dualCMap <-
+          dual (Context dualLabelenv dualBindmap) dualCMapIn expr'
       let (gradient, _) = collectAdjointCMap dualCMap (Argument paramty) dualCtx
           indexNodes = listIndexNodes expr'
+      traceM ("exp dualCtx: " ++ showContext dualCtx)
       CollectIndexAdjoints idxadjExpr idxadjInsts <- return (collectIndexAdjoints indexNodes dualCtx)
       let dualCore = smartPair gradient idxadjExpr
 
@@ -324,10 +327,10 @@ collectIndexAdjoints indexNodes dualCtx =
     let constructExp :: (Ord lab, Show lab)
                      => EContext lab env -> IndexNodeInfo lab alab -> Some (OpenExp env aenv () alab args tenv)
         constructExp dualCtx' (IndexNodeInfo adjlab idxlab execlab _) =
-            let adjexpr = evars (resolveEnvLabs dualCtx' (findAdjointBMap dualCtx' adjlab))
+            let adjexpr = evars . resolveEnvLabs dualCtx' <$> findAdjointBMap' dualCtx' adjlab
                 idxexpr = evars (resolveEnvLabs dualCtx' (findPrimalBMap dualCtx' idxlab))
                 execexpr = evars (resolveEnvLabs dualCtx' (findPrimalBMap dualCtx' execlab))
-            in Some (smartPair (smartPair adjexpr idxexpr) execexpr)
+            in Some (smartPair (smartPair (fromMaybe (zeroForType (labelType adjlab)) adjexpr) idxexpr) execexpr)
         constructAlab (IndexNodeInfo _ _ _ alab) = Some alab
     in case tuplify' indexNodes (constructExp dualCtx) constructAlab of
          TuplifyWithTrace tup tupTraces ->
@@ -542,124 +545,142 @@ instance Semigroup (AdjList aenv lab alab args tenv t) where
 
 data DualResult env aenv alab args tenv =
     DualResult (EBuilder env aenv alab args tenv)  -- Dual builder
-               [Some (EDLabel Int)]                -- To-store "set" (really list)
-               [Some (EDLabel Int)]                -- Compted "set" (really list)
-               (DMap (CMapKey ScalarType Int)      -- Contribution map (only for let-bound things)
+               [Some (EDLabelN Int)]               -- To-store "set" (really list)
+               (DMap (CMapKey ScalarType Int)      -- Contribution map
                      (AdjList aenv Int alab args tenv))
 
 dual :: Show alab
      => EContext Int env
+     -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)  -- Contribution map
      -> OpenExp progenv aenv Int alab args tenv t
      -> IdGen (DualResult env aenv alab args tenv)
-dual ctx = \case
+dual ctx cmap = \case
     e | trace ("exp dual: " ++ head (words (show e))) False -> undefined
 
     PrimApp lab oper arg
       -- If 'oper' has integral arguments or an integral result, we have no
       -- need to compute the adjoint of the argument (it would be zero anyway).
-      | isIntegralType (etypeOf arg) || isIntegralType (labelType lab) ->
-          return (emptyDual ctx lab False)
+      | isIntegralType (etypeOf arg) || isIntegralType (labelType lab) -> do
+          traceM ("!dual PrimApp[" ++ showDLabel lab ++ "]: empty")
+          return (emptyDual ctx cmap)
 
       | otherwise -> do
-          let adjointLabs = findAdjointBMap ctx lab
-              adjoint = evars (resolveEnvLabs ctx adjointLabs)
-              argPrimal = evars (resolveEnvLabs ctx (findPrimalBMap ctx (elabelOf arg)))
-              resultPrimal = evars (resolveEnvLabs ctx (findPrimalBMap ctx lab))
-              -- Note that 'argPrimal', 'argResult' and 'adjoint' are just
-              -- tuples of variable references, so they are cheap to duplicate.
-              argDeriv = primAppDerivative (etypeOf arg) oper argPrimal resultPrimal adjoint
-          (Exists lhs, envlabs) <- genSingleIds (etypeOf arg)
-          let ctx' = ctxPush lhs (fmapLabel D (elabelOf arg)) envlabs ctx
-          DualResult (EBuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg
+          let (adjoint, cmap') = collectAdjointCMap cmap (Local lab) ctx
+          (Exists lhs, envlabs) <- genSingleIds (labelType lab)
+          let ctx' = ctxPush lhs (fmapLabel D lab) envlabs ctx
+              cmap'' = addContrib (Local (elabelOf arg))
+                                  (\ctx2 ->
+                                      let adjoint' = evars (resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab))
+                                          argPrimal = evars (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (elabelOf arg)))
+                                          resultPrimal = evars (resolveEnvLabs ctx2 (findPrimalBMap ctx2 lab))
+                                          -- Note that 'argPrimal', 'argResult' and 'adjoint' are just
+                                          -- tuples of variable references, so they are cheap to duplicate.
+                                          argDeriv = primAppDerivative (etypeOf arg) oper argPrimal resultPrimal adjoint'
+                                      in argDeriv)
+                                  cmap'
+          traceM ("!dual PrimApp[" ++ showDLabel lab ++ "]: envlabs = " ++ showTupR showDLabel envlabs)
+          DualResult (EBuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg
           return $ DualResult
-              (EBuilder ctx1 (Let lhs argDeriv . f1))
+              (EBuilder ctx1 (Let lhs adjoint . f1))
               stores1  -- don't need to store this node
-              (enumerateTupR envlabs ++ compd1)
               cmap1
 
     Pair lab arg1 arg2 -> do
-        let adjointLabs = findAdjointBMap ctx lab
-            adjoint = evars (resolveEnvLabs ctx adjointLabs)
-        (Exists lhs1, envlabs1) <- genSingleIds (etypeOf arg1)
-        (Exists lhs2, envlabs2) <- genSingleIds (etypeOf arg2)
-        let ctx' = ctx & ctxPush lhs1 (fmapLabel D (elabelOf arg1)) envlabs1
-                       & ctxPush lhs2 (fmapLabel D (elabelOf arg2)) envlabs2
-        DualResult (EBuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
-        DualResult (EBuilder ctx2 f2) stores2 compd2 cmap2 <- dual ctx1 arg2
+        let (adjoint, cmap') = collectAdjointCMap cmap (Local lab) ctx
+        (Exists lhs, envlabs) <- genSingleIds (labelType lab)
+        let ctx' = ctxPush lhs (fmapLabel D lab) envlabs ctx
+            cmap'' = addContrib (Local (elabelOf arg1))
+                                (\ctx2 ->
+                                    let TupRpair labs _ = resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab)
+                                    in evars labs)
+                   . addContrib (Local (elabelOf arg2))
+                                (\ctx2 ->
+                                    let TupRpair _ labs = resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab)
+                                    in evars labs)
+                   $ cmap'
+        traceM ("!dual Pair[" ++ showDLabel lab ++ "]: envlabs = " ++ showTupR showDLabel envlabs)
+        DualResult (EBuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
+        DualResult (EBuilder ctx2 f2) stores2 cmap2 <- dual ctx1 cmap1 arg2
         return $ DualResult
-            (EBuilder ctx2 (Let (LeftHandSidePair lhs1 lhs2) adjoint
-                            . f1 . f2))
+            (EBuilder ctx2 (Let lhs adjoint . f1 . f2))
             (stores1 ++ stores2)  -- don't need to store this node
-            (enumerateTupR envlabs1 ++ enumerateTupR envlabs2 ++ compd1 ++ compd2)
-            (cmap1 `unionCMap` cmap2)
+            cmap2
 
     Get lab tidx arg -> do
-        let adjointLabs = findAdjointBMap ctx lab
-            adjoint = evars (resolveEnvLabs ctx adjointLabs)
-        (Exists lhs, envlabs) <- genSingleIds (etypeOf arg)
-        let ctx' = ctxPush lhs (fmapLabel D (elabelOf arg)) envlabs ctx
-        DualResult (EBuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg
+        let (adjoint, cmap') = collectAdjointCMap cmap (Local lab) ctx
+        (Exists lhs, envlabs) <- genSingleIds (labelType lab)
+        let ctx' = ctxPush lhs (fmapLabel D lab) envlabs ctx
+            cmap'' = addContrib (Local (elabelOf arg))
+                                (\ctx2 ->
+                                    oneHotTup (etypeOf arg) tidx (evars (resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab))))
+                                cmap'
+        traceM ("!dual Get[" ++ showDLabel lab ++ "]: envlabs = " ++ showTupR showDLabel envlabs)
+        DualResult (EBuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg
         return $ DualResult
-            (EBuilder ctx1 (Let lhs (oneHotTup (etypeOf arg) tidx adjoint) . f1))
+            (EBuilder ctx1 (Let lhs adjoint . f1))
             stores1  -- don't need to store this node
-            (enumerateTupR envlabs ++ compd1)
             cmap1
 
     Var lab _ (PartLabel referLab referPart) -> do
-        let adjointLabs = findAdjointBMap ctx lab
+        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel lab)) ctx
+        (Exists lhs, envlabs) <- genSingleIds (TupRsingle (labelType lab))
+        let ctx' = ctxPush lhs (fmapLabel D (tupleLabel lab)) envlabs ctx
+            cmap'' = addContrib (Local referLab)
+                                (\ctx2 ->
+                                    let adjoint' = evars (resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab))
+                                    in oneHotTup (labelType referLab) referPart adjoint')
+                                cmap'
+        traceM ("!dual Var[" ++ showDLabel lab ++ " -> " ++ tiPrefixExp referPart ++ " " ++ showDLabel referLab ++ "]: envlabs = " ++ showTupR showDLabel envlabs)
         return $ DualResult
-            (EBuilder ctx id)
-            (enumerateTupR adjointLabs)  -- Store this node! We need to keep the contribution around.
-            []                           -- But note that we didn't actually _compute_ anything.
-            (DMap.singleton (Local referLab) (AdjList (\ctx' ->
-                -- Re-lookup the env labels, in case the bindmap changed. I
-                -- don't think that can ever happen, but let's be robust.
-                let adjointLabs' = findAdjointBMap ctx' lab
-                    adjoint = evars (resolveEnvLabs ctx' adjointLabs')
-                in [oneHotTup (labelType referLab) referPart adjoint])))
+            (EBuilder ctx' (Let lhs adjoint))
+            [Some (tupleLabel lab)]  -- Store this node! We need to keep the contribution around.
+            cmap''
 
     Arg lab argsty tidx -> do
-        let adjointLabs = findAdjointBMap ctx lab
+        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel lab)) ctx
+        (Exists lhs, envlabs) <- genSingleIds (TupRsingle (labelType lab))
+        let ctx' = ctxPush lhs (fmapLabel D (tupleLabel lab)) envlabs ctx
+            cmap'' = addContrib (Argument argsty)
+                                (\ctx2 ->
+                                    let adjoint' = evars (resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab))
+                                    in oneHotTup argsty tidx adjoint')
+                                cmap'
+        traceM ("!dual Arg[" ++ showDLabel lab ++ " -> " ++ tiPrefixExp tidx ++ " A]: envlabs = " ++ showTupR showDLabel envlabs)
         return $ DualResult
-            (EBuilder ctx id)
-            (enumerateTupR adjointLabs)  -- Store this node! We need to keep the contribution around.
-            []                           -- But note that we didn't actually _compute_ anything.
-            (DMap.singleton (Argument argsty) (AdjList (\ctx' ->
-                -- Re-lookup the env labels, in case the bindmap changed. I
-                -- don't think that can ever happen, but let's be robust.
-                let adjointLabs' = findAdjointBMap ctx' lab
-                    adjoint = evars (resolveEnvLabs ctx' adjointLabs')
-                in [oneHotTup argsty tidx adjoint])))
+            (EBuilder ctx' (Let lhs adjoint))
+            [Some (tupleLabel lab)]  -- Store this node! We need to keep the contribution around.
+            cmap''
 
     Cond lab arg1 argT argE -> do
-        let condLabs = findPrimalBMap ctx (elabelOf arg1)
-            adjointLabs = findAdjointBMap ctx lab
-            Context labelenv bindmap = ctx
-        -- These labels will contain the adjoints of the branches
-        (Exists envlhsT, envlabsT) <- genSingleIds (etypeOf argT)
-        (Exists envlhsE, envlabsE) <- genSingleIds (etypeOf argE)
-        let ctxInT = ctxPush envlhsT (fmapLabel D (elabelOf argT)) envlabsT ctx
-            ctxInE = ctxPush envlhsE (fmapLabel D (elabelOf argE)) envlabsE ctx
-        DualResult (EBuilder ctxT fT) storesT compdT cmapT <- dual ctxInT argT
-        DualResult (EBuilder ctxE fE) storesE compdE cmapE <- dual ctxInE argE
-        Some' tmplabsT <- returnSome (tuplify (intersectOrd storesT (enumerateTupR envlabsT ++ compdT)))
-        Some' tmplabsE <- returnSome (tuplify (intersectOrd storesE (enumerateTupR envlabsE ++ compdE)))
+        let (adjoint, cmap') = collectAdjointCMap cmap (Local lab) ctx
+        (Exists envlhs, envlabs) <- genSingleIds (labelType lab)
+        let ctx' = ctxPush envlhs (fmapLabel D lab) envlabs ctx
+            cmap'' = addContrib (Local (elabelOf argT))
+                                (\ctx2 -> evars (resolveEnvLabs ctx2 envlabs))
+                   . addContrib (Local (elabelOf argE))
+                                (\ctx2 -> evars (resolveEnvLabs ctx2 envlabs))
+                   $ cmap'
+        traceM ("!dual Cond[" ++ showDLabel lab ++ "]: envlabs = " ++ showTupR showDLabel envlabs)
+        DualResult (EBuilder ctxT fT) storesT cmapT <- dual ctx' cmap'' argT
+        DualResult (EBuilder ctxE fE) storesE cmapE <- dual ctx' cmapT argE
+        Some' tmplabsT <- returnSome (tuplify (sortUniq (concat [enumerateTupR (findAdjointBMap ctxT l) | Some l <- storesT])))
+        Some' tmplabsE <- returnSome (tuplify (sortUniq (concat [enumerateTupR (findAdjointBMap ctxE l) | Some l <- storesE])))
         let tmptyT = fmapTupR labelType tmplabsT
             tmptyE = fmapTupR labelType tmplabsE
             branchty = TupRpair tmptyT tmptyE
         LetBoundVars lhsT _ <- return (lhsCopy tmptyT)
         LetBoundVars lhsE _ <- return (lhsCopy tmptyE)
         let branchlhs = LeftHandSidePair lhsT lhsE
+            Context labelenv bindmap = ctx'
             labelenv' = labelenv & lpushLabTup lhsT tmplabsT
                                  & lpushLabTup lhsE tmplabsE
+            isInStores st k _ = case k of Argument _ -> True
+                                          Local l -> Some l `elem` map (mapSome (fmapLabel D)) st
             bindmap' = dmapDisjointUnions
                           [bindmap
-                          ,let Context _ bm = ctxT in bm DMap.\\ bindmap
-                          ,let Context _ bm = ctxE in bm DMap.\\ bindmap]
-        traceM (unlines ["!dual Cond[" ++ showDLabel lab ++ "]:"
-                        ,"  adjointLabs = " ++ showTupR showDLabel adjointLabs
-                        ,"  envlabsT = " ++ showTupR showDLabel envlabsT
-                        ,"  envlabsE = " ++ showTupR showDLabel envlabsE
+                          ,DMap.filterWithKey (isInStores storesT) (let Context _ bm = ctxT in bm)
+                          ,DMap.filterWithKey (isInStores storesE) (let Context _ bm = ctxE in bm)]
+        traceM (unlines ["!dual RE Cond[" ++ showDLabel lab ++ "]:"
                         ,"  tmplabsT = " ++ showTupR showDLabel tmplabsT
                         ,"  tmplabsE = " ++ showTupR showDLabel tmplabsE
                         ,"  bmT = " ++ showBindmap (let Context _ bm = ctxT in bm DMap.\\ bindmap)
@@ -671,36 +692,30 @@ dual ctx = \case
                         ])
         return $ DualResult
             (EBuilder (Context labelenv' bindmap')
-                      (Let branchlhs
+                      (Let envlhs adjoint .
+                       Let branchlhs
                            (Cond (nilLabel branchty)
-                                 (evars (resolveEnvLabs ctx condLabs))
-                                 (Let envlhsT (evars (resolveEnvLabs ctx adjointLabs))
-                                      (fT (smartPair
-                                              (evars (resolveEnvLabs ctxT tmplabsT))
-                                              (zeroForType tmptyE))))
-                                 (Let envlhsE (evars (resolveEnvLabs ctx adjointLabs))
-                                      (fE (smartPair
-                                              (zeroForType tmptyT)
-                                              (evars (resolveEnvLabs ctxE tmplabsE))))))))
+                                 (evars (resolveEnvLabs ctx' (findPrimalBMap ctx' (elabelOf arg1))))
+                                 (fT (smartPair
+                                         (evars (resolveEnvLabs ctxT tmplabsT))
+                                         (zeroForType tmptyE)))
+                                 (fE (smartPair
+                                         (zeroForType tmptyT)
+                                         (evars (resolveEnvLabs ctxE tmplabsE)))))))
             (storesT ++ storesE)  -- don't need to store this node
-            (enumerateTupR tmplabsT ++ enumerateTupR tmplabsE)
-            (cmapT `unionCMap` cmapE)
+            cmapE
 
     Let _ arg1 arg2 -> do
-        -- The parent has already stored the adjoint for the body, so we can
-        -- directly traverse it.
-        DualResult (EBuilder ctx2 f2) stores2 compd2 cmap2 <- dual ctx arg2
-        -- Now we need to collect the contributions to the RHS, and traverse it
-        -- with (a promise of) its adjoint stored in the context.
-        (Exists lhs, envlabs) <- genSingleIds (etypeOf arg1)
-        let ctx' = ctxPush lhs (fmapLabel D (elabelOf arg1)) envlabs ctx2
-            (rhsAdjoint, cmap2') = collectAdjointCMap cmap2 (Local (elabelOf arg1)) ctx2
-        DualResult (EBuilder ctx1 f1) stores1 compd1 cmap1 <- dual ctx' arg1
+        -- The contribution is stored in the cmap under the label of the body,
+        -- so it will be communicated without work here in Let.
+        DualResult (EBuilder ctx2 f2) stores2 cmap2 <- dual ctx cmap arg2
+        -- The contribution for the RHS is already stored in the cmap, nothing
+        -- more to do.
+        DualResult (EBuilder ctx1 f1) stores1 cmap1 <- dual ctx2 cmap2 arg1
         return $ DualResult
-            (EBuilder ctx1 (f2 . Let lhs rhsAdjoint . f1))
-            (stores1 ++ stores2)  -- don't need to store the right-hand side's adjoint
-            (compd2 ++ enumerateTupR envlabs ++ compd1)
-            (cmap1 `unionCMap` cmap2')
+            (EBuilder ctx1 (f2 . f1))
+            (stores1 ++ stores2)  -- nothing to store
+            cmap1
 
     -- These primitives all have none or only integral arguments. Since
     -- integral nodes always have adjoint zero, we don't even need to traverse
@@ -708,25 +723,34 @@ dual ctx = \case
     -- which is okay.
     -- For these nodes we also don't have to keep the adjoint around outside
     -- condition branches.
-    Const lab _       -> return (emptyDual ctx lab False)
-    PrimConst lab _   -> return (emptyDual ctx lab False)
-    Nil lab           -> return (emptyDual ctx lab False)
-    Shape lab _       -> return (emptyDual ctx lab False)
-    ShapeSize lab _ _ -> return (emptyDual ctx lab False)
-    Undef lab         -> return (emptyDual ctx lab False)
-    FreeVar lab _     -> return (emptyDual ctx lab False)
+    Const _ _       -> return (emptyDual ctx cmap)
+    PrimConst _ _   -> return (emptyDual ctx cmap)
+    Nil _           -> return (emptyDual ctx cmap)
+    Shape _ _       -> return (emptyDual ctx cmap)
+    ShapeSize _ _ _ -> return (emptyDual ctx cmap)
+    Undef _         -> return (emptyDual ctx cmap)
+    FreeVar _ _     -> return (emptyDual ctx cmap)
     -- However, for Index we must store the adjoint for the index adjoint information tuple.
-    Index lab _ _ _   -> return (emptyDual ctx lab True)
+    Index lab _ _ _ -> simpleDual ctx cmap lab
   where
-    -- Produces an empty builder. Registers the adjoint in the to-store set if the Bool is True.
-    emptyDual :: IsTupleType ScalarType s
-              => EContext Int env
-              -> DLabel NodeLabel s Int t
-              -> Bool
+    emptyDual :: EContext Int env
+              -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)  -- Contribution map
               -> DualResult env aenv alab args tenv
-    emptyDual ctx' lab dostore =
-        let envlabs = enumerateTupR (findAdjointBMap ctx' lab)
-        in DualResult (EBuilder ctx' id) (if dostore then envlabs else []) [] mempty
+    emptyDual ctx' cmap' = DualResult (EBuilder ctx' id) [] cmap'
+
+    simpleDual :: (Show alab, IsTupleType ScalarType s)
+               => EContext Int env
+               -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
+               -> DLabel NodeLabel s Int t
+               -> IdGen (DualResult env aenv alab args tenv)
+    simpleDual ctx' cmap' lab = do
+        let (adjoint, cmap'') = collectAdjointCMap cmap' (Local (tupleLabel lab)) ctx'
+        (Exists lhs, envlabs) <- genSingleIds (etypeOf adjoint)
+        return $
+            DualResult (EBuilder (ctxPush lhs (fmapLabel D (tupleLabel lab)) envlabs ctx')
+                                 (Let lhs adjoint))
+                       [Some (tupleLabel lab)]
+                       cmap''
 
 -- Make sure the expressions given are cheap to duplicate, i.e. just variable
 -- references.
@@ -788,23 +812,29 @@ isIntegralType _ = False
 -- Utility functions
 -- -----------------
 
-unionCMap :: Ord lab
-          => DMap (CMapKey ScalarType lab) (AdjList aenv lab alab args tenv)
-          -> DMap (CMapKey ScalarType lab) (AdjList aenv lab alab args tenv)
-          -> DMap (CMapKey ScalarType lab) (AdjList aenv lab alab args tenv)
-unionCMap = DMap.unionWithKey (const (<>))
-
 -- Collect adjoint from the contribution map, and returns the map with this label's entries removed.
-collectAdjointCMap :: DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
+collectAdjointCMap :: Show alab
+                   => DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
                    -> CMapKey ScalarType Int t
                    -> EContext Int env
                    -> (OpenExp env aenv () alab args tenv t
                       ,DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv))
-collectAdjointCMap contribmap key =
+collectAdjointCMap contribmap key ctx =
     case DMap.lookup key contribmap of
-        Just (AdjList listgen) -> (, DMap.delete key contribmap) . expSum (cmapKeyType key) . listgen
+        Just (AdjList listgen) ->
+            let adj = expSum (cmapKeyType key) (listgen ctx)
+            in trace ("\x1B[1mcmap collect: " ++ showCMapKey showDLabel key ++ " ==> " ++ show adj ++ "\x1B[0m")
+               (adj, DMap.delete key contribmap)
         Nothing -> -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
-                   const (expSum (cmapKeyType key) [], contribmap)
+                   let res = expSum (cmapKeyType key) []
+                   in trace ("\x1B[1mcmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m")
+                      (res, contribmap)
+
+addContrib :: CMapKey ScalarType Int t
+           -> (forall env. EContext Int env -> OpenExp env aenv () alab args tenv t)
+           -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
+           -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
+addContrib key gen = DMap.insertWith (<>) key (AdjList (pure . gen))
 
 oneHotTup :: TypeR t -> TupleIdx t t' -> OpenExp env aenv () alab args tenv t' -> OpenExp env aenv () alab args tenv t
 oneHotTup _ TIHere ex = ex
