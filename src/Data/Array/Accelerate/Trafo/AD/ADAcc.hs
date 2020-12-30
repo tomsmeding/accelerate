@@ -1150,37 +1150,35 @@ arrayPlus :: OpenAcc aenv () () args (Array sh t)
           -> OpenAcc aenv () () args (Array sh t)
 -- arrayPlus a1 a2
 --   | TupRsingle arrty@(ArrayR _ ty) <- atypeOf a1
---   , Lam lhs1 (Lam lhs2 body) <- plusLam ty
---   = ZipWith (nilLabel arrty) (ELPlain (Lam (LeftHandSidePair lhs1 lhs2) body)) a1 a2
-arrayPlus a1 a2
-  | TupRsingle arrty@(ArrayR sht ty) <- atypeOf a1
-  , LetBoundVars shlhs shvars <- lhsCopy (shapeType sht)
-  = Alet (LeftHandSidePair (LeftHandSideSingle arrty) (LeftHandSideSingle arrty))
-         (smartApair a1 a2) $
-      let a1var = A.Var arrty (SuccIdx ZeroIdx)
-          a2var = A.Var arrty ZeroIdx
-      in
-        -- -- TODO: of these two, which is more efficient?
-        -- Acond (nilLabel (TupRsingle arrty))
-        --       (shapeIsZeroE sht (smartShape (Left a1var)))
-        --       (smartAvar a2var)
-        --       (Acond (nilLabel (TupRsingle arrty))
-        --              (shapeIsZeroE sht (smartShape (Left a2var)))
-        --              (smartAvar a1var)
-        --              (case plusLam ty of
-        --                 Lam lhs1 (Lam lhs2 body) ->
-        --                   ZipWith (nilLabel arrty) (ELPlain (Lam (LeftHandSidePair lhs1 lhs2) body)) (smartAvar a1var) (smartAvar a2var)
-        --                 _ -> error "unexpected plusLam"))
-        Generate (nilLabel arrty)
-                 (maxShapeE sht (smartShape (Left a1var)) (smartShape (Left a2var)))
-                 (ELPlain (Lam shlhs (Body
-                     (smartCond (shapeIsZeroE sht (smartShape (Left a1var)))
-                                (smartIndex a2var (evars shvars))
-                                (smartCond (shapeIsZeroE sht (smartShape (Left a2var)))
-                                           (smartIndex a1var (evars shvars))
-                                           (expPlus ty (smartIndex a1var (evars shvars))
-                                                       (smartIndex a2var (evars shvars))))))))
-arrayPlus _ _ = error "invalid GADTs"
+--   = ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam ty))) a1 a2
+arrayPlus a1 a2 = case atypeOf1 a1 of
+    arrty@(ArrayR ShapeRz ty) ->
+      ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam ty))) a1 a2
+
+    arrty@(ArrayR sht@(ShapeRsnoc _) ty)
+      | LetBoundVars shlhs shvars <- lhsCopy (shapeType sht) ->
+          Alet (LeftHandSidePair (LeftHandSideSingle arrty) (LeftHandSideSingle arrty))
+               (smartApair a1 a2) $
+            let a1var = A.Var arrty (SuccIdx ZeroIdx)
+                a2var = A.Var arrty ZeroIdx
+            in
+              -- -- TODO: of these two, which is more efficient?
+              -- Acond (nilLabel (TupRsingle arrty))
+              --       (shapeIsZeroE sht (smartShape (Left a1var)))
+              --       (smartAvar a2var)
+              --       (Acond (nilLabel (TupRsingle arrty))
+              --              (shapeIsZeroE sht (smartShape (Left a2var)))
+              --              (smartAvar a1var)
+              --              (ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam ty))) (smartAvar a1var) (smartAvar a2var)))
+              Generate (nilLabel arrty)
+                       (maxShapeE sht (smartShape (Left a1var)) (smartShape (Left a2var)))
+                       (ELPlain (Lam shlhs (Body
+                           (smartCond (shapeIsZeroE sht (smartShape (Left a1var)))
+                                      (smartIndex a2var (evars shvars))
+                                      (smartCond (shapeIsZeroE sht (smartShape (Left a2var)))
+                                                 (smartIndex a1var (evars shvars))
+                                                 (expPlus ty (smartIndex a1var (evars shvars))
+                                                             (smartIndex a2var (evars shvars))))))))
 
 arraySum :: ArrayR (Array sh t)
          -> A.ArrayVar aenv (Array sh t)  -- primal result
@@ -1191,12 +1189,12 @@ arraySum ty@(ArrayR sht _) pvar [] =
 arraySum _ _ [a] = a
 arraySum arrty pvar (a1:as) = arrayPlus a1 (arraySum arrty pvar as)
 
-shapeIsZeroE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv A.PrimBool
-shapeIsZeroE ShapeRz _ = Const (nilLabel scalarType) 1
-shapeIsZeroE (ShapeRsnoc ShapeRz) expr =  -- special case for single-element shape to prevent (&& True)
+shapeIsZeroE :: ShapeR (sh, Int) -> OpenExp env aenv () alab args tenv (sh, Int) -> OpenExp env aenv () alab args tenv A.PrimBool
+shapeIsZeroE (ShapeRsnoc ShapeRz) expr =
     smartEq singleType (smartSnd expr) (Const (nilLabel scalarType) 0)
-shapeIsZeroE (ShapeRsnoc sht) expr = smartLAnd (shapeIsZeroE sht (smartFst expr))
-                                               (smartEq singleType (smartSnd expr) (Const (nilLabel scalarType) 0))
+shapeIsZeroE (ShapeRsnoc sht@(ShapeRsnoc _)) expr =
+    smartLAnd (shapeIsZeroE sht (smartFst expr))
+              (smartEq singleType (smartSnd expr) (Const (nilLabel scalarType) 0))
 
 arraysSum :: ArraysR t
           -> A.ArrayVars aenv t  -- primal result
@@ -1242,6 +1240,10 @@ plusLam ty
   | DeclareVars lhs1 _ varsgen1 <- declareVars ty
   , DeclareVars lhs2 weaken2 varsgen2 <- declareVars ty
   = Lam lhs1 . Lam lhs2 . Body $ expPlus ty (evars (varsgen1 weaken2)) (evars (varsgen2 A.weakenId))
+
+uncurryFun :: Fun aenv lab alab tenv (a -> b -> c) -> Fun aenv lab alab tenv ((a, b) -> c)
+uncurryFun (Lam l1 (Lam l2 (Body e))) = Lam (LeftHandSidePair l1 l2) (Body e)
+uncurryFun _ = error "uncurryFun: impossible GADTs"
 
 oneHotTup :: ArraysR t -> TupleIdx t t' -> A.ArrayVars aenv t -> OpenAcc aenv () () args t' -> OpenAcc aenv () () args t
 oneHotTup _ TIHere _ ex = ex
