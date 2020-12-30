@@ -774,14 +774,65 @@ dual ctx cmap = \case
             stores1  -- don't need to store this node
             cmap1
       | otherwise -> error ("Fold over non-Float array of type " ++ show (labelType lab) ++ " not yet supported for AD")
-      where
-        timesLam :: NumType t -> Fun aenv () alab tenv ((t, t) -> t)
-        timesLam ty =
-            let sty = SingleScalarType (NumSingleType ty)
-            in Lam (LeftHandSidePair (LeftHandSideSingle sty) (LeftHandSideSingle sty))
-                   (Body (smartMul ty (smartVar (A.Var sty (SuccIdx ZeroIdx))) (smartVar (A.Var sty ZeroIdx))))
 
-    Fold _ _ Nothing _ -> error "AD: Fold1 currently unsupported"
+    Fold lab combfun Nothing arg1
+      | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- arrayRtype (labelType lab)
+      -> do
+        MatchLamBody lambdalhs lambdabody <- return (matchLamBody combfun)
+        if expHasIndex lambdabody then error "Array index operations in a Fold1 lambda not yet supported for AD" else return ()
+
+        ReplicateOneMore onemoreSlix onemoreExpf <- return (replicateOneMore (arrayRshape (labelType lab)))
+
+        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        envlab0 <- genSingleId (labelType lab)
+        envlab1 <- genSingleId (atypeOf1 arg1)
+        let ctx'1 = ctxPushS (fmapLabel D lab) envlab0 ctx
+            ctx' = ctxPushSEnvOnly envlab1 ctx'1
+            cmap'' = addContrib (Local (alabelOf arg1))
+                                (\ctx2 ->
+                                    -- zipWith (*) (replicate (shape a) adjoint) (usual_derivative)
+                                    let tempvar = resolveEnvLab ctx2 envlab1
+                                    in smartZipWith (timesLam numType)
+                                        (Replicate (nilLabel (atypeOf1 arg1)) onemoreSlix (onemoreExpf (smartShape (Left tempvar)))
+                                                   (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
+                                        (smartAvar tempvar))
+                                cmap'
+        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
+        traceM (unlines ["!dual Fold1[" ++ showDLabel lab ++ "]:"
+                        ,"  envlab0 = " ++ showDLabel envlab0
+                        ,"  envlab1 = " ++ showDLabel envlab1
+                        ,"  stores = " ++ show stores1
+                        ,"  out cmap = " ++ showCMapA ctx1 cmap1
+                        ])
+        return $ DualResult
+            (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
+                            Alet (LeftHandSideSingle (labelType envlab1))
+                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody) of
+                                    ADExp.ReverseADResE lambdalhs' dualbody ->
+                                        -- let sc = init (scanl1 f a)
+                                        -- in zipWith (*) ([1] ++ zipWith D₂f sc (tail l))
+                                        --                (scanr (*) 1 (zipWith D₁f sc (tail l)))
+                                        let d1f = Lam lambdalhs' (Body (smartFst dualbody))
+                                            d2f = Lam lambdalhs' (Body (smartSnd dualbody))
+                                            weaken1 = A.weakenSucc A.weakenId
+                                            (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
+                                            argvar = resolveEnvLab ctx'1 (untupleA (findPrimalBMap ctx'1 (alabelOf arg1)))
+                                            argvar' = weaken weaken1 argvar
+                                        in Alet (LeftHandSideSingle (atypeOf1 arg1))
+                                                (smartInit (Scan (nilLabel (atypeOf1 arg1)) A.LeftToRight
+                                                    (resolveAlabsFun ctx'1 combfun)
+                                                    Nothing
+                                                    (smartAvar argvar)))
+                                                (smartZipWith (timesLam numType)
+                                                    (smartCons (zeroForType' 1 numType)
+                                                        (smartZipWith d2f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartTail (smartAvar argvar'))))
+                                                    (Scan (nilLabel (atypeOf1 arg1)) A.RightToLeft (timesLam numType)
+                                                        (Just (zeroForType' 1 numType))
+                                                        (smartZipWith d1f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartTail (smartAvar argvar'))))))
+                            . f1))
+            stores1  -- don't need to store this node
+            cmap1
+      | otherwise -> error ("Fold1 over non-Float array of type " ++ show (labelType lab) ++ " not yet supported for AD")
 
     Sum lab arg1 -> do
         ReplicateOneMore slixType slixExpGen <- return (replicateOneMore (arrayRshape (labelType lab)))
@@ -903,6 +954,69 @@ dual ctx cmap = \case
     Scan' _ _ _ _ _ -> error "AD: Scan' currently unsupported"
     Reduce _ _ _ _ -> error "AD: Reduce currently unsupported"
     Permute _ _ _ _ _ -> error "AD: Permute currently unsupported"
+  where
+    timesLam :: NumType t -> Fun aenv () alab tenv ((t, t) -> t)
+    timesLam ty =
+        let sty = SingleScalarType (NumSingleType ty)
+        in Lam (LeftHandSidePair (LeftHandSideSingle sty) (LeftHandSideSingle sty))
+               (Body (smartMul ty (smartVar (A.Var sty (SuccIdx ZeroIdx))) (smartVar (A.Var sty ZeroIdx))))
+
+    smartInnerPermute :: (forall env aenv'. OpenExp env aenv' () () () () Int
+                                         -> OpenExp env aenv' () () () () Int)  -- ^ new inner dimension size
+                      -> (forall env aenv'. OpenExp env aenv' () () () () Int
+                                         -> OpenExp env aenv' () () () () Int)  -- ^ inner index transformer
+                      -> OpenAcc aenv () () args (Array (sh, Int) t)
+                      -> OpenAcc aenv () () args (Array (sh, Int) t)
+    smartInnerPermute sizeExpr indexExpr a
+      | TupRsingle ty@(ArrayR shtype _) <- atypeOf a
+      , TupRpair tailsht _ <- shapeType shtype
+      , LetBoundVars shlhs shvars <- lhsCopy tailsht =
+          Alet (LeftHandSideSingle ty) a
+               (Backpermute (nilLabel ty)
+                   (Let (LeftHandSidePair shlhs (LeftHandSideSingle scalarType))
+                        (smartShape (Left (A.Var ty ZeroIdx)))
+                        (smartPair
+                            (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                            (sizeExpr (smartVar (A.Var scalarType ZeroIdx)))))
+                   (Lam (LeftHandSidePair shlhs (LeftHandSideSingle scalarType))
+                        (Body (smartPair
+                                  (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                                  (indexExpr (smartVar (A.Var scalarType ZeroIdx))))))
+                   (smartAvar (A.Var ty ZeroIdx)))
+    smartInnerPermute _ _ _ = error "impossible GADTs"
+
+    smartTail :: OpenAcc aenv () () args (Array (sh, Int) t) -> OpenAcc aenv () () args (Array (sh, Int) t)
+    smartTail = smartInnerPermute (\sz -> smartSub numType sz (Const scalarLabel 1))
+                                  (\idx -> smartAdd numType idx (Const scalarLabel 1))
+
+    smartInit :: OpenAcc aenv () () args (Array (sh, Int) t) -> OpenAcc aenv () () args (Array (sh, Int) t)
+    smartInit = smartInnerPermute (\sz -> smartSub numType sz (Const scalarLabel 1))
+                                  (\idx -> idx)
+
+    smartCons :: (forall env aenv'. OpenExp env aenv' () () () () t)
+              -> OpenAcc aenv () () args (Array (sh, Int) t)
+              -> OpenAcc aenv () () args (Array (sh, Int) t)
+    smartCons prefix a
+      | TupRsingle ty@(ArrayR shtype _) <- atypeOf a
+      , TupRpair tailsht _ <- shapeType shtype
+      , LetBoundVars shlhs shvars <- lhsCopy tailsht =
+          Alet (LeftHandSideSingle ty) a
+               (Generate (nilLabel ty)
+                   (Let (LeftHandSidePair shlhs (LeftHandSideSingle scalarType))
+                        (smartShape (Left (A.Var ty ZeroIdx)))
+                        (smartPair
+                            (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                            (smartAdd numType (smartVar (A.Var scalarType ZeroIdx)) (Const scalarLabel 1))))
+                   (ELPlain (Lam (LeftHandSidePair shlhs (LeftHandSideSingle scalarType))
+                                 (Body (smartCond
+                                           (smartGt singleType (smartVar (A.Var scalarType ZeroIdx)) (Const scalarLabel 0))
+                                           (smartIndex
+                                               (A.Var ty ZeroIdx)
+                                               (smartPair
+                                                   (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
+                                                   (smartSub numType (smartVar (A.Var scalarType ZeroIdx)) (Const scalarLabel 1))))
+                                           prefix)))))
+    smartCons _ _ = error "impossible GADTs"
 
 simpleArrayDual :: (IsTupleType ArrayR s, Show (s t))
                 => String
