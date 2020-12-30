@@ -158,6 +158,10 @@ prop_acond_0 :: Property
 prop_acond_0 = compareAD' nil sized_vec $ \() a ->
   A.sum (A.acond (A.the (A.sum a) A.> 0) a (A.map (*2) a))
 
+prop_acond_0a :: Property
+prop_acond_0a = compareAD' nil sized_vec $ \() a ->
+  A.sum (A.acond (A.the (A.sum a) A.> 0) (A.map (*2) a) a)
+
 prop_acond_1 :: Property
 prop_acond_1 = compareAD' nil sized_vec $ \() a ->
   let b = A.map (*2) a

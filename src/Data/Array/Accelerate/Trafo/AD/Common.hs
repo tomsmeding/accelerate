@@ -458,7 +458,7 @@ type PDExp = PD PDAuxTagExp
 type PDAcc = PD PDAuxTagAcc
 
 type BindMap s tag lab =
-    DMap (CMapKey s (PD tag lab))
+    DMap (DLabel NodeLabel (TupR s) (PD tag lab))
          (TupR (DLabel EnvLabel s lab))
 type EBindMap lab = BindMap ScalarType PDAuxTagExp lab
 type ABindMap lab = BindMap ArrayR PDAuxTagAcc lab
@@ -488,16 +488,17 @@ showLabelenv (LPush env lab) = "[" ++ go env ++ showDLabel lab ++ "]"
 showBindmap :: (Ord lab, Show lab, Show tag, Ord tag, forall t. Show (s t), forall t. Show (TupR s t))
             => BindMap s tag lab -> String
 showBindmap bindmap =
-    let tups = sortOn fst [(sortKey, (showCMapKey showDLabel dlab, showTupR showDLabel labs))
-                          | dlab :=> labs <- DMap.assocs bindmap
-                          , let sortKey = case dlab of Argument _ -> Nothing
-                                                       Local (DLabel _ lab) -> Just lab]
+    let tups = sortOn fst [(lab, (showDLabel dlab, showTupR showDLabel labs))
+                          | dlab@(DLabel _ lab) :=> labs <- DMap.assocs bindmap]
         s = intercalate ", " ["(" ++ dlabshow ++ ") :=> " ++ labsshow
                              | (_, (dlabshow, labsshow)) <- tups]
     in "[" ++ s ++ "]"
 
 showCMap :: (forall t'. Show (TupR s t')) => DMap (CMapKey s Int) f -> String
-showCMap mp = "[" ++ intercalate ", " [showCMapKey showDLabel k ++ " :=> {\\...}" | Some k <- DMap.keys mp] ++ "]"
+showCMap = showCMap' (const "{\\...}")
+
+showCMap' :: (forall t'. Show (TupR s t')) => (forall t. f t -> String) -> DMap (CMapKey s Int) f -> String
+showCMap' vshow mp = "[" ++ intercalate ", " [showCMapKey showDLabel k ++ " :=> " ++ vshow v | k :=> v <- DMap.assocs mp] ++ "]"
 
 showProduct :: (forall t'. f t' -> String) -> (forall t'. g t' -> String) -> Product f g t -> String
 showProduct fs gs (Product.Pair a b) = "Product (" ++ fs a ++ ") (" ++ gs b ++ ")"
@@ -506,7 +507,7 @@ filterBindmap :: (Matchable s, GCompare s, GCompare (TupR s), Ord tag, Ord lab)
               => [Some (DLabel NodeLabel (TupR s) (PD tag lab))]
               -> BindMap s tag lab
               -> BindMap s tag lab
-filterBindmap labs bm = DMap.fromList [Local lab :=> bm DMap.! Local lab | Some lab <- labs]
+filterBindmap labs bm = DMap.fromList [lab :=> bm DMap.! lab | Some lab <- labs]
 
 reassignBindmap :: (GCompare s, Ord lab)
                 => TupR (DLabel EnvLabel s lab) t
@@ -544,7 +545,7 @@ ctxPushS nodelab envlab =
 ctxPush :: (Matchable s, Ord tag, GCompare s, GCompare (TupR s))
         => LeftHandSide s t env env' -> DLabel NodeLabel (TupR s) (PD tag Int) t -> TupR (DLabel EnvLabel s Int) t -> Context s tag Int env -> Context s tag Int env'
 ctxPush lhs nodelab envlabs (Context labelenv bindmap) =
-    Context (lpushLabTup lhs envlabs labelenv) (DMap.insert (Local nodelab) envlabs bindmap)
+    Context (lpushLabTup lhs envlabs labelenv) (DMap.insert nodelab envlabs bindmap)
 
 ctxPushEnvOnly :: (Ord tag, GCompare s, GCompare (TupR s))
         => LeftHandSide s t env env' -> TupR (DLabel EnvLabel s Int) t -> Context s tag Int env -> Context s tag Int env'
@@ -561,15 +562,7 @@ findPrimalBMap :: (HasCallStack, IsTupleType s s_lab, Matchable s, GCompare s, G
                -> TupR (DLabel EnvLabel s lab) t
 findPrimalBMap (Context _ bindmap) lbl =
     fromMaybe (error ("findPrimalBMap: not found: L" ++ show (labelLabel lbl)))
-              (DMap.lookup (Local (fmapLabel P (tupleLabel lbl))) bindmap)
-
-findArgumentPrimalBMap :: (HasCallStack, Matchable s, GCompare s, GCompare (TupR s), Ord lab, Ord tag)
-                       => Context s tag lab env
-                       -> TupR s args
-                       -> TupR (DLabel EnvLabel s lab) args
-findArgumentPrimalBMap (Context _ bindmap) argsty =
-    fromMaybe (error "findArgumentPrimalBMap: not found")
-              (DMap.lookup (Argument argsty) bindmap)
+              (DMap.lookup (fmapLabel P (tupleLabel lbl)) bindmap)
 
 -- Find the adjoint of a node in the bindmap
 findAdjointBMap :: (HasCallStack, IsTupleType s s_lab, Matchable s, GCompare s, GCompare (TupR s), Show lab, Ord lab, Ord tag)
@@ -585,7 +578,7 @@ findAdjointBMap' :: (IsTupleType s s_lab, Matchable s, GCompare s, GCompare (Tup
                  => Context s tag lab env
                  -> DLabel NodeLabel s_lab lab t
                  -> Maybe (TupR (DLabel EnvLabel s lab) t)
-findAdjointBMap' (Context _ bindmap) lbl = DMap.lookup (Local (fmapLabel D (tupleLabel lbl))) bindmap
+findAdjointBMap' (Context _ bindmap) lbl = DMap.lookup (fmapLabel D (tupleLabel lbl)) bindmap
 
 
 -- TODO: make this 'type AnyLabel lty s lab = Exists (DLabel lty s lab)', and perhaps even inline this because then the typedef is marginally useful. Also apply this to other Any* names.
