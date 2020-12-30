@@ -232,15 +232,8 @@ data ABuilder aenv alab args =
                  (forall res. OpenAcc aenv' () () args res
                            -> OpenAcc aenv () () args res)
 
--- -- The label to store, and an expression producing its shape when an empty version needs to be generated.
--- data PrimalToStore alab arr where
---     PrimalToStore :: ADLabel Int (Array sh t)
---                   -> (forall aenv. AContext alab aenv -> Exp aenv () () () () sh)
---                   -> PrimalToStore alab (Array sh t)
-
 data PrimalResult aenv alab args t =
     PrimalResult (ABuilder aenv alab args)  -- Primal builder
-                 -- [Some (PrimalToStore Int)]  -- To-store "set" (really list): Pair (labelToStore) (shapeProducer)
                  [Some (ADLabel Int)]       -- To-store "set" (really list)
                  (TupR (ADLabel Int) t)     -- Env labels of the subtree root
 
@@ -312,7 +305,6 @@ primal ctx = \case
                                       (\lam -> Generate (nilLabel pairarrty)
                                                         (resolveAlabs ctx shexp)
                                                         (ELPlain lam)))))
-            -- [Some (PrimalToStore envlab1 (`resolveAlabs` shexp)), Some (PrimalToStore envlab2 (`resolveAlabs` shexp))]
             [Some envlab1, Some envlab2]
             (TupRsingle envlab1)
 
@@ -333,9 +325,6 @@ primal ctx = \case
                                            (\lam -> Map (nilLabel pairarrty)
                                                         (ELPlain lam)
                                                         (avars (resolveEnvLabs ctx1 arglabs1))))))
-            -- (Some (PrimalToStore envlab1 (`resolveAlabs` smartShape (Right (anyPL1 (alabelOf arg)))))
-            --  : Some (PrimalToStore envlab2 (`resolveAlabs` smartShape (Right (anyPL1 (alabelOf arg)))))
-            --  : stores1)
             (Some envlab1 : Some envlab2 : stores1)
             (TupRsingle envlab1)
 
@@ -358,9 +347,6 @@ primal ctx = \case
                                                                  (ELPlain lam)
                                                                  (avars (resolveEnvLabs ctx2 arglabs1))
                                                                  (avars (resolveEnvLabs ctx2 arglabs2))))))
-            -- (Some (PrimalToStore envlab1 (`resolveAlabs` minShapeE sht (smartShape (Right (anyPL1 (alabelOf arg1)))) (smartShape (Right (anyPL1 (alabelOf arg2))))))
-            --  : Some (PrimalToStore envlab2 (`resolveAlabs` minShapeE sht (smartShape (Right (anyPL1 (alabelOf arg1)))) (smartShape (Right (anyPL1 (alabelOf arg2))))))
-            --  : stores1 ++ stores2)
             (Some envlab1 : Some envlab2 : stores1 ++ stores2)
             (TupRsingle envlab1)
 
