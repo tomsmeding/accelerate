@@ -188,7 +188,7 @@ showsExp se d (ShapeSize lab _ e) =
 showsExp se d (Get lab ti e) =
     showParen (d > 10) $
         showString (tiPrefixExp ti) . eshowLabelSuffix se lab . showString " " .
-        showsExp se 10 e
+        showsExp se (case ti of TIHere -> 10 ; _ -> 11) e
 showsExp se _ (Undef lab) = showString "undef" . eshowLabelSuffix se lab
 showsExp se d (Let lhs rhs body) = showParen (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
@@ -616,6 +616,9 @@ smartGt ty a b = PrimApp magicLabel (A.PrimGt ty) (smartPair a b)
 smartMin :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t
 smartMin ty a b = PrimApp (nilLabel (TupRsingle (SingleScalarType ty))) (A.PrimMin ty) (smartPair a b)
 
+smartMax :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t
+smartMax ty a b = PrimApp (nilLabel (TupRsingle (SingleScalarType ty))) (A.PrimMax ty) (smartPair a b)
+
 smartVar :: A.ExpVar env t -> OpenExp env aenv () alab args tenv t
 smartVar var@(A.Var ty _) = Var (nilLabel ty) var (PartLabel (tupleLabel (nilLabel ty)) TIHere)
 
@@ -625,6 +628,9 @@ smartCond e1 e2 e3 = Cond (nilLabel (etypeOf e2)) e1 e2 e3
 smartShape :: Either (A.ArrayVar aenv (Array sh e)) (AAnyPartLabelN alab (Array sh e)) -> OpenExp env aenv () alab args tenv sh
 smartShape (Left var@(A.Var (ArrayR sht _) _)) = Shape (nilLabel (shapeType sht)) (Left var)
 smartShape (Right lab@(AnyPartLabel partl)) = Shape (nilLabel (shapeType (arrayRshape (untupleA (partLabelSmallType partl))))) (Right lab)
+
+smartIndex :: A.ArrayVar aenv (Array sh e) -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv e
+smartIndex var@(A.Var (ArrayR _ ty) _) idxexp = Index (nilLabel ty) (Left var) scalarLabel idxexp
 
 -- TODO: make smartGet not quadratic when used repeatedly
 smartGet :: TupleIdx t t' -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t'

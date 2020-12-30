@@ -225,7 +225,7 @@ splitLambdaAD (Lam paramlhs (Body expr))
       LetBoundVars tmplhs _ <- return (lhsCopy (fmapTupR labelType primalTmplabs))
       let dualLabelenv = LEmpty & lpushLabTup adjlhs adjlabs
                                 & lpushLabTup tmplhs primalTmplabs
-          dualBindmap = DMap.insert (Local (fmapLabel D (elabelOf expr'))) adjlabs
+          dualBindmap = DMap.insert (fmapLabel D (elabelOf expr')) adjlabs
                                     (let Context _ bm = primalCtx in bm)
           dualCMapIn = DMap.singleton (Local (elabelOf expr'))
                                       (AdjList (\ctx2 -> [evars (resolveEnvLabs ctx2 adjlabs)]))
@@ -674,8 +674,7 @@ dual ctx cmap = \case
             Context labelenv bindmap = ctx'
             labelenv' = labelenv & lpushLabTup lhsT tmplabsT
                                  & lpushLabTup lhsE tmplabsE
-            isInStores st k _ = case k of Argument _ -> True
-                                          Local l -> Some l `elem` map (mapSome (fmapLabel D)) st
+            isInStores st l _ = Some l `elem` map (mapSome (fmapLabel D)) st
             bindmap' = dmapDisjointUnions
                           [bindmap
                           ,DMap.filterWithKey (isInStores storesT) (let Context _ bm = ctxT in bm)
@@ -683,8 +682,8 @@ dual ctx cmap = \case
         traceM (unlines ["!dual RE Cond[" ++ showDLabel lab ++ "]:"
                         ,"  tmplabsT = " ++ showTupR showDLabel tmplabsT
                         ,"  tmplabsE = " ++ showTupR showDLabel tmplabsE
-                        ,"  bmT = " ++ showBindmap (let Context _ bm = ctxT in bm DMap.\\ bindmap)
-                        ,"  bmE = " ++ showBindmap (let Context _ bm = ctxE in bm DMap.\\ bindmap)
+                        ,"  bmT = " ++ showBindmap (DMap.filterWithKey (isInStores storesT) (let Context _ bm = ctxT in bm))
+                        ,"  bmE = " ++ showBindmap (DMap.filterWithKey (isInStores storesE) (let Context _ bm = ctxE in bm))
                         ,"  storesT = " ++ show storesT
                         ,"  storesE = " ++ show storesE
                         ,"  labelenv' = " ++ showLabelenv labelenv'
@@ -823,11 +822,11 @@ collectAdjointCMap contribmap key ctx =
     case DMap.lookup key contribmap of
         Just (AdjList listgen) ->
             let adj = expSum (cmapKeyType key) (listgen ctx)
-            in trace ("\x1B[1mcmap collect: " ++ showCMapKey showDLabel key ++ " ==> " ++ show adj ++ "\x1B[0m")
+            in trace ("\x1B[1mexpr cmap collect: " ++ showCMapKey showDLabel key ++ " ==> " ++ show adj ++ "\x1B[0m")
                (adj, DMap.delete key contribmap)
         Nothing -> -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
                    let res = expSum (cmapKeyType key) []
-                   in trace ("\x1B[1mcmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m")
+                   in trace ("\x1B[1mexpr cmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m")
                       (res, contribmap)
 
 addContrib :: CMapKey ScalarType Int t
