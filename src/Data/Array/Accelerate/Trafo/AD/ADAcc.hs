@@ -34,6 +34,7 @@ import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Additive
 import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD, labeliseExpA, labeliseFunA, inlineAvarLabels')
+import qualified Data.Array.Accelerate.Trafo.AD.ADExp as ADExp
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Config
 import Data.Array.Accelerate.Trafo.AD.Debug
@@ -42,7 +43,7 @@ import qualified Data.Array.Accelerate.Trafo.AD.Heuristic as Heuristic
 import Data.Array.Accelerate.Trafo.AD.Pretty
 import Data.Array.Accelerate.Trafo.AD.Sink
 import Data.Array.Accelerate.Trafo.AD.TupleZip
-import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weakenVars)
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weakenVars, weaken)
 import Data.Array.Accelerate.Trafo.Var (declareVars, DeclareVars(..))
 
 
@@ -621,6 +622,8 @@ dual ctx cmap = \case
             [Some envlab1]  -- should store the IAI array for the indexing contributions
             (cmap' `unionCMap` indexingContributions envlab1 idxInsts)
 
+    Generate _ _ ELPlain{} -> error "dual: unexpected Generate ELPlain"
+
     Map lab (ELSplit (SplitLambdaAD _ dualLambda fvlabs _ idxadjty idxInsts) tmplab) arg1 -> do
         let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
             ArrayR sht argeltty = atypeOf1 arg1
@@ -657,6 +660,8 @@ dual ctx cmap = \case
                             . f1))
             (Some envlab2 : stores1)  -- should store the IAI array for the indexing contributions
             (cmap1 `unionCMap` indexingContributions envlab2 idxInsts)
+
+    Map _ ELPlain{} _ -> error "dual: unexpected Map ELPlain"
 
     ZipWith lab (ELSplit (SplitLambdaAD _ dualLambda fvlabs _ idxadjty idxInsts) tmplab) arg1 arg2 -> do
         let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
@@ -705,55 +710,78 @@ dual ctx cmap = \case
             (Some envlab3 : stores1 ++ stores2)  -- should store the IAI array for the indexing contributions
             (cmap2 `unionCMap` indexingContributions envlab3 idxInsts)
 
-    -- Fold lab combfun (Just initexp) arg1 -> do
-    --     SomeSplitLambdaAD (SplitLambdaAD primalLambda dualLambda fvlabs tmpty idxadjty idxInsts) <-
-    --         return (splitLambdaAD (generaliseAenvFun combfun))
+    ZipWith _ ELPlain{} _ _ -> error "dual: unexpected ZipWith ELPlain"
 
-    --     let adjointLabs = findAdjointBMap ctx lab
-    --         adjoint = avars (resolveEnvLabs ctx adjointLabs)
-    --         ArrayR sht argeltty = atypeOf1 arg1
-    --         iaarrty = ArrayR sht idxadjty
-    --         pairarrty = ArrayR sht (TupRpair argeltty idxadjty)
+    Fold lab combfun (Just initexp) arg1
+      | TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) <- arrayRtype (labelType lab)
+      -> do
+        MatchLamBody lambdalhs lambdabody <- return (matchLamBody combfun)
+        if expHasIndex lambdabody then error "Array index operations in a Fold lambda not yet supported for AD" else return ()
+        if expHasIndex initexp then error "Array index operations in a Fold initial expression not yet supported for AD" else return ()
 
-    --     envlab1 <- genSingleId undefined
-    --     envlab2 <- genSingleId undefined
-    --     envlab3 <- genSingleId undefined
+        ReplicateOneMore onemoreSlix onemoreExpf <- return (replicateOneMore (arrayRshape (labelType lab)))
 
-    --     let ctx'1 = ctxPushSEnvOnly envlab1 ctx
-    --         ctx'2 = ctx'1 & ctxPushSEnvOnly envlab2
-    --                       & ctxPushSEnvOnly envlab3
+        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        envlab0 <- genSingleId (labelType lab)
+        envlab1 <- genSingleId (atypeOf1 arg1)
+        let ctx'1 = ctxPushS (fmapLabel D lab) envlab0 ctx
+            ctx' = ctxPushSEnvOnly envlab1 ctx'1
+            cmap'' = addContrib (Local (alabelOf arg1))
+                                (\ctx2 ->
+                                    -- zipWith (*) (replicate (shape a) adjoint) (usual_derivative)
+                                    let tempvar = resolveEnvLab ctx2 envlab1
+                                    in smartZipWith (timesLam numType)
+                                        (Replicate (nilLabel (atypeOf1 arg1)) onemoreSlix (onemoreExpf (smartShape (Left tempvar)))
+                                                   (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
+                                        (smartAvar tempvar))
+                                cmap'
+        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
+        traceM (unlines ["!dual Fold[" ++ showDLabel lab ++ "]:"
+                        ,"  envlab0 = " ++ showDLabel envlab0
+                        ,"  envlab1 = " ++ showDLabel envlab1
+                        ,"  stores = " ++ show stores1
+                        ,"  out cmap = " ++ showCMapA ctx1 cmap1
+                        ])
+        return $ DualResult
+            (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
+                            Alet (LeftHandSideSingle (labelType envlab1))
+                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody) of
+                                    ADExp.ReverseADResE lambdalhs' dualbody ->
+                                        -- let sc = init (scanl f x0 a)
+                                        -- in zipWith (*) (zipWith D₂f sc a)
+                                        --                (tail (scanr (*) 1 (zipWith D₁f sc a)))
+                                        let d1f = Lam lambdalhs' (Body (smartFst dualbody))
+                                            d2f = Lam lambdalhs' (Body (smartSnd dualbody))
+                                            weaken1 = A.weakenSucc A.weakenId
+                                            (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
+                                            argvar = resolveEnvLab ctx'1 (untupleA (findPrimalBMap ctx'1 (alabelOf arg1)))
+                                            argvar' = weaken weaken1 argvar
+                                            initScan ty dir f e0 a =  -- init (scanl) / tail (scanr)
+                                                let scan'type = let ArrayR (ShapeRsnoc shtype) elttype = ty
+                                                                in TupRpair (TupRsingle ty) (TupRsingle (ArrayR shtype elttype))
+                                                in Aget (nilLabel (TupRsingle ty)) (TILeft TIHere) (Scan' (nilLabel scan'type) dir f e0 a)
+                                        in Alet (LeftHandSideSingle (labelType envlab1))
+                                                (initScan (labelType envlab1) A.LeftToRight
+                                                    (resolveAlabsFun ctx'1 combfun)
+                                                    (resolveAlabs ctx'1 initexp)
+                                                    (smartAvar argvar))
+                                                (smartZipWith (timesLam numType)
+                                                    (smartZipWith d2f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartAvar argvar'))
+                                                    (initScan (atypeOf1 arg1) A.RightToLeft (timesLam numType)
+                                                        (zeroForType' 1 numType)
+                                                        (smartZipWith d1f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartAvar argvar')))))
+                            . f1))
+            stores1  -- don't need to store this node
+            cmap1
+      | otherwise -> error ("Fold over non-Float array of type " ++ show (labelType lab) ++ " not yet supported for AD")
+      where
+        timesLam :: NumType t -> Fun aenv () alab tenv ((t, t) -> t)
+        timesLam ty =
+            let sty = SingleScalarType (NumSingleType ty)
+            in Lam (LeftHandSidePair (LeftHandSideSingle sty) (LeftHandSideSingle sty))
+                   (Body (smartMul ty (smartVar (A.Var sty (SuccIdx ZeroIdx))) (smartVar (A.Var sty ZeroIdx))))
 
-    --     MatchLamBody primalLHS primalBody <-
-    --         return (matchLamBody (primalLambda (lookupLambdaLabs ctx'1 fvlabs)))
-    --     MatchLamBody dualLHS dualBody <-
-    --         return (matchLamBody (sinkFun (A.weakenWithLHS primalLHS)
-    --                                       (dualLambda (lookupLambdaLabs ctx'1 fvlabs))))
-
-    --     DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx'2 arg1
-    --     return $ DualResult
-    --         (ABuilder ctx1
-    --             (Alet (LeftHandSideSingle undefined)
-    --                   (smartFstA (Scan' (nilLabel undefined)
-    --                                     A.LeftToRight
-    --                                     (resolveAlabsFun ctx combfun)
-    --                                     (resolveAlabs ctx initexp)
-    --                                     (avars (resolveEnvLabs ctx (findPrimalBMap ctx (alabelOf arg1))))))
-    --              . Alet (LeftHandSidePair (LeftHandSideSingle undefined) (LeftHandSideSingle iaarrty))
-    --                     (Alet (LeftHandSideSingle undefined)
-    --                           (ZipWith (nilLabel undefined)
-    --                                    (ELPlain (Lam primalLHS (Body (Let dualLHS primalBody dualBody))))
-    --                                    (smartAvar (A.Var undefined ZeroIdx))
-    --                                    (avars (resolveEnvLabs ctx'1 (findPrimalBMap ctx'1 (alabelOf arg1)))))
-    --                           (let var = smartAvar (A.Var undefined ZeroIdx)
-    --                            in smartApair (mapFst var) (mapSnd var)))
-    --              . Alet (LeftHandSideSingle undefined)
-    --                     (ZipWith undefined  -- multiply?
-    --                              )
-    --              . f1))
-    --         stores1  -- don't need to store this node
-    --         (cmap1 `unionCMap` indexingContributions envlab3 idxInsts)
-
-    Fold _ _ _ _ -> error "AD: Fold currently unsupported"
+    Fold _ _ Nothing _ -> error "AD: Fold1 currently unsupported"
 
     Sum lab arg1 -> do
         ReplicateOneMore slixType slixExpGen <- return (replicateOneMore (arrayRshape (labelType lab)))
@@ -791,7 +819,8 @@ dual ctx cmap = \case
                             (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1))))))
                         (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
 
-    Backpermute lab _ (Lam funLHS (Body funBody)) arg1 ->
+    Backpermute lab _ lam arg1
+      | MatchLamBody funLHS funBody <- matchLamBody lam ->
         simpleArrayDual "Backpermute" lab arg1 ctx cmap
             (\ctx2 ->
                 Permute (nilLabel (atypeOf1 arg1))
@@ -874,8 +903,6 @@ dual ctx cmap = \case
     Scan' _ _ _ _ _ -> error "AD: Scan' currently unsupported"
     Reduce _ _ _ _ -> error "AD: Reduce currently unsupported"
     Permute _ _ _ _ _ -> error "AD: Permute currently unsupported"
-
-    _ -> undefined
 
 simpleArrayDual :: (IsTupleType ArrayR s, Show (s t))
                 => String

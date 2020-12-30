@@ -389,6 +389,10 @@ smartAvar var@(A.Var ty _) = Avar (nilLabel ty) var (PartLabel (nilLabel (TupRsi
 smartApair :: OpenAcc aenv lab () args a -> OpenAcc aenv lab () args b -> OpenAcc aenv lab () args (a, b)
 smartApair a b = Apair (nilLabel (TupRpair (atypeOf a) (atypeOf b))) a b
 
+smartZipWith :: Fun aenv lab () () ((a, b) -> c) -> OpenAcc aenv lab () args (Array sh a) -> OpenAcc aenv lab () args (Array sh b) -> OpenAcc aenv lab () args (Array sh c)
+smartZipWith fun@(Lam _ (Body body)) a@(atypeOf1 -> ArrayR sht _) b = ZipWith (nilLabel (ArrayR sht (etypeOf body))) (ELPlain fun) a b
+smartZipWith _ _ _ = error "smartZipWith: impossible GADTs"
+
 -- TODO: make smartFstA and smartSndA non-quadratic
 smartFstA :: OpenAcc aenv lab () args (t1, t2) -> OpenAcc aenv lab () args t1
 smartFstA (Apair _ ex _) = ex
