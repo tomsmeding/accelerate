@@ -380,6 +380,25 @@ prop_nonfloat_lambda_friendly = compareAD' nil (Gen.filter allNiceRound sized_ve
   let b = A.map (\x -> A.T2 (A.round x :: A.Exp Int) (A.sin x)) a
   in A.sum (A.map (\(A.T2 i x) -> A.toFloating i * x) b)
 
+prop_logsumexp1 :: Property
+prop_logsumexp1 = compareAD' nil sized_vec $ \() a ->
+  let A.I1 n = A.shape a
+      maxx = A.maximum a
+      shiftedx = A.zipWith (-) a (A.replicate (A.lift A.Any A.::. n) maxx)
+  in A.zipWith (+) (A.map log (A.sum (A.map exp shiftedx))) maxx
+
+prop_logsumexp2 :: Property
+prop_logsumexp2 = compareAD' nil sized_vec $ \() a ->
+  let A.I1 n = A.shape a
+      maxx = A.maximum a
+      shiftedx = A.zipWith (-) a (A.replicate (A.lift A.Any A.::. n) maxx)
+  in A.map log (A.sum (A.map exp shiftedx))
+
+prop_logsumexp3 :: Property
+prop_logsumexp3 = compareAD' nil sized_vec $ \() a ->
+  let maxx = A.maximum a
+  in A.zipWith (+) maxx maxx
+
 
 -- Expression tests
 -- ----------------
