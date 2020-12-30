@@ -17,9 +17,10 @@ module Data.Array.Accelerate.ForwardAD (
     variablePlain, constantPlain, valuePlain, derivativePlain,
     variable, constant, value, derivative,
     -- adfOut, adfIn
+    gradientA_FAD_Vector
 ) where
 
-import Data.Array.Accelerate (Generic, Elt, Exp)
+import Data.Array.Accelerate (Generic, Elt, Exp, Acc, Vector, Scalar)
 import qualified Data.Array.Accelerate as A
 
 
@@ -174,3 +175,32 @@ instance (A.ToFloating a b, Num b, A.Floating b) => A.ToFloating a (ADF s b) whe
 
 -- Omits ToFloating due to not being able to specify that as an isolated constraint
 type ADFClasses a = (A.Ord a, A.Num a, A.Fractional a, A.Floating a, A.RealFrac a, A.ToFloating Int a)
+
+
+-- | Compute the gradient of an array computation taking a Vector of
+-- floating-point values using forward AD.
+--
+-- This function runs on the meta-level (in Haskell, not in Accelerate),
+-- because it must run the Accelerate function multiple times. Because it uses
+-- forward AD, it will in general be very slow (because it executes the
+-- function once for each element in the input vector), but it does not rely in
+-- the reverse AD implementation and can thus be used to test the correctness
+-- of reverse AD.
+--
+-- The test suite contains a slightly more elaborate implementation of this
+-- function that can handle non-vector arguments, as well as some other
+-- correctness-testing infrastructure.
+gradientA_FAD_Vector
+  :: (forall arr arr2. (A.Arrays arr, A.Arrays arr2) => (Acc arr -> Acc arr2) -> arr -> arr2)
+  -> (forall a. ADFClasses a => Acc (Vector a) -> Acc (Scalar a))
+  -> Vector Float
+  -> Vector Float
+gradientA_FAD_Vector run1 func arg =
+    let sh@(A.Z A.:. n) = A.arrayShape arg
+    in A.fromList sh
+                  [derivativePlain $ (`A.linearIndexArray` 0) $ run1 func $
+                      A.fromFunction sh
+                                     (\j -> let x = arg `A.indexArray` j
+                                            in if j == idx then variablePlain x
+                                                           else constantPlain x)
+                  | idx <- [A.Z A.:. i | i <- [0 .. n-1]]]
