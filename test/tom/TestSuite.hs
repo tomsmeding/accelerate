@@ -64,6 +64,9 @@ restrictAll f = all f . A.toList
 allNiceRound :: (A.Elt a, RealFrac a) => A.Vector a -> Bool
 allNiceRound = restrictAll (\x -> let x' = x - fromIntegral (round x :: Int) in -0.4 < x' && x' < 0.4)
 
+arraySum :: (A.Elt a, RealFrac a) => A.Vector a -> a
+arraySum = sum . A.toList
+
 
 -- This is not a typeclass because the types don't work out.
 gradientFwdAD :: Shape sh
@@ -177,8 +180,20 @@ prop_acond_2a = compareAD' nil sized_vec $ \() x ->
       y = A.acond (A.the (A.sum x) A.<= 2) (A.map (+1) a) (A.map (subtract 1) (A.map (2*) a))
   in A.sum (A.zipWith (*) a y)
 
+prop_acond_2a_friendly :: Property
+prop_acond_2a_friendly = compareAD' nil (Gen.filter (\v -> abs (arraySum v - 2) > 0.1) sized_vec) $ \() x ->
+  let a = A.map (2*) x
+      y = A.acond (A.the (A.sum x) A.<= 2) (A.map (+1) a) (A.map (subtract 1) (A.map (2*) a))
+  in A.sum (A.zipWith (*) a y)
+
 prop_acond_2b :: Property
 prop_acond_2b = compareAD' nil sized_vec $ \() x ->
+  let a = A.map (2*) x
+      y = A.acond (A.the (A.sum x) A.<= 2) (A.map (+1) a) (A.map (subtract 1) (A.map (2*) a))
+  in A.sum (A.zipWith (*) y a)
+
+prop_acond_2b_friendly :: Property
+prop_acond_2b_friendly = compareAD' nil (Gen.filter (\v -> abs (arraySum v - 2) > 0.1) sized_vec) $ \() x ->
   let a = A.map (2*) x
       y = A.acond (A.the (A.sum x) A.<= 2) (A.map (+1) a) (A.map (subtract 1) (A.map (2*) a))
   in A.sum (A.zipWith (*) y a)
@@ -356,6 +371,14 @@ prop_aindex_map_4 = compareAD' nil sized_vec $ \() a ->
 -- This property tests whether acond branches are only executed if the condition has the correct value.
 prop_aindex_acond_1 :: Property
 prop_aindex_acond_1 = compareAD' nil sized_vec $ \() a ->
+  let A.I1 n = A.shape a
+      s = A.round (A.the (A.sum a))
+  in A.sum (A.acond (0 A.<= s A.&& s A.< n)
+                    (A.generate (A.I1 1) (\(A.I1 _) -> a A.! A.I1 s))
+                    (A.generate (A.I1 1) (\(A.I1 _) -> 0)))
+
+prop_aindex_acond_1_friendly :: Property
+prop_aindex_acond_1_friendly = compareAD' nil (Gen.filter (\v -> let s = arraySum v in abs s > 0.1 && abs (s - fromIntegral (A.arraySize v)) > 0.1) sized_vec) $ \() a ->
   let A.I1 n = A.shape a
       s = A.round (A.the (A.sum a))
   in A.sum (A.acond (0 A.<= s A.&& s A.< n)
