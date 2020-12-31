@@ -664,9 +664,11 @@ dual ctx cmap = \case
                          & ctxPushSEnvOnly envlab2
                          & ctxPushSEnvOnly envlab3
             cmap'' = addContrib (Local (alabelOf arg1))
-                                (\ctx2 -> smartAvar (resolveEnvLab ctx2 envlab1))
+                                (\ctx2 -> reshapeWithZeros (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf1 arg1))))
+                                                           (smartAvar (resolveEnvLab ctx2 envlab1)))
                    . addContrib (Local (alabelOf arg2))
-                                (\ctx2 -> smartAvar (resolveEnvLab ctx2 envlab2))
+                                (\ctx2 -> reshapeWithZeros (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf1 arg2))))
+                                                           (smartAvar (resolveEnvLab ctx2 envlab2)))
                    $ cmap'
         DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
         DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx1 cmap1 arg2
@@ -1314,6 +1316,38 @@ sliceIndexTypeR :: SliceIndex slix sl co dim -> TypeR slix
 sliceIndexTypeR SliceNil        = TupRunit
 sliceIndexTypeR (SliceAll sl)   = TupRpair (sliceIndexTypeR sl) TupRunit
 sliceIndexTypeR (SliceFixed sl) = TupRpair (sliceIndexTypeR sl) (TupRsingle scalarType)
+
+-- 'reshapeWithZeros ref acc' is a computation that produces an array with the
+-- shape of 'ref' and the values of 'acc', where positions without
+-- corresponding original are filled with zeros.
+reshapeWithZeros :: A.ArrayVar aenv (Array sh t') -> OpenAcc aenv () () args (Array sh t) -> OpenAcc aenv () () args (Array sh t)
+reshapeWithZeros shapeRef subjectAcc@(atypeOf1 -> ty@(ArrayR sht eltty))
+  | LetBoundVars lhs vars <- lhsCopy (shapeType sht)
+  = Alet (LeftHandSideSingle ty) subjectAcc
+         (Generate (alabelOf1 subjectAcc)
+                   (smartShape (Left (weaken (A.weakenSucc A.weakenId) shapeRef)))
+                   (ELPlain (Lam lhs (Body
+                       (smartCond (shapeInBoundsE sht (evars vars) (smartShape (Left (A.Var ty ZeroIdx))))
+                                  (smartIndex (A.Var ty ZeroIdx) (evars vars))
+                                  (zeroForType eltty))))))
+
+-- 'shapeInBoundsE a b' computes whether a < b, or more specifically: indexing
+-- an array with shape 'b' at index 'a' will succeed.
+shapeInBoundsE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv A.PrimBool
+shapeInBoundsE sht a b
+  | LetBoundVars lhs1 vars1 <- lhsCopy (shapeType sht)
+  , LetBoundVars lhs2 vars2 <- lhsCopy (shapeType sht)
+  = Let lhs1 a $
+    Let lhs2 (sinkExp (A.weakenWithLHS lhs1) b) $
+      shapeInBoundsEvars sht (weakenVars (A.weakenWithLHS lhs2) vars1) vars2
+  where
+    shapeInBoundsEvars :: ShapeR sh -> A.ExpVars env sh -> A.ExpVars env sh -> OpenExp env aenv () alab args tenv A.PrimBool
+    shapeInBoundsEvars ShapeRz _ _ = Const scalarLabel 1
+    shapeInBoundsEvars (ShapeRsnoc ShapeRz) (TupRpair _ (TupRsingle var1)) (TupRpair _ (TupRsingle var2)) =
+        smartLt singleType (smartVar var1) (smartVar var2)
+    shapeInBoundsEvars (ShapeRsnoc sht') (TupRpair vars1 (TupRsingle var1)) (TupRpair vars2 (TupRsingle var2)) =
+        smartLAnd (shapeInBoundsEvars sht' vars1 vars2) (smartLt singleType (smartVar var1) (smartVar var2))
+    shapeInBoundsEvars _ _ _ = error "impossible GADTs"
 
 resolveAlabs :: HasCallStack
              => AContext Int aenv

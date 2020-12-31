@@ -399,6 +399,31 @@ prop_logsumexp3 = compareAD' nil sized_vec $ \() a ->
   let maxx = A.maximum a
   in A.zipWith (+) maxx maxx
 
+prop_tuple1 :: Property
+prop_tuple1 = compareAD' nil sized_vec $ \() a ->
+  let A.T2 b _ = A.T2 (A.map (*2) a) (A.map (+3) a)
+      A.T3 a1 a2 a3 = A.T3 (A.zipWith (\x y -> sin x * y) b a) a b
+  in A.map (+5) (A.sum (A.zipWith (\(A.T2 x y) z -> x + y * z) (A.zip a1 a2) a3))
+
+prop_tuple2 :: Property
+prop_tuple2 = compareAD'2 nil sized_vec sized_vec $ \() a b ->
+  let A.T2 a1 a2 = A.T2 b (A.zipWith (*) a b)
+      A.T2 b1 b2 = A.T2 (A.zipWith (+) a2 b) a1
+      A.T2 c1 c2 = A.T2 b2 (A.zipWith (+) a1 b2)
+      A.T2 d1 d2 = A.T2 (A.sum c2) (A.sum b1)
+  in A.zipWith (\x (A.T2 y z) -> log (y * z) + x) d1 (A.zip d2 (A.sum c1))
+
+prop_tuple3 :: Property
+prop_tuple3 = compareAD'2 nil (Gen.filter ((> 0) . A.arraySize) sized_vec) (Gen.filter ((> 0) . A.arraySize) sized_vec) $ \() a b ->
+  let tupa@(A.T2 a1 a2) = A.acond (let A.I1 n = A.shape a in n `mod` 3 A.== 0)
+                                  (A.T2 (A.replicate (A.I2 (A.constant A.All) (3 :: A.Exp Int)) b) a)
+                                  (A.T2 (A.generate (A.I2 1 2) (\(A.I2 i j) -> A.toFloating (i + j))) b)
+      A.T2 b1 b2 = A.acond (let A.I2 n _ = A.shape a1 in A.cond (n A.> 0) (a1 A.! A.I2 0 1) 42 A.> 0)
+                           tupa
+                           (A.T2 (A.backpermute (A.I2 4 4) (\(A.I2 i j) -> let A.I1 n = A.shape a2 in A.I1 (i * j `mod` n)) a2)
+                                 (A.slice a1 (A.I2 (A.constant A.All) (0 :: A.Exp Int))))
+  in A.sum (A.zipWith (+) b2 (A.sum b1))
+
 
 -- Expression tests
 -- ----------------
