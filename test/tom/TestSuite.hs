@@ -450,6 +450,18 @@ prop_neural = compareAD'2 (let gen = Gen.int (Range.linear 1 15) in (,) <$> gen 
         w3 = pickWeights 3 (A.I1 (A.constant len2)) (\(A.I1 i) -> A.I2 0 i) weightdata
     in sigmoid (dotp w3 (sigmoid (mvmul w2 (sigmoid (mvmul w1 input)))))
 
+prop_acond_cond1 :: Property
+prop_acond_cond1 = compareAD' nil (Gen.filter ((> 0) . A.arraySize) sized_vec) $ \() a ->
+  let b = A.map (*2) a
+      A.I1 n = A.shape a
+      sigmoid x = 1 / (1 + exp (-x))
+      -- idx is in [0, 2 * n)
+      idx = A.floor (sigmoid (A.the (A.sum a)) * A.toFloating (2 * n)) :: A.Exp Int
+  in -- This executes an out-of-bounds array index if one of the conditions is wrongly evaluated.
+     A.sum (A.acond (idx A.< n)
+                    (A.generate (A.I1 (2 * n)) (\(A.I1 i) -> A.cond (i A.<= idx) (a A.! A.I1 i) (b A.! A.I1 ((i - idx) `div` 2))))
+                    (A.generate (A.I1 (2 * n)) (\(A.I1 i) -> a A.! A.I1 (idx - n) + A.cond (i A.>= n) (b A.! A.I1 (i - n)) (a A.! A.I1 i))))
+
 
 -- Expression tests
 -- ----------------
