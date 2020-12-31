@@ -610,6 +610,9 @@ smartLAnd a b = PrimApp magicLabel A.PrimLAnd (smartPair a b)
 smartEq :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv A.PrimBool
 smartEq ty a b = PrimApp magicLabel (A.PrimEq ty) (smartPair a b)
 
+smartLt :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv A.PrimBool
+smartLt ty a b = PrimApp magicLabel (A.PrimLt ty) (smartPair a b)
+
 smartGt :: SingleType t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv A.PrimBool
 smartGt ty a b = PrimApp magicLabel (A.PrimGt ty) (smartPair a b)
 
