@@ -142,7 +142,7 @@ compareAD'2 egen gen1 gen2 func = withShrinks 10 $ property $ do
   expval <- forAll egen
   arr1 <- forAll gen1
   arr2 <- forAll gen2
-  let revadResult = I.runN (A.gradientA (\(A.T2 a1 a2) -> func expval a1 a2)) (arr1, arr2)
+  let revadResult = I.run1 (A.gradientA (\(A.T2 a1 a2) -> func expval a1 a2)) (arr1, arr2)
       fwdadResult = gradientFwdAD2 (arr1, arr2) (func expval)
       (_, fdResult) = findiff (\(A.T2 a1 a2) -> func expval a1 a2) (arr1, arr2)
   checkApproxEqual revadResult fwdadResult
@@ -267,7 +267,7 @@ prop_reshape_2 = compareAD' nil (Gen.filter (even . A.arraySize) sized_vec) $ \(
 prop_backpermute_1 :: Property
 prop_backpermute_1 =
   compareAD' (Gen.int (Range.linear 5 15))
-              (Gen.filter ((> 0) . A.arraySize) sized_vec)
+             (Gen.filter ((> 0) . A.arraySize) sized_vec)
   $ \m a ->
     let A.I1 n = A.shape a
         b = A.backpermute (A.I2 (A.constant m) (2 * A.constant m))
@@ -278,7 +278,7 @@ prop_backpermute_1 =
 prop_backpermute_2 :: Property
 prop_backpermute_2 =
   compareAD' (Gen.int (Range.linear 5 15))
-              (Gen.filter ((> 0) . A.arraySize) sized_vec)
+             (Gen.filter ((> 0) . A.arraySize) sized_vec)
   $ \m a ->
     let A.I1 n = A.shape a
         b = A.backpermute (A.I2 (A.constant m) (2 * A.constant m))
@@ -423,6 +423,32 @@ prop_tuple3 = compareAD'2 nil (Gen.filter ((> 0) . A.arraySize) sized_vec) (Gen.
                            (A.T2 (A.backpermute (A.I2 4 4) (\(A.I2 i j) -> let A.I1 n = A.shape a2 in A.I1 (i * j `mod` n)) a2)
                                  (A.slice a1 (A.I2 (A.constant A.All) (0 :: A.Exp Int))))
   in A.sum (A.zipWith (+) b2 (A.sum b1))
+
+prop_tuple4 :: Property
+prop_tuple4 = compareAD'2 nil sized_vec sized_vec $ \() a b ->
+  let A.T2 (A.T4 a1 s1 (A.T3 s2 a2 _) s3) a3 = A.T2 (A.T4 b (A.sum a) (A.T3 (A.sum b) a (A.lift ())) (A.sum a)) b
+  in A.zipWith (+) (A.zipWith (*) s1 (A.sum a3)) (A.zipWith (*) (A.zipWith (+) (A.zipWith (*) (A.sum a1) (A.product a2)) s2) s3)
+
+prop_neural :: Property
+prop_neural = compareAD'2 (let gen = Gen.int (Range.linear 1 15) in (,) <$> gen <*> gen)
+                          (Gen.filter ((> 0) . A.arraySize) sized_vec)
+                          (Gen.filter ((>= 3) . A.arraySize) sized_vec)
+  $ \(len1, len2) input weightdata ->
+    let pickWeights :: (A.Shape sh, A.Elt a) => Int -> A.Exp sh -> (A.Exp sh -> A.Exp A.DIM2) -> A.Acc (A.Vector a) -> A.Acc (A.Array sh a)
+        pickWeights seed size f arr =
+          let A.I1 n = A.shape arr
+          in A.backpermute size
+                           (\idx -> let A.I2 i j = f idx in A.I1 ((i + j + j * j * A.constant seed) ^ (1 + seed) `mod` n))
+                           arr
+        mvmul mat v = let A.I2 m _ = A.shape mat
+                      in A.sum (A.zipWith (*) mat (A.replicate (A.I2 m (A.constant A.All)) v))
+        dotp v1 v2 = A.sum (A.zipWith (*) v1 v2)
+        sigmoid v = A.map (\x -> 1 / (1 + exp (-x))) v
+        A.I1 inlen = A.shape input
+        w1 = pickWeights 1 (A.I2 (A.constant len1) inlen) id weightdata
+        w2 = pickWeights 2 (A.I2 (A.constant len2) (A.constant len1)) id weightdata
+        w3 = pickWeights 3 (A.I1 (A.constant len2)) (\(A.I1 i) -> A.I2 0 i) weightdata
+    in sigmoid (dotp w3 (sigmoid (mvmul w2 (sigmoid (mvmul w1 input)))))
 
 
 -- Expression tests
