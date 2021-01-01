@@ -286,9 +286,7 @@ primal ctx = \case
                                            (smartApair
                                                (emptiesForType tmptyT)
                                                (avars (resolveEnvLabs ctxE tmplabsE))))))))
-            (concat [enumerateTupR envlabs
-                    ,enumerateTupR tmplabsT
-                    ,enumerateTupR tmplabsE])
+            (concat [enumerateTupR envlabs, storesT, storesE])
             envlabs
 
     Generate lab shexp (ELSplit spl tmplab) -> do
