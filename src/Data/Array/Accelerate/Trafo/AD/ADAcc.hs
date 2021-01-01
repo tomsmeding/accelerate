@@ -662,11 +662,11 @@ dual ctx cmap = \case
                          & ctxPushSEnvOnly envlab2
                          & ctxPushSEnvOnly envlab3
             cmap'' = addContrib (Local (alabelOf arg1))
-                                (\ctx2 -> reshapeWithZeros (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf1 arg1))))
-                                                           (smartAvar (resolveEnvLab ctx2 envlab1)))
+                                (\ctx2 -> reshapesWithZeros (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf1 arg1)))
+                                                            (smartAvar (resolveEnvLab ctx2 envlab1)))
                    . addContrib (Local (alabelOf arg2))
-                                (\ctx2 -> reshapeWithZeros (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf1 arg2))))
-                                                           (smartAvar (resolveEnvLab ctx2 envlab2)))
+                                (\ctx2 -> reshapesWithZeros (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf1 arg2)))
+                                                            (smartAvar (resolveEnvLab ctx2 envlab2)))
                    $ cmap'
         DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
         DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx1 cmap1 arg2
@@ -1060,7 +1060,7 @@ collectAdjointCMap contribmap key pvars ctx =
         Just (AdjList listgen) ->
           let adj = arraysSum (cmapKeyType key) pvars (listgen ctx)
           in trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==> " ++ show adj ++ "\x1B[0m") $
-             (adj, DMap.delete key contribmap)
+             (reshapesWithZeros pvars adj, DMap.delete key contribmap)
         Nothing -> -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
                    let res = arraysSum (cmapKeyType key) pvars []
                    in trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m") $
@@ -1192,8 +1192,9 @@ arraysSum (TupRsingle ty@ArrayR{}) (TupRsingle pvar) l =
 arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) l
   | Just (l1, l2) <- unzip <$> traverse (\case Apair _ a1 a2 -> Just (a1, a2) ; _ -> Nothing) l =
       Apair (nilLabel ty) (arraysSum t1 pvars1 l1) (arraysSum t2 pvars2 l2)
-arraysSum ty _ l = trace ("\x1B[1;41m- - - - - - - - - - WARNING: arraysSum: non-paired case! - - - - - - - - - -\x1B[0m") $
-                   foldl1 (tupleZipAcc' ty (const arrayPlus) (\_ _ -> False)) l
+arraysSum ty _ l =
+    trace ("\x1B[1;41m- - - - - - - - - - WARNING: arraysSum: non-paired case! - - - - - - - - - -\x1B[0m") $
+    foldl1 (tupleZipAcc' ty (\_ _ _ -> arrayPlus) (\_ _ -> False)) l
 
 generateConstantArray :: ArrayR (Array sh t) -> Exp aenv () () () () sh -> OpenAcc aenv () () args (Array sh t)
 generateConstantArray ty@(ArrayR sht eltty) she =
@@ -1315,19 +1316,29 @@ sliceIndexTypeR SliceNil        = TupRunit
 sliceIndexTypeR (SliceAll sl)   = TupRpair (sliceIndexTypeR sl) TupRunit
 sliceIndexTypeR (SliceFixed sl) = TupRpair (sliceIndexTypeR sl) (TupRsingle scalarType)
 
--- 'reshapeWithZeros ref acc' is a computation that produces an array with the
--- shape of 'ref' and the values of 'acc', where positions without
+-- 'reshapesWithZeros ref acc' is a computation that produces an array tuple
+-- with the shape of 'ref' and the values of 'acc', where positions without
 -- corresponding original are filled with zeros.
-reshapeWithZeros :: A.ArrayVar aenv (Array sh t') -> OpenAcc aenv () () args (Array sh t) -> OpenAcc aenv () () args (Array sh t)
-reshapeWithZeros shapeRef subjectAcc@(atypeOf1 -> ty@(ArrayR sht eltty))
-  | LetBoundVars lhs vars <- lhsCopy (shapeType sht)
-  = Alet (LeftHandSideSingle ty) subjectAcc
-         (Generate (alabelOf1 subjectAcc)
-                   (smartShape (Left (weaken (A.weakenSucc A.weakenId) shapeRef)))
-                   (ELPlain (Lam lhs (Body
-                       (smartCond (shapeInBoundsE sht (evars vars) (smartShape (Left (A.Var ty ZeroIdx))))
-                                  (smartIndex (A.Var ty ZeroIdx) (evars vars))
-                                  (zeroForType eltty))))))
+reshapesWithZeros :: A.ArrayVars aenv t -> OpenAcc aenv () () args t -> OpenAcc aenv () () args t
+reshapesWithZeros shapeRef subject
+  | LetBoundVars lhs subjectVars <- lhsCopy (atypeOf subject)
+  = Alet lhs subject
+         (reshapesWithZeros' (weakenVars (A.weakenWithLHS lhs) shapeRef) subjectVars)
+  where
+    reshapesWithZeros' :: A.ArrayVars aenv t -> A.ArrayVars aenv t -> OpenAcc aenv () () args t
+    reshapesWithZeros' shapeRef' subjectVars =
+        untupleAccs (zipWithTupR (\refvar@(A.Var ArrayR{} _) subjvar -> reshapeWithZeros' refvar subjvar)
+                                 shapeRef' subjectVars)
+
+    reshapeWithZeros' :: A.ArrayVar aenv (Array sh t') -> A.ArrayVar aenv (Array sh t) -> OpenAcc aenv () () args (Array sh t)
+    reshapeWithZeros' shapeRef' subjectVar@(A.Var ty@(ArrayR sht eltty) _)
+      | LetBoundVars lhs vars <- lhsCopy (shapeType sht)
+      = Generate (nilLabel ty)
+                 (smartShape (Left shapeRef'))
+                 (ELPlain (Lam lhs (Body
+                     (smartCond (shapeInBoundsE sht (evars vars) (smartShape (Left subjectVar)))
+                                (smartIndex subjectVar (evars vars))
+                                (zeroForType eltty)))))
 
 -- 'shapeInBoundsE a b' computes whether a < b, or more specifically: indexing
 -- an array with shape 'b' at index 'a' will succeed.
@@ -1364,11 +1375,11 @@ resolveAlabsFun :: HasCallStack
 resolveAlabsFun ctx (Lam lhs fun) = Lam lhs (resolveAlabsFun ctx fun)
 resolveAlabsFun ctx (Body ex) = Body (resolveAlabs ctx ex)
 
-minShapeE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh
-minShapeE sht = tupleZipExp' (shapeType sht) (\(SingleScalarType sty) e1 e2 -> smartMin sty e1 e2) (\_ _ -> False)
+-- minShapeE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh
+-- minShapeE sht = tupleZipExp' (shapeType sht) (\(SingleScalarType sty) e1 e2 -> smartMin sty e1 e2) (\_ _ -> False)
 
 maxShapeE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh
-maxShapeE sht = tupleZipExp' (shapeType sht) (\(SingleScalarType sty) e1 e2 -> smartMax sty e1 e2) (\_ _ -> False)
+maxShapeE sht = tupleZipExp' (shapeType sht) (\(SingleScalarType sty) _ _ e1 e2 -> smartMax sty e1 e2) (\_ _ -> False)
 
 sortUniq :: Ord a => [a] -> [a]
 sortUniq = uniq . sort

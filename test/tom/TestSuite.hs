@@ -112,7 +112,8 @@ findiff func = ADHelp.afdrOLS' . ADHelp.afindiffPerform func
 isApproxEqual :: ADHelp.AFinDiff a => a -> a -> (a, Bool)
 isApproxEqual a1 a2 =
   let diffs = ADHelp.fdfmap (\[x,y] -> abs (x - y) / max 1 (max (abs x) (abs y))) [a1, a2]
-  in (diffs, List.foldl' max 0 (ADHelp.fdtoList diffs) < 0.1)
+      sizecorrect = ADHelp.fdShapeSizes a1 == ADHelp.fdShapeSizes a2
+  in (diffs, sizecorrect && List.foldl' max 0 (ADHelp.fdtoList diffs) < 0.1)
 
 checkApproxEqual :: (MonadTest m, ADHelp.AFinDiff a) => a -> a -> m ()
 checkApproxEqual aGrad aControl =
@@ -187,16 +188,29 @@ prop_acond_2a_friendly = compareAD' nil (Gen.filter (\v -> abs (arraySum v - 2) 
   in A.sum (A.zipWith (*) a y)
 
 prop_acond_2b :: Property
-prop_acond_2b = compareAD' nil sized_vec $ \() x ->
-  let a = A.map (2*) x
-      y = A.acond (A.the (A.sum x) A.<= 2) (A.map (+1) a) (A.map (subtract 1) (A.map (2*) a))
-  in A.sum (A.zipWith (*) y a)
+prop_acond_2b = compareAD' nil sized_vec $ \() a ->
+  let b = A.map (2*) a
+      y = A.acond (A.the (A.sum a) A.<= 2) (A.map (+1) b) (A.map (subtract 1) (A.map (2*) b))
+  in A.sum (A.zipWith (*) y b)
 
 prop_acond_2b_friendly :: Property
-prop_acond_2b_friendly = compareAD' nil (Gen.filter (\v -> abs (arraySum v - 2) > 0.1) sized_vec) $ \() x ->
-  let a = A.map (2*) x
-      y = A.acond (A.the (A.sum x) A.<= 2) (A.map (+1) a) (A.map (subtract 1) (A.map (2*) a))
-  in A.sum (A.zipWith (*) y a)
+prop_acond_2b_friendly = compareAD' nil (Gen.filter (\v -> abs (arraySum v - 2) > 0.1) sized_vec) $ \() a ->
+  let b = A.map (2*) a
+      y = A.acond (A.the (A.sum a) A.<= 2) (A.map (+1) b) (A.map (subtract 1) (A.map (2*) b))
+  in A.sum (A.zipWith (*) y b)
+
+-- Test that receiving only 1 non-executed contribution still produces a valid adjoint
+prop_acond_3a :: Property
+prop_acond_3a = compareAD' nil sized_vec $ \() a ->
+  A.sum (A.acond (A.constant True) (A.generate (A.I1 1) (\_ -> 42)) a)
+
+-- Test that receiving only multiple non-executed contributions still produces a valid adjoint
+prop_acond_3b :: Property
+prop_acond_3b = compareAD' nil sized_vec $ \() a ->
+  let A.I1 n = A.shape a
+  in A.acond (n A.>= 0)
+             (A.generate A.I0 (\_ -> 42))
+             (A.zipWith (+) (A.sum (A.map (*2) a)) (A.sum (A.map (+3) a)))
 
 prop_map :: Property
 prop_map = compareAD' nil sized_vec $ \() a -> A.sum (A.map (*3) a)
