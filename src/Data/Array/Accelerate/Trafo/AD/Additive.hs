@@ -80,7 +80,7 @@ instance IsAdditive TypeR where
     zeroForType' z (TupRpair t1 t2) =
         Pair (nilLabel (TupRpair t1 t2)) (zeroForType' z t1) (zeroForType' z t2)
 
-    expPlus ty e1 e2 = tupleZipExp' ty expPlus isZero e1 e2
+    expPlus ty e1 e2 = tupleZipExp' ty (\t _ _ -> expPlus t) isZero e1 e2
       where isZero sty (Const _ c)
               | Const _ c' <- zeroForType sty = matchConst (TupRsingle sty) c c'
             isZero _ _ = False

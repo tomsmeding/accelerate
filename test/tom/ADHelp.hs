@@ -14,6 +14,8 @@ import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Interpreter as I
 import Data.Array.Accelerate (Z(..))
 
+import TestSuite.Util
+
 
 class (A.Elt a, A.Lift A.Exp a, a ~ A.Plain a, Show a) => FinDiff a where
   hfindiff :: Float -> (a -> Float) -> a -> a
@@ -65,7 +67,11 @@ class (A.Arrays a, Show a) => AFinDiff a where
   -- | The total number of values in the arrays.
   fdTotalSize :: a -> Int
 
-instance A.Shape sh => AFinDiff (A.Array sh Float) where
+  -- | For each array in the tuple, the list of dimension sizes, outermost
+  -- dimension first.
+  fdShapeSizes :: a -> [[Int]]
+
+instance Shape sh => AFinDiff (A.Array sh Float) where
   ahfindiff h f x =
     A.fromList (A.arrayShape x)
         [(the' (I.run (A.zipWith (-) (f adds') (f subs')))) / (2 * h)
@@ -85,6 +91,12 @@ instance A.Shape sh => AFinDiff (A.Array sh Float) where
   fdtoList = A.toList
   fdTotalSize = A.arraySize
 
+  fdShapeSizes arr = [shapeToList magicShapeType (A.arrayShape arr)]
+    where
+      shapeToList :: ShapeType sh -> sh -> [Int]
+      shapeToList SZ _ = []
+      shapeToList (SCons sht) (sh A.:. i) = i : shapeToList sht sh
+
 instance (AFinDiff a, AFinDiff b) => AFinDiff (a, b) where
   ahfindiff h f (x, y) =
     (ahfindiff h (\x' -> f (A.T2 x' (A.use y))) x, ahfindiff h (\y' -> f (A.T2 (A.use x) y')) y)
@@ -93,6 +105,8 @@ instance (AFinDiff a, AFinDiff b) => AFinDiff (a, b) where
 
   fdtoList (x, y) = fdtoList x ++ fdtoList y
   fdTotalSize (x, y) = fdTotalSize x + fdTotalSize y
+
+  fdShapeSizes (x, y) = fdShapeSizes x ++ fdShapeSizes y
 
 data AFinDiffRes a = AFinDiffRes [Float] [a]
 
