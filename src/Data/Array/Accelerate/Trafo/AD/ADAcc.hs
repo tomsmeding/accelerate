@@ -17,6 +17,7 @@ import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
 import Data.List (sort)
+import Data.Maybe (fromMaybe)
 import Data.Some (Some, pattern Some)
 import Data.GADT.Compare (GCompare)
 
@@ -1055,16 +1056,18 @@ collectAdjointCMap :: DMap (CMapKey ArrayR Int) (AdjList () Int args)
                    -> AContext Int aenv
                    -> (OpenAcc aenv () () args t
                       ,DMap (CMapKey ArrayR Int) (AdjList () Int args))
-collectAdjointCMap contribmap key pvars ctx =
-    case DMap.lookup key contribmap of
-        Just (AdjList listgen) ->
-          let adj = arraysSum (cmapKeyType key) pvars (listgen ctx)
-          in trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==> " ++ show adj ++ "\x1B[0m") $
+collectAdjointCMap contribmap key pvars ctx
+  | AdjList adjgen <- fromMaybe (AdjList (const [])) (DMap.lookup key contribmap)
+  = case adjgen ctx of
+      [] ->
+          -- if there are no contributions, the adjoint is an empty sum (i.e. zero)
+          let res = arraysSum (cmapKeyType key) pvars []
+          in trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m") $
+             (res, contribmap)
+      contribs ->
+          let adj = arraysSum (cmapKeyType key) pvars contribs
+          in trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==>[" ++ show (length contribs) ++ "] " ++ show adj ++ "\x1B[0m") $
              (reshapesWithZeros pvars adj, DMap.delete key contribmap)
-        Nothing -> -- if there are no contributions, well, the adjoint is an empty sum (i.e. zero)
-                   let res = arraysSum (cmapKeyType key) pvars []
-                   in trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m") $
-                      (res, contribmap)
 
 addContrib :: CMapKey ArrayR Int t
            -> (forall aenv. AContext Int aenv -> OpenAcc aenv () () args t)
@@ -1193,7 +1196,6 @@ arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) l
   | Just (l1, l2) <- unzip <$> traverse (\case Apair _ a1 a2 -> Just (a1, a2) ; _ -> Nothing) l =
       Apair (nilLabel ty) (arraysSum t1 pvars1 l1) (arraysSum t2 pvars2 l2)
 arraysSum ty _ l =
-    trace ("\x1B[1;41m- - - - - - - - - - WARNING: arraysSum: non-paired case! - - - - - - - - - -\x1B[0m") $
     foldl1 (tupleZipAcc' ty (\_ _ _ -> arrayPlus) (\_ _ -> False)) l
 
 generateConstantArray :: ArrayR (Array sh t) -> Exp aenv () () () () sh -> OpenAcc aenv () () args (Array sh t)
