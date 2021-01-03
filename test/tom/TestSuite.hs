@@ -225,6 +225,14 @@ prop_fold_1 = compareAD' nil sized_vec $ \() a -> A.fold (*) 1 a
 prop_fold_2 :: Property
 prop_fold_2 = compareAD' nil sized_vec $ \() a -> A.fold A.max 3 a
 
+prop_fold_3 :: Property
+prop_fold_3 = compareAD' nil sized_vec $ \() a ->
+  A.fold (\x y -> let abs' v = A.cond (v A.< 0) (-v) v in abs' x + abs' y) 0 a
+
+prop_fold_3_friendly :: Property
+prop_fold_3_friendly = compareAD' nil (Gen.filter (restrictAll (\x -> abs x > 0.1)) sized_vec) $ \() a ->
+  A.fold (\x y -> let abs' v = A.cond (v A.< 0) (-v) v in abs' x + abs' y) 0 a
+
 prop_fold1_1 :: Property
 prop_fold1_1 = compareAD' nil sized_vec $ \() a -> A.fold1 (*) a
 
