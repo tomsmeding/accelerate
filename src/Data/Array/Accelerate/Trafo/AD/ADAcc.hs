@@ -7,7 +7,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.AD.ADAcc (
   reverseADA, ReverseADResA(..)
 ) where
