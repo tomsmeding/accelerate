@@ -256,7 +256,7 @@ prop_replicate_2 = compareAD' nil sized_vec $ \() a ->
     . A.map (\x -> x * x + x) $ a
 
 prop_replicate_3 :: Property
-prop_replicate_3 = compareAD' nil (Gen.small sized_vec) $ \() a ->
+prop_replicate_3 = compareAD' nil sized_vec $ \() a ->
   A.fold1All (+) . A.map (*2)
     . A.replicate (A.I4 (A.constant A.All) (5 :: A.Exp Int) (A.constant A.All) (3 :: A.Exp Int))
     . A.map (\x -> x * x + x)
@@ -264,7 +264,7 @@ prop_replicate_3 = compareAD' nil (Gen.small sized_vec) $ \() a ->
     $ a
 
 prop_replicate_4 :: Property
-prop_replicate_4 = compareAD' nil (Gen.small sized_vec) $ \() a ->
+prop_replicate_4 = compareAD' nil sized_vec $ \() a ->
   A.fold1All (+) . A.map (*2)
     . A.replicate (A.I4 (5 :: A.Exp Int) (A.constant A.All) (3 :: A.Exp Int) (A.constant A.All))
     . A.map (\x -> x * x + x)
@@ -280,7 +280,7 @@ prop_slice_1 = compareAD' nil sized_vec $ \() a ->
   where cAll = A.constant A.All
 
 prop_slice_2 :: Property
-prop_slice_2 = compareAD' (t2_ intgen intgen) (Gen.small sized_vec) $ \(p1, p2) a ->
+prop_slice_2 = compareAD' (t2_ intgen intgen) sized_vec $ \(p1, p2) a ->
   let A.I1 n = A.shape a
       a1 = A.backpermute (A.I3 n n (n+1))
                          (\(A.I3 i j k) -> A.I1 ((i + j + k) `mod` n))
