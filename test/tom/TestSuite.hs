@@ -20,6 +20,7 @@ import qualified Hedgehog.Range as Range
 import Hedgehog.Internal.Property (unPropertyName)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (exitSuccess, exitFailure, die)
+import GHC.Stack (HasCallStack)
 
 import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Data.Bits as A
@@ -69,7 +70,7 @@ arraySum = sum . A.toList
 
 
 -- This is not a typeclass because the types don't work out.
-gradientFwdAD :: Shape sh
+gradientFwdAD :: (HasCallStack, Shape sh)
               => A.Array sh Float
               -> (forall a. ADF.ADFClasses a => A.Acc (A.Array sh a) -> A.Acc (A.Scalar a))
               -> A.Array sh Float
@@ -103,7 +104,7 @@ gradientFwdAD2 (input1, input2) func =
   in (A.fromList (A.arrayShape input1) pre, A.fromList (A.arrayShape input2) post)
 
 
-findiff :: ADHelp.AFinDiff a => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> ((String, Float), a)
+findiff :: (HasCallStack, ADHelp.AFinDiff a) => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> ((String, Float), a)
 findiff func = ADHelp.afdrOLS' . ADHelp.afindiffPerform func
 
 -- Relative difference (abs (x - y) / max (abs x) (abs y)) is allowed to be at
@@ -501,7 +502,7 @@ prop_acond_cond1 = compareAD' nil (Gen.filter ((> 0) . A.arraySize) sized_vec) $
       A.I1 n = A.shape a
       sigmoid x = 1 / (1 + exp (-x))
       -- idx is in [0, 2 * n)
-      idx = A.floor (sigmoid (A.the (A.sum a)) * A.toFloating (2 * n)) :: A.Exp Int
+      idx = A.floor (sigmoid (A.the (A.sum a)) * (A.toFloating (2 * n) - 0.01)) :: A.Exp Int
   in -- This executes an out-of-bounds array index if one of the conditions is wrongly evaluated.
      A.sum (A.acond (idx A.< n)
                     (A.generate (A.I1 (2 * n)) (\(A.I1 i) -> A.cond (i A.<= idx) (a A.! A.I1 i) (b A.! A.I1 ((i - idx) `div` 2))))
