@@ -350,6 +350,7 @@ prettyPrimFun Prefix (A.PrimToFloating _ _) = "toFloating"
 prettyPrimFun Prefix (A.PrimRound _ _) = "round"
 prettyPrimFun Prefix (A.PrimFloor _ _) = "floor"
 prettyPrimFun Prefix (A.PrimMax _) = "max"
+prettyPrimFun Prefix (A.PrimMin _) = "min"
 prettyPrimFun Prefix op = '(' : prettyPrimFun Infix op ++ ")"
 prettyPrimFun fixity op =
     error ("prettyPrimFun: not defined for " ++ show fixity ++ " " ++ showPrimFun op)
