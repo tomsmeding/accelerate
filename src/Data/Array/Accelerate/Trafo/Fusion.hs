@@ -180,6 +180,7 @@ manifest config (OpenAcc pacc) =
     Atrace msg a1 a2        -> Atrace msg (manifest config a1) (manifest config a2)
     Apply repr f a          -> apply repr (cvtAF f) (manifest config a)
     Aforeign repr ff f a    -> Aforeign repr ff (cvtAF f) (manifest config a)
+    GradientA t1 t2 f a     -> GradientA t1 t2 (cvtAF f) (manifest config a)
 
     -- Producers
     -- ---------
@@ -372,6 +373,7 @@ embedPreOpenAcc config matchAcc embedAcc elimAcc pacc
     Atrace msg a1 a2    -> done $ Atrace msg (cvtA a1) (cvtA a2)
     Aforeign aR ff f a  -> done $ Aforeign aR ff (cvtAF f) (cvtA a)
     -- Collect s           -> collectD s
+    GradientA t1 t2 f a -> done $ GradientA t1 t2 (cvtAF f) (cvtA a)
 
     -- Array injection
     Avar v              -> done $ Avar v
