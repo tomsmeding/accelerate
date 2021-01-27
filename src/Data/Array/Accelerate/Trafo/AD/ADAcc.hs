@@ -593,6 +593,7 @@ dual ctx cmap = \case
                         ,"  envlab0 = " ++ showDLabel envlab0
                         ,"  envlab1 = " ++ showDLabel envlab1
                         ,"  stores = " ++ show [Some envlab1]
+                        ,"  idxInsts = " ++ showIdxInstMap idxInsts
                         ,"  out cmap = " ++ showCMapA ctx' (cmap' `unionCMap` indexingContributions envlab1 idxInsts)
                         ])
         return $ DualResult

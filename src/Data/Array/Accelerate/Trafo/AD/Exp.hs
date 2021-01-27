@@ -12,7 +12,9 @@ module Data.Array.Accelerate.Trafo.AD.Exp (
     Idx(..), idxToInt
 ) where
 
+import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
+import Data.Dependent.Sum (DSum((:=>)))
 import Data.List (intercalate)
 import Data.GADT.Show
 import Data.Some
@@ -458,6 +460,12 @@ data SplitLambdaAD t t' lab alab tenv tmp idxadj =
 
 data SomeSplitLambdaAD t t' lab alab tenv =
     forall tmp idxadj. SomeSplitLambdaAD (SplitLambdaAD t t' lab alab tenv tmp idxadj)
+
+showIdxInstMap :: Show alab => DMap (AAnyPartLabelN alab) (IndexInstantiators idxadj) -> String
+showIdxInstMap mp =
+    "DMap[" ++ intercalate ", " [tiPrefixExp part ++ " " ++ showDLabel lab ++ " :=> [" ++ show (length l) ++ "]"
+                                | AnyPartLabel (PartLabel lab part) :=> IndexInstantiators l <- DMap.toList mp]
+            ++ "]"
 
 sinkExp :: env A.:> env' -> OpenExp env aenv lab alab args tenv t -> OpenExp env' aenv lab alab args tenv t
 sinkExp _ (Const lab x) = Const lab x
