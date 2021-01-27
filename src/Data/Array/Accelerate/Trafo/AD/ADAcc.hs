@@ -1096,7 +1096,12 @@ indexingContributions
     -> DMap (CMapKey ArrayR Int) (AdjList () Int args)  -- ^ The contribution map from indexing
 indexingContributions idxadjlab idxInstMap =
     let ArrayR shtype idxadjType = labelType idxadjlab
-    in DMap.fromList
+       -- Note: we need the <> here because while we split the contributions
+       -- out per backingLab, there might still be multiple contributions to
+       -- the _same_ backingLab with a different backingPart.
+       -- TODO: just merge the two list comprehensions now we semigroup them
+       -- together anyway.
+    in DMap.fromListWithKey (const (<>))
          [Local backingLab :=> AdjList (\ctx ->
             [let pvars = resolveEnvLabs ctx (findPrimalBMap ctx backingLab)
                  TupRsingle backingPVar = pickTupR backingPart pvars
