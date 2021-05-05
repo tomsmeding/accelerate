@@ -55,28 +55,28 @@ goAcc = \case
     Alet (LeftHandSideWildcard _) _ a ->
         goAcc a
 
-    -- Variable equation inlining
-    Alet (LeftHandSideSingle ty) (Avar _ var _) a2 ->
-        goAcc $
-            inlineA (InlinerA (\case A.Var ty' ZeroIdx
-                                       | Just Refl <- matchArrayR ty ty' -> smartAvar var
-                                       | otherwise -> error "Invalid GADTs"
-                                     A.Var ty'@ArrayR{} (SuccIdx idx)
-                                       -> smartAvar (A.Var ty' idx)))
-                    a2
-
-    -- Linear inlining
+    -- Linear inlining, and inlining of duplicable programs.
+    -- Variable references may always be inlined; non-variable but nevertheless
+    -- duplicable programs may be inlined if they are never used in an
+    -- expression. Other programs may only be inlined if they are used at most
+    -- once, outside an expression.
     Alet lhs@(LeftHandSideSingle ty) a1 a2 ->
       \s -> let (s1, a1') = goAcc a1 s
-                (SPush s2 n, a2') = goAcc a2 (SPush s1 0)
-            in (s2, if n <= 1
-                        then inlineA (InlinerA (\case A.Var ty' ZeroIdx
-                                                        | Just Refl <- matchArrayR ty ty' -> a1'
-                                                        | otherwise -> error "Invalid GADTs"
-                                                      A.Var ty'@ArrayR{} (SuccIdx idx)
-                                                        -> smartAvar (A.Var ty' idx)))
-                                     a2'
-                        else Alet lhs a1' a2')
+                (SPush s2 n, a2') = goAcc a2 (SPush s1 (Finite 0))
+                isAvar :: OpenAcc aenv lab alab args t -> Bool
+                isAvar Avar{} = True
+                isAvar _ = False
+            in if isAvar a1' || n <= Finite 1 || (n < AccInExp && duplicableAcc a1')
+                   then -- Note that we need to re-simplify again using s1, because we need to
+                        -- get the actual counts from _after_ the inlining we've done here.
+                        goAcc (inlineA (InlinerA (\case A.Var ty' ZeroIdx
+                                                          | Just Refl <- matchArrayR ty ty' -> a1'
+                                                          | otherwise -> error "Invalid GADTs"
+                                                        A.Var ty'@ArrayR{} (SuccIdx idx)
+                                                          -> smartAvar (A.Var ty' idx)))
+                                       a2')
+                              s1
+                   else (s2, Alet lhs a1' a2')
 
     Aconst lab x -> returnS $ Aconst lab x
     Apair lab a1 a2 -> Apair lab !$! goAcc a1 !**! goAcc a2
@@ -86,13 +86,13 @@ goAcc = \case
     ZipWith lab lam a1 a2 -> ZipWith lab !$! simplifyLam1 lam !**! goAcc a1 !**! goAcc a2
     Generate lab e lam -> Generate lab !$! goExp' e !**! simplifyLam1 lam
     Fold lab f me0 a -> Fold lab !$! simplifyFun f
-                               !**! (case me0 of Just e0 -> Just !$! goExp' e0
-                                                 Nothing -> returnS Nothing)
-                               !**! goAcc a
+                                 !**! (case me0 of Just e0 -> Just !$! goExp' e0
+                                                   Nothing -> returnS Nothing)
+                                 !**! goAcc a
     Scan lab dir f me0 a -> Scan lab dir !$! simplifyFun f
-                                       !**! (case me0 of Just e0 -> Just !$! goExp' e0
-                                                         Nothing -> returnS Nothing)
-                                       !**! goAcc a
+                                         !**! (case me0 of Just e0 -> Just !$! goExp' e0
+                                                           Nothing -> returnS Nothing)
+                                         !**! goAcc a
     Scan' lab dir f e0 a -> Scan' lab dir !$! simplifyFun f !**! goExp' e0 !**! goAcc a
     Sum lab a -> Sum lab !$! goAcc a
     Replicate lab slt she a -> Replicate lab slt !$! goExp' she !**! goAcc a
@@ -108,7 +108,7 @@ goAcc = \case
                 (s2, a2') = goAcc a2 (spushLHS0 s1 lhs)
             in (spopLHS lhs s2, Alet lhs a1' a2')
     Avar lab var referLab ->
-      \s -> (statAddV var 1 s, Avar lab var referLab)
+      \s -> (statAddV var (Finite 1) s, Avar lab var referLab)
 
 goExp' :: OpenExp env aenv () alab args tenv t -> Stats aenv -> (Stats aenv, OpenExp env aenv () alab args tenv t)
 goExp' e s = let ((s', SNil), e') = goExp e (s, SNil) in (s', e')
@@ -131,7 +131,7 @@ goExp = \case
 
     -- Trivial expression inlining
     Let (LeftHandSideSingle ty) rhs e
-      | noCostCopy rhs ->
+      | duplicableExp rhs ->
           goExp $
               inlineE (InlinerE (\case A.Var ty' ZeroIdx
                                          | Just Refl <- matchScalarType ty ty' -> rhs
@@ -143,9 +143,9 @@ goExp = \case
     -- Linear inlining
     Let lhs@(LeftHandSideSingle ty) rhs e ->
       \s -> let ((s1a, s1e), rhs') = goExp rhs s
-                ((s2a, SPush s2e n), e') = goExp e (s1a, SPush s1e 0)
+                ((s2a, SPush s2e n), e') = goExp e (s1a, SPush s1e (Finite 0))
             in ((s2a, s2e),
-                if n <= 1
+                if n <= Finite 1
                     then inlineE (InlinerE (\case A.Var ty' ZeroIdx
                                                     | Just Refl <- matchScalarType ty ty' -> rhs'
                                                     | otherwise -> error "Invalid GADTs"
@@ -166,6 +166,7 @@ goExp = \case
         elimEmptyTI ty' ti' e' = Get ty' ti' e'
 
     -- Algebraic simplifications
+    -- TODO: the returned stats are from _before_ the algebraic simplification, if any. This means we overcount, which may be suboptimal but should never be unsound.
     PrimApp lab (A.PrimMul nty) (Pair pairty e1 e2) ->
       \s -> case ((,) !$! goExp e1 !**! goExp e2) s of
               (s', (e1', e2'))
@@ -195,7 +196,7 @@ goExp = \case
                 (s2, e') = goExp e (s1a, spushLHS0 s1e lhs)
             in (second (spopLHS lhs) s2, Let lhs rhs' e')
     Arg lab argsty tidx -> returnS $ Arg lab argsty tidx
-    Var lab var referLab -> \s -> (second (statAddV var 1) s, Var lab var referLab)
+    Var lab var referLab -> \s -> (second (statAddV var (Finite 1)) s, Var lab var referLab)
     FreeVar lab var -> returnS $ FreeVar lab var
   where
     isNumConstant :: (forall a. Num a => a) -> OpenExp env aenv lab alab args tenv t -> Bool
@@ -206,7 +207,7 @@ goExp = \case
     isNumConstant _ _ = False
 
 goVarOrLab :: Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)) -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)))
-goVarOrLab (Left var) (sa, se) = ((statAddV var 2 sa, se), Left var)
+goVarOrLab (Left var) (sa, se) = ((statAddV var AccInExp sa, se), Left var)
 goVarOrLab (Right lab) s = (s, Right lab)
 
 simplifyFun :: OpenFun env aenv () alab tenv t -> Stats aenv -> (Stats aenv, OpenFun env aenv () alab tenv t)
@@ -217,11 +218,16 @@ simplifyLam1 :: ExpLambda1 aenv () alab tenv sh t1 t2 -> Stats aenv -> (Stats ae
 simplifyLam1 (ELSplit lam lab) = returnS (ELSplit lam lab)
 simplifyLam1 (ELPlain fun) = \s -> ELPlain <$> simplifyFun fun s
 
-noCostCopy :: OpenExp env aenv lab alab args tenv t -> Bool
-noCostCopy (Var _ _ _) = True
-noCostCopy (Const _ _) = True
-noCostCopy (PrimConst _ _) = True  -- TODO: depending on the backend this might not be true?
-noCostCopy _ = False
+duplicableAcc :: OpenAcc aenv lab alab args t -> Bool
+duplicableAcc Avar{} = True
+duplicableAcc (Replicate _ _ _ a) = duplicableAcc a
+duplicableAcc _ = False
+
+duplicableExp :: OpenExp env aenv lab alab args tenv t -> Bool
+duplicableExp (Var _ _ _) = True
+duplicableExp (Const _ _) = True
+duplicableExp (PrimConst _ _) = True  -- TODO: depending on the backend this might not be true?
+duplicableExp _ = False
 
 data InlinerA aenv aenv' lab alab args =
     InlinerA { unInlinerA :: forall t. A.ArrayVar aenv t -> OpenAcc aenv' lab alab args t }
@@ -284,7 +290,8 @@ inlineAE f = \case
     inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args -> Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)) -> Either (A.ArrayVar aenv' t) (AAnyPartLabelN alab (Array sh e))
     inlineAE_VarOrLab f' (Left var)
       | Avar _ var' _ <- unInlinerA f' var = Left var'
-      | otherwise = error "inlineAE: Inlining array variable referenced in expression"
+      | otherwise = error ("inlineAE: Non-array-variable inlined in expression: " ++
+                              showsAcc (ShowEnv (const "L?") (const "L?") 0 () []) 0 (unInlinerA f' var) "")
     inlineAE_VarOrLab _ (Right lab) = Right lab
 
 inlineAEF :: InlinerA aenv aenv' lab alab args -> OpenFun env aenv lab alab tenv t -> OpenFun env aenv' lab alab tenv t
@@ -328,21 +335,34 @@ inlineE f = \case
     Var _ var _ -> unInlinerE f var
     FreeVar lab var -> FreeVar lab var
 
+-- If an array variable is used in an expression in an Index or Shape node, a
+-- non-variable array program can never be inlined for that variable. Hence,
+-- AccInExp works as an infinite value.
+-- Note that the generated Ord instance is consistent with AccInExp being
+-- infinite.
+data UsageCount = Finite Int | AccInExp
+  deriving (Show, Eq, Ord)
+
+instance Semigroup UsageCount where
+  Finite a <> Finite b = Finite (a + b)
+  AccInExp <> _ = AccInExp
+  _ <> AccInExp = AccInExp
+
 data Stats env where
     SNil :: Stats env
-    SPush :: Stats env -> Int -> Stats (env, t)
+    SPush :: Stats env -> UsageCount -> Stats (env, t)
 
-statAdd :: Idx env t -> Int -> Stats env -> Stats env
-statAdd ZeroIdx m (SPush stats n) = SPush stats (n + m)
+statAdd :: Idx env t -> UsageCount -> Stats env -> Stats env
+statAdd ZeroIdx m (SPush stats n) = SPush stats (n <> m)
 statAdd (SuccIdx idx) m (SPush stats n) = SPush (statAdd idx m stats) n
 statAdd _ _ SNil = SNil  -- increment on above-scope variable; ignore
 
-statAddV :: A.Var s env t -> Int -> Stats env -> Stats env
+statAddV :: A.Var s env t -> UsageCount -> Stats env -> Stats env
 statAddV (A.Var _ idx) = statAdd idx
 
 spushLHS0 :: Stats env -> LeftHandSide s t env env' -> Stats env'
 spushLHS0 stats (LeftHandSideWildcard _) = stats
-spushLHS0 stats (LeftHandSideSingle _) = SPush stats 0
+spushLHS0 stats (LeftHandSideSingle _) = SPush stats (Finite 0)
 spushLHS0 stats (LeftHandSidePair lhs1 lhs2) = spushLHS0 (spushLHS0 stats lhs1) lhs2
 
 spopLHS :: LeftHandSide s t env env' -> Stats env' -> Stats env
@@ -353,11 +373,11 @@ spopLHS (LeftHandSideSingle _) SNil = error "spopLHS: Stats pop on empty stack"
 
 -- TODO: This is kind of like the State monad. If possible, make it an actual monad (and if not, document why it's impossible).
 infixl 4 !$!
-(!$!) :: (a -> b) -> (s -> (s', a)) -> (s -> (s', b))
+(!$!) :: (a -> b) -> (s -> (s, a)) -> (s -> (s, b))
 (!$!) = fmap . fmap
 
 infixl 4 !**!
-(!**!) :: (s -> (s', a -> b)) -> (s' -> (s'', a)) -> (s -> (s'', b))
+(!**!) :: (s -> (s, a -> b)) -> (s -> (s, a)) -> (s -> (s, b))
 ff !**! xf = \s -> let (s1, f) = ff s in f <$> xf s1
 
 returnS :: a -> s -> (s, a)
