@@ -58,7 +58,9 @@ convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
   , Exists lhs1 <- rebuildLHS lhs =
       case AD.eCheckClosedInLHS lhs1 transBody of
           Just transBody'
-            | AD.ReverseADResE lhs2 body' <- AD.reverseAD lhs1 (transBody' `withAlabType` ())
+            | let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyExp transBody' else transBody'
+            , AD.ReverseADResE lhs2 body' <-
+                AD.reverseAD lhs1 (simplifiedBody `withAlabType` ())
             , AD.UntranslateResultE lhs3 body'' <- AD.untranslateLHSboundExp lhs2 (AD.simplifyExp body') (Just weakenId) ->
                 Let lhs3 arg body''
           Nothing ->
@@ -118,10 +120,11 @@ convertPAcc (GradientA _ sty (Alam lhs (Abody body)) arg)
   , Exists lhs' <- rebuildLHS lhs =
       case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
           Just transBody
-            | () <- case AD.getConfigVar AD.Graph of
+            | let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyAcc transBody else transBody
+            , () <- case AD.getConfigVar AD.Graph of
                       "" -> ()
-                      fname -> unsafePerformIO (AD.writeGraphToFile fname lhs' transBody)
-            , AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' transBody
+                      fname -> unsafePerformIO (AD.writeGraphToFile fname lhs' simplifiedBody)
+            , AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' simplifiedBody
             , AD.UntranslateResultA lhs''' body'' <- AD.untranslateLHSboundAcc lhs'' (AD.simplifyAcc body') ->
                 Alet lhs''' arg body''
           Nothing ->

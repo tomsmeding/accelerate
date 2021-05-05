@@ -29,6 +29,7 @@ data ConfigVar a where
   SmallFunSize :: ConfigVar Int
   Debug :: ConfigVar Bool
   Graph :: ConfigVar String
+  PreOpt :: ConfigVar Bool
 
 instance GEq ConfigVar where
   geq SmallFunSize SmallFunSize = Just Refl
@@ -43,22 +44,28 @@ instance GCompare ConfigVar where
   gcompare Debug _ = GLT
   gcompare _ Debug = GGT
   gcompare Graph Graph = GEQ
+  gcompare Graph _ = GLT
+  gcompare _ Graph = GGT
+  gcompare PreOpt PreOpt = GEQ
 
 parseVar :: String -> Maybe SomeConfigVar
 parseVar "SMALLFUNSIZE" = Just (SomeConfigVar SmallFunSize)
 parseVar "DEBUG" = Just (SomeConfigVar Debug)
 parseVar "GRAPH" = Just (SomeConfigVar Graph)
+parseVar "PREOPT" = Just (SomeConfigVar PreOpt)
 parseVar _ = Nothing
 
 varDescr :: ConfigVar a -> String
 varDescr SmallFunSize = "small expression function size bound"
 varDescr Debug = "debug printing"
 varDescr Graph = "export graph of program being differentiated to given file (convert to dot using graphdraw.hs)"
+varDescr PreOpt = "pre-simplification before AD"
 
 defaultValue :: ConfigVar a -> a
 defaultValue SmallFunSize = 20
 defaultValue Debug = False
 defaultValue Graph = ""
+defaultValue PreOpt = False
 
 configVarPrefix :: String
 configVarPrefix = "ACCELERATE_AD_"
