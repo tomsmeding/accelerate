@@ -2,7 +2,7 @@
 module Data.Array.Accelerate.Trafo.AD.Util where
 
 import Data.Function (on)
-import Data.List
+import Data.List (groupBy, sortBy)
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import Data.Ord (comparing)
