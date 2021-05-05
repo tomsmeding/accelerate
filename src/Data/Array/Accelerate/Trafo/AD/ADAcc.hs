@@ -8,7 +8,8 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.ADAcc (
-  reverseADA, ReverseADResA(..)
+  reverseADA, ReverseADResA(..),
+  generaliseArgs,
 ) where
 
 import Data.Function ((&))

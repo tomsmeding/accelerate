@@ -1,11 +1,9 @@
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE FlexibleContexts #-}
 module Data.Array.Accelerate.Trafo.AD (
   convertExp, convertAccEntry, convertAfunEntry
 ) where
+
+import System.IO.Unsafe (unsafePerformIO)
 
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.AST.Environment
@@ -20,7 +18,9 @@ import Data.Array.Accelerate.Representation.Type
 import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
 import Data.Array.Accelerate.Trafo.AD.Debug
+import qualified Data.Array.Accelerate.Trafo.AD.Config as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
+import qualified Data.Array.Accelerate.Trafo.AD.Graph as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Simplify as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
@@ -118,7 +118,10 @@ convertPAcc (GradientA _ sty (Alam lhs (Abody body)) arg)
   , Exists lhs' <- rebuildLHS lhs =
       case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
           Just transBody
-            | AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' transBody
+            | () <- case AD.getConfigVar AD.Graph of
+                      "" -> ()
+                      fname -> unsafePerformIO (AD.writeGraphToFile fname lhs' transBody)
+            , AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' transBody
             , AD.UntranslateResultA lhs''' body'' <- AD.untranslateLHSboundAcc lhs'' (AD.simplifyAcc body') ->
                 Alet lhs''' arg body''
           Nothing ->

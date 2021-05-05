@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -27,6 +28,7 @@ import System.IO.Unsafe (unsafePerformIO)
 data ConfigVar a where
   SmallFunSize :: ConfigVar Int
   Debug :: ConfigVar Bool
+  Graph :: ConfigVar String
 
 instance GEq ConfigVar where
   geq SmallFunSize SmallFunSize = Just Refl
@@ -38,19 +40,25 @@ instance GCompare ConfigVar where
   gcompare SmallFunSize _ = GLT
   gcompare _ SmallFunSize = GGT
   gcompare Debug Debug = GEQ
+  gcompare Debug _ = GLT
+  gcompare _ Debug = GGT
+  gcompare Graph Graph = GEQ
 
 parseVar :: String -> Maybe SomeConfigVar
 parseVar "SMALLFUNSIZE" = Just (SomeConfigVar SmallFunSize)
 parseVar "DEBUG" = Just (SomeConfigVar Debug)
+parseVar "GRAPH" = Just (SomeConfigVar Graph)
 parseVar _ = Nothing
 
 varDescr :: ConfigVar a -> String
 varDescr SmallFunSize = "small expression function size bound"
 varDescr Debug = "debug printing"
+varDescr Graph = "export graph of program being differentiated to given file (convert to dot using graphdraw.hs)"
 
 defaultValue :: ConfigVar a -> a
 defaultValue SmallFunSize = 20
 defaultValue Debug = False
+defaultValue Graph = ""
 
 configVarPrefix :: String
 configVarPrefix = "ACCELERATE_AD_"
@@ -71,10 +79,12 @@ data SomeConfigVar = forall a. ConfigVarType a => SomeConfigVar (ConfigVar a)
 class Show a => ConfigVarType a where
   parseType :: String -> Maybe a
   typeDescr :: Proxy a -> String
+  descrEnglishArticle :: Proxy a -> String
 
 instance ConfigVarType Int where
   parseType = readMaybe
   typeDescr _ = "integer"
+  descrEnglishArticle _ = "an"
 
 instance ConfigVarType Bool where
   parseType s =
@@ -85,13 +95,20 @@ instance ConfigVarType Bool where
       "0" -> Just False
       _ -> Nothing
   typeDescr _ = "boolean"
+  descrEnglishArticle _ = "a"
+
+instance ConfigVarType String where
+  parseType s = Just s
+  typeDescr _ = "string"
+  descrEnglishArticle _ = "a"
 
 parse :: forall a. ConfigVarType a => String -> ConfigVar a -> String -> Either String a
 parse origkey var value
   | Just res <- parseType value = Right res
   | otherwise =
       Left $ "Cannot parse the environment variable " ++ origkey ++ ", the " ++
-               varDescr var ++ ", as an " ++ typeDescr (Proxy @a) ++
+               varDescr var ++ ", as " ++ descrEnglishArticle (Proxy @a) ++ " " ++
+               typeDescr (Proxy @a) ++
                " (it has been given the value '" ++ value ++ "')."
 
 data ParsedEnvVar = forall a. ConfigVarType a => ParsedEnvVar (ConfigVar a) a
