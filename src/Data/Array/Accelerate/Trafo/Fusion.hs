@@ -1509,6 +1509,8 @@ aletD' embedAcc elimAcc (LeftHandSideSingle ArrayR{}) (Embed env1 cc1) (Embed en
                                                b
           | otherwise                   -> LinearIndex a (cvtE i)
 
+        GradientE t1 t2 f e             -> GradientE t1 t2 (replaceF sh' f' avar f) (replaceE sh' f' avar e)
+
       where
         cvtE :: OpenExp env aenv s -> OpenExp env aenv s
         cvtE = replaceE sh' f' avar
@@ -1570,6 +1572,7 @@ aletD' embedAcc elimAcc (LeftHandSideSingle ArrayR{}) (Embed env1 cc1) (Embed en
         Stencil s t f x a       -> Stencil s t (cvtF f) (cvtB x) (cvtA a)
         Stencil2 s1 s2 t f x a y b
                                 -> Stencil2 s1 s2 t (cvtF f) (cvtB x) (cvtA a) (cvtB y) (cvtA b)
+        GradientA t1 t2 f a     -> GradientA t1 t2 (cvtAF f) (cvtA a)
         -- Collect seq             -> Collect (cvtSeq seq)
 
       where

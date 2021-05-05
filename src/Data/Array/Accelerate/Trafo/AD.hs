@@ -107,6 +107,7 @@ convertPAcc (Permute f a1 fi a2) = Permute (convertFun f) (convertAcc a1) (conve
 convertPAcc (Backpermute rep e f a) = Backpermute rep (convertExp e) (convertFun f) (convertAcc a)
 convertPAcc (Acond cond a1 a2) = Acond (convertExp cond) (convertAcc a1) (convertAcc a2)
 convertPAcc (Awhile cond f a) = Awhile (convertAfun cond) (convertAfun f) (convertAcc a)
+convertPAcc (Atrace msg a1 a2) = Atrace msg (convertAcc a1) (convertAcc a2)
 convertPAcc (Replicate rep slice a) = Replicate rep (convertExp slice) (convertAcc a)
 convertPAcc (Slice slix a e) = Slice slix (convertAcc a) (convertExp e)
 convertPAcc (Generate rep sz f) = Generate rep (convertExp sz) (convertFun f)
