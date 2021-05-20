@@ -1,20 +1,25 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.AD.Simplify (
   simplifyAcc, simplifyExp
 ) where
 
 import Control.Arrow (second)
+import Data.Some
 
-import Data.Array.Accelerate.AST.Environment (sinkWithLHS, weakenWithLHS, weakenId, weakenSucc')
-import Data.Array.Accelerate.AST.LeftHandSide (LeftHandSide(..), Exists(..))
+import Data.Array.Accelerate.AST.Environment
+import Data.Array.Accelerate.AST.LeftHandSide (LeftHandSide(..), Exists(..), lhsToTupR)
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Analysis.Match ((:~:)(Refl), matchArrayR, matchScalarType)
 import qualified Data.Array.Accelerate.Analysis.Match as A (matchOpenExp)
 import Data.Array.Accelerate.Representation.Array
-import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
+import Data.Array.Accelerate.Representation.Type
+import Data.Array.Accelerate.Type
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS, weaken)
 import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Additive
 import Data.Array.Accelerate.Trafo.AD.Common
@@ -78,6 +83,12 @@ goAcc = \case
                               s1
                    else (s2, Alet lhs a1' a2')
 
+    -- Pruning of wildcard bindings
+    Alet lhs rhs e
+      | lhsHasWildcard lhs
+      , PrunedLHS lhs' rj <- pruneLHS lhs ->
+          goAcc $ Alet lhs' (reprojectA rj rhs) e
+
     Aconst lab x -> returnS $ Aconst lab x
     Apair lab a1 a2 -> Apair lab !$! goAcc a1 !**! goAcc a2
     Anil lab -> returnS (Anil lab)
@@ -106,7 +117,10 @@ goAcc = \case
     Alet lhs a1 a2 ->
       \s -> let (s1, a1') = goAcc a1 s
                 (s2, a2') = goAcc a2 (spushLHS0 s1 lhs)
-            in (spopLHS lhs s2, Alet lhs a1' a2')
+            in case spopLHS' lhs s2 of
+                 (s', Some lhs')
+                   | PrunedLHS lhs'' rj <- pruneLHS lhs'
+                   -> (s', Alet lhs'' (reprojectA rj a1') (sinkAcc (sinkWithLHSAllowDrop lhs lhs' weakenId) a2'))
     Avar lab var referLab ->
       \s -> (statAddV var (Finite 1) s, Avar lab var referLab)
 
@@ -154,6 +168,12 @@ goExp = \case
                                  e'
                     else Let lhs rhs' e')
 
+    -- Pruning of wildcard bindings
+    -- Let lhs rhs e
+    --   | lhsHasWildcard lhs
+    --   , PrunedLHS lhs' rj <- pruneLHS lhs ->
+    --       goExp $ Let lhs' (reprojectE rj rhs) e
+
     -- Get elimination
     Get lab ti e ->
       \s -> case (ti, goExp e s) of
@@ -193,8 +213,11 @@ goExp = \case
     Undef ty -> returnS $ Undef ty  -- TODO: undef poisons, and can be propagated; however we currently don't generate code where that would help.
     Let lhs rhs e ->
       \s -> let ((s1a, s1e), rhs') = goExp rhs s
-                (s2, e') = goExp e (s1a, spushLHS0 s1e lhs)
-            in (second (spopLHS lhs) s2, Let lhs rhs' e')
+                ((s2a, s2e), e') = goExp e (s1a, spushLHS0 s1e lhs)
+            in case spopLHS' lhs s2e of
+                 (s', Some lhs')
+                   | PrunedLHS lhs'' rj <- pruneLHS lhs'
+                   -> ((s2a, s'), Let lhs'' (reprojectE rj rhs') (sinkExp (sinkWithLHSAllowDrop lhs lhs' weakenId) e'))
     Arg lab argsty tidx -> returnS $ Arg lab argsty tidx
     Var lab var referLab -> \s -> (second (statAddV var (Finite 1)) s, Var lab var referLab)
     FreeVar lab var -> returnS $ FreeVar lab var
@@ -335,6 +358,139 @@ inlineE f = \case
     Var _ var _ -> unInlinerE f var
     FreeVar lab var -> FreeVar lab var
 
+lhsHasWildcard :: LeftHandSide s t env env' -> Bool
+lhsHasWildcard (LeftHandSideWildcard _) = True
+lhsHasWildcard (LeftHandSideSingle _) = False
+lhsHasWildcard (LeftHandSidePair lhs1 lhs2) = lhsHasWildcard lhs1 || lhsHasWildcard lhs2
+
+data Reprojection s from to where
+  RjKeep :: TupR s t -> Reprojection s t t
+  RjNil :: Reprojection s t ()
+  RjFst :: TupR s a' -> Reprojection s a a' -> Reprojection s (a, b) a'
+  RjSnd :: TupR s b' -> Reprojection s b b' -> Reprojection s (a, b) b'
+  RjPair :: TupR s (a', b') -> Reprojection s a a' -> Reprojection s b b' -> Reprojection s (a, b) (a', b')
+
+rjType2 :: Reprojection s t t' -> TupR s t'
+rjType2 (RjKeep ty) = ty
+rjType2 RjNil = TupRunit
+rjType2 (RjFst ty _) = ty
+rjType2 (RjSnd ty _) = ty
+rjType2 (RjPair ty _ _) = ty
+
+data PrunedLHS s t env env' =
+    forall t'.
+        PrunedLHS (LeftHandSide s t' env env') (Reprojection s t t')
+
+pruneLHS :: LeftHandSide s t env env' -> PrunedLHS s t env env'
+pruneLHS (LeftHandSideWildcard _) = PrunedLHS (LeftHandSideWildcard TupRunit) RjNil
+pruneLHS lhs@(LeftHandSideSingle ty) = PrunedLHS lhs (RjKeep (TupRsingle ty))
+pruneLHS (LeftHandSidePair lhs1 lhs2)
+  | PrunedLHS lhs1' rj1 <- pruneLHS lhs1
+  , PrunedLHS lhs2' rj2 <- pruneLHS lhs2
+  = case (lhs1', rj1, lhs2', rj2) of
+      (LeftHandSideWildcard TupRunit, RjNil, LeftHandSideWildcard TupRunit, RjNil) ->
+        PrunedLHS (LeftHandSideWildcard TupRunit) RjNil
+      (LeftHandSideWildcard TupRunit, RjNil, _, _) ->
+        PrunedLHS lhs2' (RjSnd (lhsToTupR lhs2') rj2)
+      (_, _, LeftHandSideWildcard TupRunit, RjNil) ->
+        PrunedLHS lhs1' (RjFst (lhsToTupR lhs1') rj1)
+      _ ->
+        let lhs' = LeftHandSidePair lhs1' lhs2'
+        in PrunedLHS lhs' (RjPair (lhsToTupR lhs') rj1 rj2)
+
+reprojectA :: Reprojection ArrayR t t' -> OpenAcc aenv lab () args t -> OpenAcc aenv lab () args t'
+reprojectA RjNil _ = Anil (nilLabel TupRunit)
+reprojectA (RjKeep _) a = a
+reprojectA rj@(RjFst resty rj1) acc = case acc of
+    Apair _ a _ -> reprojectA rj1 a
+    Acond _ e a1 a2 -> Acond (DLabel resty ()) e (reprojectA rj a1) (reprojectA rj a2)
+    Scan' lab@(labelType -> TupRpair _ ty2) dir fun e0 a
+      | RjKeep (TupRsingle resty') <- rj1
+      -> Alet (LeftHandSidePair (LeftHandSideSingle resty') (LeftHandSideWildcard ty2))
+              (Scan' lab dir fun e0 a)
+              (smartAvar (A.Var resty' ZeroIdx))
+    Scan' _ _ _ _ _ -> error "Invalid GADTs"
+    Aget lab tidx a -> reprojectA rj1 (smartFstA (Aget lab tidx a))
+    Alet lhs a1 a2 -> Alet lhs a1 (reprojectA rj a2)
+reprojectA rj@(RjSnd resty rj1) acc = case acc of
+    Apair _ _ b -> reprojectA rj1 b
+    Acond _ e a1 a2 -> Acond (DLabel resty ()) e (reprojectA rj a1) (reprojectA rj a2)
+    Scan' lab@(labelType -> TupRpair ty1 _) dir fun e0 a
+      | RjKeep (TupRsingle resty') <- rj1
+      -> Alet (LeftHandSidePair (LeftHandSideWildcard ty1) (LeftHandSideSingle resty'))
+              (Scan' lab dir fun e0 a)
+              (smartAvar (A.Var resty' ZeroIdx))
+    Scan' _ _ _ _ _ -> error "Invalid GADTs"
+    Aget lab tidx a -> reprojectA rj1 (smartSndA (Aget lab tidx a))
+    Alet lhs a1 a2 -> Alet lhs a1 (reprojectA rj a2)
+reprojectA rj@(RjPair resty rj1 rj2) acc = case acc of
+    Apair _ a b ->
+        let a' = reprojectA rj1 a
+            b' = reprojectA rj2 b
+        in Apair (nilLabel (TupRpair (atypeOf a') (atypeOf b'))) (reprojectA rj1 a) (reprojectA rj2 b)
+    Acond _ e a1 a2 -> Acond (DLabel resty ()) e (reprojectA rj a1) (reprojectA rj a2)
+    Scan' lab dir fun e0 a
+      | RjKeep _ <- rj1
+      , RjKeep _ <- rj2
+      -> Scan' lab dir fun e0 a
+    Scan' _ _ _ _ _ -> error "Invalid GADTs"
+    Aget _ tidx a -> reprojectA (addTidxToReproject (atypeOf a) tidx rj) a
+    Alet lhs a1 a2 -> Alet lhs a1 (reprojectA rj a2)
+
+reprojectE :: Reprojection ScalarType t t' -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t'
+reprojectE RjNil _ = Nil (nilLabel TupRunit)
+reprojectE (RjKeep _) a = a
+reprojectE rj@(RjFst resty rj1) expr = case expr of
+    Pair _ a _ -> reprojectE rj1 a
+    Cond _ e a1 a2 -> Cond (DLabel resty ()) e (reprojectE rj a1) (reprojectE rj a2)
+    Get lab tidx a -> reprojectE rj1 (smartFst (Get lab tidx a))
+    Let lhs a1 a2 -> Let lhs a1 (reprojectE rj a2)
+    _ | LetBoundVars lhs' vars <- rjToLHS (etypeOf expr) rj
+      -> Let lhs' expr (evars vars)
+reprojectE rj@(RjSnd resty rj1) expr = case expr of
+    Pair _ _ b -> reprojectE rj1 b
+    Cond _ e a1 a2 -> Cond (DLabel resty ()) e (reprojectE rj a1) (reprojectE rj a2)
+    Get lab tidx a -> reprojectE rj1 (smartSnd (Get lab tidx a))
+    Let lhs a1 a2 -> Let lhs a1 (reprojectE rj a2)
+    _ | LetBoundVars lhs' vars <- rjToLHS (etypeOf expr) rj
+      -> Let lhs' expr (evars vars)
+reprojectE rj@(RjPair resty rj1 rj2) expr = case expr of
+    Pair _ a b ->
+        let a' = reprojectE rj1 a
+            b' = reprojectE rj2 b
+        in Pair (nilLabel (TupRpair (etypeOf a') (etypeOf b'))) (reprojectE rj1 a) (reprojectE rj2 b)
+    Cond _ e a1 a2 -> Cond (DLabel resty ()) e (reprojectE rj a1) (reprojectE rj a2)
+    Get _ tidx a -> reprojectE (addTidxToReproject (etypeOf a) tidx rj) a
+    Let lhs a1 a2 -> Let lhs a1 (reprojectE rj a2)
+    _ | LetBoundVars lhs' vars <- rjToLHS (etypeOf expr) rj
+      -> Let lhs' expr (evars vars)
+
+addTidxToReproject :: TupR s t1 -> TupleIdx t1 t2 -> Reprojection s t2 t3 -> Reprojection s t1 t3
+addTidxToReproject _ TIHere rj = rj
+addTidxToReproject (TupRpair t1 _) (TILeft ti) rj =
+  let rj' = addTidxToReproject t1 ti rj
+  in RjFst (rjType2 rj') (addTidxToReproject t1 ti rj)
+addTidxToReproject (TupRpair _ t2) (TIRight ti) rj =
+  let rj' = addTidxToReproject t2 ti rj
+  in RjSnd (rjType2 rj') (addTidxToReproject t2 ti rj)
+addTidxToReproject _ _ _ = error "Invalid GADTs"
+
+rjToLHS :: TupR s t -> Reprojection s t t' -> LetBoundVars s env t t'
+rjToLHS ty (RjKeep _) = lhsCopy ty
+rjToLHS ty RjNil = LetBoundVars (LeftHandSideWildcard ty) TupRunit
+rjToLHS (TupRpair t1 t2) (RjFst _ rj)
+  | LetBoundVars lhs vars <- rjToLHS t1 rj
+  = LetBoundVars (LeftHandSidePair lhs (LeftHandSideWildcard t2)) vars
+rjToLHS (TupRpair t1 t2) (RjSnd _ rj)
+  | LetBoundVars lhs vars <- rjToLHS t2 rj
+  = LetBoundVars (LeftHandSidePair (LeftHandSideWildcard t1) lhs) vars
+rjToLHS (TupRpair t1 t2) (RjPair _ rj1 rj2)
+  | LetBoundVars lhs1 vars1 <- rjToLHS t1 rj1
+  , LetBoundVars lhs2 vars2 <- rjToLHS t2 rj2
+  = LetBoundVars (LeftHandSidePair lhs1 lhs2)
+                 (TupRpair (fmapTupR (weaken (weakenWithLHS lhs2)) vars1) vars2)
+rjToLHS _ _ = error "Invalid GADTs"
+
 -- If an array variable is used in an expression in an Index or Shape node, a
 -- non-variable array program can never be inlined for that variable. Hence,
 -- AccInExp works as an infinite value.
@@ -365,11 +521,28 @@ spushLHS0 stats (LeftHandSideWildcard _) = stats
 spushLHS0 stats (LeftHandSideSingle _) = SPush stats (Finite 0)
 spushLHS0 stats (LeftHandSidePair lhs1 lhs2) = spushLHS0 (spushLHS0 stats lhs1) lhs2
 
-spopLHS :: LeftHandSide s t env env' -> Stats env' -> Stats env
-spopLHS (LeftHandSideWildcard _) stats = stats
-spopLHS (LeftHandSideSingle _) (SPush stats _) = stats
-spopLHS (LeftHandSidePair lhs1 lhs2) stats = spopLHS lhs1 (spopLHS lhs2 stats)
-spopLHS (LeftHandSideSingle _) SNil = error "spopLHS: Stats pop on empty stack"
+spopLHS' :: LeftHandSide s t env env' -> Stats env' -> (Stats env, Some (LeftHandSide s t env))
+spopLHS' (LeftHandSideWildcard ty) stats = (stats, Some (LeftHandSideWildcard ty))
+spopLHS' (LeftHandSideSingle ty) (SPush stats (Finite 0)) =
+    (stats, Some (LeftHandSideWildcard (TupRsingle ty)))
+spopLHS' (LeftHandSideSingle ty) (SPush stats _) =
+    (stats, Some (LeftHandSideSingle ty))
+spopLHS' (LeftHandSidePair lhs1 lhs2) stats
+  | (stats2, Some lhs2') <- spopLHS' lhs2 stats
+  , (stats1, Some lhs1') <- spopLHS' lhs1 stats2
+  , Exists lhs2'' <- rebuildLHS lhs2'
+  = (stats1, Some (LeftHandSidePair lhs1' lhs2''))
+spopLHS' (LeftHandSideSingle _) SNil = error "spopLHS': Stats pop on empty stack"
+
+sinkWithLHSAllowDrop :: LeftHandSide s t env1 env1' -> LeftHandSide s t env2 env2' -> env1 :> env2 -> env1' :> env2'
+sinkWithLHSAllowDrop (LeftHandSideWildcard _) (LeftHandSideWildcard _) k = k
+sinkWithLHSAllowDrop (LeftHandSideSingle _)   (LeftHandSideSingle _)   k = sink k
+sinkWithLHSAllowDrop (LeftHandSideSingle _)   (LeftHandSideWildcard _) k =
+    Weaken (\case ZeroIdx -> error "Variable with zero usage count is referenced"
+                  SuccIdx i -> k >:> i)
+sinkWithLHSAllowDrop (LeftHandSidePair a1 b1) (LeftHandSidePair a2 b2) k =
+    sinkWithLHSAllowDrop b1 b2 $ sinkWithLHSAllowDrop a1 a2 k
+sinkWithLHSAllowDrop _ _ _ = error "left hand sides do not match in sinkWithLHSAllowDrop"
 
 -- TODO: This is kind of like the State monad. If possible, make it an actual monad (and if not, document why it's impossible).
 infixl 4 !$!
