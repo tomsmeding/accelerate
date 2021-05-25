@@ -93,7 +93,7 @@ tuple suffix layouts@(l:ls)
 instance (Show lab, Show alab) => Pretty (OpenExp env aenv lab alab args tenv t) where
     buildLayout = layoutExp (ShowEnv show show 0 [] []) 0
 
-instance (Show lab, Show alab) => Pretty (OpenAcc aenv lab alab args t) where
+instance (Show lab, Show alab) => Pretty (OpenAcc aenv lab alab args taenv t) where
     buildLayout = layoutAcc (ShowEnv show show 0 () []) 0
 
 layoutExp :: EShowEnv lab alab -> Int -> OpenExp env aenv lab alab args tenv t -> Layout
@@ -175,7 +175,7 @@ layoutExp se d (Arg lab _ tidx) = parenthesise (d > 0) $
     string ((case tiPrefixExp tidx of "" -> "A" ; pr -> "(" ++ pr ++ " A)")
             ++ showLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
 
-layoutAcc :: AShowEnv lab alab -> Int -> OpenAcc env lab alab args t -> Layout
+layoutAcc :: AShowEnv lab alab -> Int -> OpenAcc env lab alab args taenv t -> Layout
 layoutAcc se _ (Aconst lab@DLabel { labelType = ty } x) =
     string (showArray (showString . showTupR' showScalar (arrayRtype ty)) ty x ++
                 ashowLabelSuffix' se lab)
@@ -281,6 +281,8 @@ layoutAcc se _ (Avar lab (A.Var _ idx) (PartLabel referLab referPart)) =
          "" -> string varstr
          referLabStr ->
              string ("(" ++ varstr ++ "->" ++ tiPrefixAcc referPart ++ " " ++ referLabStr ++ ")" ++ ashowLabelSuffix' se lab)
+layoutAcc se d (AfreeVar lab (A.Var ty idx)) = parenthesise (d > 0) $
+    string ("taFREE" ++ show (1 + idxToInt idx) ++ ashowLabelSuffix' se lab ++ " :: " ++ show ty)
 layoutAcc se d (Aarg lab _ tidx) = parenthesise (d > 0) $
     string ((case tiPrefixAcc tidx of "" -> "A" ; pr -> "(" ++ pr ++ " A)")
             ++ ashowLabelSuffix' se lab ++ " :: " ++ show (labelType lab))

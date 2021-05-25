@@ -67,7 +67,7 @@ genSingleIds (TupRpair t1 t2) = do
 
 
 -- Assumes the expression does not contain Arg
-generaliseArgs :: HasCallStack => OpenAcc aenv lab alab args t -> OpenAcc aenv lab alab args' t
+generaliseArgs :: HasCallStack => OpenAcc aenv lab alab args taenv t -> OpenAcc aenv lab alab args' taenv t
 generaliseArgs (Aconst lab x) = Aconst lab x
 generaliseArgs (Apair lab e1 e2) = Apair lab (generaliseArgs e1) (generaliseArgs e2)
 generaliseArgs (Anil lab) = Anil lab
@@ -88,16 +88,17 @@ generaliseArgs (Permute lab cf e1 pf e2) = Permute lab cf (generaliseArgs e1) pf
 generaliseArgs (Aget lab path ex) = Aget lab path (generaliseArgs ex)
 generaliseArgs (Alet lhs rhs ex) = Alet lhs (generaliseArgs rhs) (generaliseArgs ex)
 generaliseArgs (Avar lab v referLab) = Avar lab v referLab
+generaliseArgs (AfreeVar lab var) = AfreeVar lab var
 generaliseArgs (Aarg _ _ _) = error "generaliseArgs: Arg found"
 
-data ReverseADResA alab tenv t =
+data ReverseADResA alab tenv taenv t =
     forall aenv.
         ReverseADResA (A.ALeftHandSide t () aenv)
-                      (OpenAcc aenv () () () t)
+                      (OpenAcc aenv () () () taenv t)
 
 reverseADA :: ALeftHandSide t () aenv
-           -> OpenAcc aenv () () () (Array () Float)
-           -> ReverseADResA alab tenv t
+           -> OpenAcc aenv () () () taenv (Array () Float)
+           -> ReverseADResA alab tenv taenv t
 reverseADA paramlhs expr = evalIdGen $ do
     let paramty = lhsToTupR paramlhs
     (argsRHSlabel, expr') <-
@@ -124,20 +125,20 @@ reverseADA paramlhs expr = evalIdGen $ do
              . dualBuilder
              $ gradient))
 
-argumentTuple :: ArraysR args -> OpenAcc aenv () () args args
+argumentTuple :: ArraysR args -> OpenAcc aenv () () args taenv args
 argumentTuple argsty = untupleAccs
                            (zipWithTupR (\ty@ArrayR{} tidx -> Aarg (nilLabel ty) argsty tidx)
                                         argsty (tupleIndices argsty))
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
-realiseArgs :: forall args argsenv res.
+realiseArgs :: forall args argsenv res taenv.
                ALeftHandSide args () argsenv
-            -> OpenAcc () () () args res
-            -> OpenAcc argsenv () () () res
+            -> OpenAcc () () () args taenv res
+            -> OpenAcc argsenv () () () taenv res
 realiseArgs paramlhs = \expr -> go A.weakenId (A.weakenWithLHS paramlhs) expr
   where
-    go :: argsenv A.:> aenv' -> aenv A.:> aenv' -> OpenAcc aenv () () args t -> OpenAcc aenv' () () () t
+    go :: argsenv A.:> aenv' -> aenv A.:> aenv' -> OpenAcc aenv () () args taenv t -> OpenAcc aenv' () () () taenv t
     go argWeaken varWeaken expr = case expr of
         Aconst lab x -> Aconst lab x
         Apair lab e1 e2 -> Apair lab (go argWeaken varWeaken e1) (go argWeaken varWeaken e2)
@@ -162,6 +163,7 @@ realiseArgs paramlhs = \expr -> go A.weakenId (A.weakenWithLHS paramlhs) expr
               Alet lhs' (go argWeaken varWeaken rhs)
                   (go (A.weakenWithLHS lhs' A..> argWeaken) (A.sinkWithLHS lhs lhs' varWeaken) ex)
         Avar lab (A.Var ty idx) referLab -> Avar lab (A.Var ty (varWeaken A.>:> idx)) referLab
+        AfreeVar lab var -> AfreeVar lab var
         Aarg lab _ tidx ->
             case indexIntoLHS paramlhs tidx of
               Just idx -> let nillab = nilLabel (labelType lab)
@@ -176,16 +178,16 @@ realiseArgs paramlhs = \expr -> go A.weakenId (A.weakenWithLHS paramlhs) expr
 -- 'args' and the Alet has been broken out into its three components. In
 -- addition to the full program, returns the label of the enlabeled rhs.
 enlabelAccToplevel :: ALeftHandSide args () aenv
-                   -> OpenAcc () () () args args
-                   -> OpenAcc aenv () () args t
-                   -> IdGen (ADLabelN Int args, OpenAcc () () Int args t)
+                   -> OpenAcc () () () args taenv args
+                   -> OpenAcc aenv () () args taenv t
+                   -> IdGen (ADLabelN Int args, OpenAcc () () Int args taenv t)
 enlabelAccToplevel lhs argsRHS body = do
     argsRHS' <- enlabelAcc TEmpty argsRHS
     let lab = alabelOf argsRHS'
     body' <- enlabelAcc (lpushLHS_parts TEmpty lab TIHere lhs) body
     return (lab, Alet lhs argsRHS' body')
 
-enlabelAcc :: TagVal (AAnyPartLabelN Int) aenv -> OpenAcc aenv () () args t -> IdGen (OpenAcc aenv () Int args t)
+enlabelAcc :: TagVal (AAnyPartLabelN Int) aenv -> OpenAcc aenv () () args taenv t -> IdGen (OpenAcc aenv () Int args taenv t)
 enlabelAcc aenv prog = case prog of
     Aconst lab x -> Aconst <$> genLabNS lab <*> return x
     Apair lab a1 a2 -> Apair <$> genLabN lab <*> enlabelAcc aenv a1 <*> enlabelAcc aenv a2
@@ -211,6 +213,7 @@ enlabelAcc aenv prog = case prog of
     Avar lab var@(A.Var _ idx) _
       | AnyPartLabel pl <- prjT idx aenv ->
           Avar <$> genLabNS lab <*> return var <*> return pl
+    AfreeVar lab var -> AfreeVar <$> genLabNS lab <*> return var
     Aarg lab argsty tidx -> Aarg <$> genLabNS lab <*> return argsty <*> return tidx
     Map _ ELSplit{} _ -> error "Unexpected split Map in enlabelAcc"
     ZipWith _ ELSplit{} _ _ -> error "Unexpected split ZipWith in enlabelAcc"
@@ -227,20 +230,20 @@ enlabelAcc aenv prog = case prog of
       | SomeSplitLambdaAD split@(SplitLambdaAD _ _ _ tmpty _ _) <- splitLambdaAD (snd (labeliseFunA aenv' fun))
       = ELSplit split <$> genIdNodeSingle (ArrayR sht tmpty)
 
-data ABuilder aenv alab args =
+data ABuilder aenv alab args taenv =
     forall aenv'.
         ABuilder (AContext Int aenv')
-                 (forall res. OpenAcc aenv' () () args res
-                           -> OpenAcc aenv () () args res)
+                 (forall res. OpenAcc aenv' () () args taenv res
+                           -> OpenAcc aenv () () args taenv res)
 
-data PrimalResult aenv alab args t =
-    PrimalResult (ABuilder aenv alab args)  -- Primal builder
-                 [Some (ADLabel Int)]       -- To-store "set" (really list)
-                 (TupR (ADLabel Int) t)     -- Env labels of the subtree root
+data PrimalResult aenv alab args taenv t =
+    PrimalResult (ABuilder aenv alab args taenv)  -- Primal builder
+                 [Some (ADLabel Int)]             -- To-store "set" (really list)
+                 (TupR (ADLabel Int) t)           -- Env labels of the subtree root
 
 primal :: AContext Int aenv
-       -> OpenAcc progaenv () Int args t
-       -> IdGen (PrimalResult aenv alab args t)
+       -> OpenAcc progaenv () Int args taenv t
+       -> IdGen (PrimalResult aenv alab args taenv t)
 primal ctx = \case
     Aconst lab value ->
         simplePrimal TLNil ctx lab (\_ lab' _ ->
@@ -409,6 +412,10 @@ primal ctx = \case
         simplePrimal TLNil ctx lab (\ctx' _ _ ->
             smartAvar (untupleA (pickTupR referPart (resolveEnvLabs ctx' (findPrimalBMap ctx' referLab)))))
 
+    AfreeVar lab var ->
+        simplePrimal TLNil ctx lab (\_ lab' _ ->
+            AfreeVar lab' var)
+
     Aarg lab argsty tidx ->
         simplePrimal TLNil ctx lab (\_ lab' _ ->
             Aarg lab' argsty tidx)
@@ -421,8 +428,8 @@ primalProducerFromLambda
     :: AContext Int aenv
     -> SplitLambdaAD t1 t2 () Int () tmp idxadj
     -> (Fun aenv () () () (t1 -> (t2, tmp))
-           -> OpenAcc aenv () () args (Array sh (t2, tmp)))
-    -> OpenAcc aenv () () args (Array sh t2, Array sh tmp)
+           -> OpenAcc aenv () () args taenv (Array sh (t2, tmp)))
+    -> OpenAcc aenv () () args taenv (Array sh t2, Array sh tmp)
 primalProducerFromLambda ctx (SplitLambdaAD primalLambda _ fvlabs _ _ _) buildf =
     let instantiatedLambda = primalLambda (lookupLambdaLabs ctx fvlabs)
         computePrimal = buildf instantiatedLambda
@@ -437,15 +444,15 @@ primalProducerFromLambda ctx (SplitLambdaAD primalLambda _ fvlabs _ _ _) buildf 
                       in smartApair (mapFst var) (mapSnd var))
 
 simplePrimal :: (IsTupleType ArrayR s, GCompare s)
-             => TypedList (OpenAcc progaenv () Int args) argts
+             => TypedList (OpenAcc progaenv () Int args taenv) argts
              -> AContext Int aenv
              -> DLabel NodeLabel s Int t
              -> (forall aenv'.
                     AContext Int aenv'
                  -> DLabel nodeLabel s () t
-                 -> TypedList (OpenAcc aenv' () () args) argts
-                 -> OpenAcc aenv' () () args t)
-             -> IdGen (PrimalResult aenv alab args t)
+                 -> TypedList (OpenAcc aenv' () () args taenv) argts
+                 -> OpenAcc aenv' () () args taenv t)
+             -> IdGen (PrimalResult aenv alab args taenv t)
 simplePrimal args ctx lab buildf =
     runArgs args ctx $ \(ABuilder ctx' f1) stores arglabss -> do
         (Exists lhs, envlabs) <- genSingleIds (toTupleType (labelType lab))
@@ -457,9 +464,9 @@ simplePrimal args ctx lab buildf =
             (enumerateTupR envlabs ++ stores)
             envlabs
   where
-    runArgs :: TypedList (OpenAcc progaenv () Int args) argts
+    runArgs :: TypedList (OpenAcc progaenv () Int args taenv) argts
             -> AContext Int aenv
-            -> (   ABuilder aenv alab args
+            -> (   ABuilder aenv alab args taenv
                 -> [Some (ADLabel Int)]
                 -> TypedList (TupR (ADLabel Int)) argts
                 -> IdGen r)
@@ -475,30 +482,30 @@ simplePrimal args ctx lab buildf =
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
 -- environment (and the bindmap) is needed.
-newtype AdjList lab alab args t =
-    AdjList (forall aenv. AContext alab aenv -> [OpenAcc aenv lab () args t])
+newtype AdjList lab alab args taenv t =
+    AdjList (forall aenv. AContext alab aenv -> [OpenAcc aenv lab () args taenv t])
 
-instance Semigroup (AdjList lab alab args t) where
+instance Semigroup (AdjList lab alab args taenv t) where
     AdjList f1 <> AdjList f2 = AdjList (\ctx -> f1 ctx ++ f2 ctx)
 
-showAdjList :: AContext alab aenv -> AdjList lab alab args t -> String
+showAdjList :: AContext alab aenv -> AdjList lab alab args taenv t -> String
 showAdjList ctx (AdjList f) =
     let len = length (f ctx)
     in "{\\_ -> [" ++ show len ++ " item" ++ (if len == 1 then "" else "s") ++ "]}"
 
-showCMapA :: AContext alab aenv -> DMap (CMapKey ArrayR Int) (AdjList () alab args) -> String
+showCMapA :: AContext alab aenv -> DMap (CMapKey ArrayR Int) (AdjList () alab args taenv) -> String
 showCMapA ctx = showCMap' (showAdjList ctx)
 
-data DualResult aenv alab args =
-    DualResult (ABuilder aenv alab args)      -- Dual builder
-               [Some (ADLabel Int)]           -- To-store "set" (really list): Pair (labelToStore) (shapeReference)
-               (DMap (CMapKey ArrayR Int)     -- Contribution map (only for let-bound things and array indexing)
-                     (AdjList () alab args))
+data DualResult aenv alab args taenv =
+    DualResult (ABuilder aenv alab args taenv)  -- Dual builder
+               [Some (ADLabel Int)]             -- To-store "set" (really list): Pair (labelToStore) (shapeReference)
+               (DMap (CMapKey ArrayR Int)       -- Contribution map (only for let-bound things and array indexing)
+                     (AdjList () alab args taenv))
 
 dual :: AContext Int aenv
-     -> DMap (CMapKey ArrayR Int) (AdjList () Int args)  -- Contribution map
-     -> OpenAcc progaenv () Int args t
-     -> IdGen (DualResult aenv Int args)
+     -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)  -- Contribution map
+     -> OpenAcc progaenv () Int args taenv t
+     -> IdGen (DualResult aenv Int args taenv)
 dual ctx cmap = \case
     Aconst lab _ ->
         return (DualResult (ABuilder ctx id) [] (DMap.delete (Local (tupleLabel' lab)) cmap))
@@ -913,6 +920,9 @@ dual ctx cmap = \case
             [Some envlab0]  -- Store this node! We need to keep the contribution around for the (out-of-this-tree) RHS.
             cmap''
 
+    AfreeVar lab _ ->
+        return (DualResult (ABuilder ctx id) [] (DMap.delete (Local (tupleLabel lab)) cmap))
+
     Aarg lab argsty tidx -> do
         let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         envlab0 <- genSingleId (labelType lab)
@@ -953,8 +963,8 @@ dual ctx cmap = \case
                                          -> OpenExp env aenv' () () () () Int)  -- ^ new inner dimension size
                       -> (forall env aenv'. OpenExp env aenv' () () () () Int
                                          -> OpenExp env aenv' () () () () Int)  -- ^ inner index transformer
-                      -> OpenAcc aenv () () args (Array (sh, Int) t)
-                      -> OpenAcc aenv () () args (Array (sh, Int) t)
+                      -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
+                      -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
     smartInnerPermute sizeExpr indexExpr a
       | TupRsingle ty@(ArrayR shtype _) <- atypeOf a
       , TupRpair tailsht _ <- shapeType shtype
@@ -973,17 +983,17 @@ dual ctx cmap = \case
                    (smartAvar (A.Var ty ZeroIdx)))
     smartInnerPermute _ _ _ = error "impossible GADTs"
 
-    smartTail :: OpenAcc aenv () () args (Array (sh, Int) t) -> OpenAcc aenv () () args (Array (sh, Int) t)
+    smartTail :: OpenAcc aenv () () args taenv (Array (sh, Int) t) -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
     smartTail = smartInnerPermute (\sz -> smartSub numType sz (Const scalarLabel 1))
                                   (\idx -> smartAdd numType idx (Const scalarLabel 1))
 
-    smartInit :: OpenAcc aenv () () args (Array (sh, Int) t) -> OpenAcc aenv () () args (Array (sh, Int) t)
+    smartInit :: OpenAcc aenv () () args taenv (Array (sh, Int) t) -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
     smartInit = smartInnerPermute (\sz -> smartSub numType sz (Const scalarLabel 1))
                                   (\idx -> idx)
 
     smartCons :: (forall env aenv'. OpenExp env aenv' () () () () t)
-              -> OpenAcc aenv () () args (Array (sh, Int) t)
-              -> OpenAcc aenv () () args (Array (sh, Int) t)
+              -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
+              -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
     smartCons prefix a
       | TupRsingle ty@(ArrayR shtype _) <- atypeOf a
       , TupRpair tailsht _ <- shapeType shtype
@@ -1009,11 +1019,11 @@ dual ctx cmap = \case
 simpleArrayDual :: (IsTupleType ArrayR s, Show (s t))
                 => String
                 -> DLabel NodeLabel s Int t
-                -> OpenAcc progaenv () Int args a
+                -> OpenAcc progaenv () Int args taenv a
                 -> AContext Int aenv
-                -> DMap (CMapKey ArrayR Int) (AdjList () Int args)  -- contribmap
-                -> (forall aenv'. AContext Int aenv' -> OpenAcc aenv' () () args a)
-                -> IdGen (DualResult aenv Int args)
+                -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)  -- contribmap
+                -> (forall aenv'. AContext Int aenv' -> OpenAcc aenv' () () args taenv a)
+                -> IdGen (DualResult aenv Int args taenv)
 simpleArrayDual name lab arg ctx cmap contribution = do
     let lab' = tupleLabel lab
         (adjoint, cmap') = collectAdjointCMap cmap (Local lab') (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
@@ -1045,18 +1055,18 @@ matchLamBody (Lam lhs (Body body)) = MatchLamBody lhs body
 matchLamBody _ = error "matchLamBody: function has more than one argument"
 
 unionCMap :: Ord alab
-          => DMap (CMapKey ArrayR alab) (AdjList lab alab args)
-          -> DMap (CMapKey ArrayR alab) (AdjList lab alab args)
-          -> DMap (CMapKey ArrayR alab) (AdjList lab alab args)
+          => DMap (CMapKey ArrayR alab) (AdjList lab alab args taenv)
+          -> DMap (CMapKey ArrayR alab) (AdjList lab alab args taenv)
+          -> DMap (CMapKey ArrayR alab) (AdjList lab alab args taenv)
 unionCMap = DMap.unionWithKey (const (<>))
 
 -- Collect adjoint from the contribution map, and returns the map with this label's entries removed.
-collectAdjointCMap :: DMap (CMapKey ArrayR Int) (AdjList () Int args)
+collectAdjointCMap :: DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
                    -> CMapKey ArrayR Int t
                    -> A.ArrayVars aenv t  -- primal result of the queried-for node
                    -> AContext Int aenv
-                   -> (OpenAcc aenv () () args t
-                      ,DMap (CMapKey ArrayR Int) (AdjList () Int args))
+                   -> (OpenAcc aenv () () args taenv t
+                      ,DMap (CMapKey ArrayR Int) (AdjList () Int args taenv))
 collectAdjointCMap contribmap key pvars ctx
   | AdjList adjgen <- fromMaybe (AdjList (const [])) (DMap.lookup key contribmap)
   = case adjgen ctx of
@@ -1071,9 +1081,9 @@ collectAdjointCMap contribmap key pvars ctx
              (reshapesWithZeros pvars adj, DMap.delete key contribmap)
 
 addContrib :: CMapKey ArrayR Int t
-           -> (forall aenv. AContext Int aenv -> OpenAcc aenv () () args t)
-           -> DMap (CMapKey ArrayR Int) (AdjList () Int args)
-           -> DMap (CMapKey ArrayR Int) (AdjList () Int args)
+           -> (forall aenv. AContext Int aenv -> OpenAcc aenv () () args taenv t)
+           -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
+           -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
 addContrib key gen = DMap.insertWith (<>) key (AdjList (pure . gen))
 
 lookupLambdaLabs :: AContext Int env  -- context
@@ -1094,7 +1104,7 @@ lookupLambdaLabs ctx =
 indexingContributions
     :: ADLabel Int (Array sh idxadj)  -- ^ Env label of the array of index adjoint info tuples
     -> DMap (AAnyPartLabelN Int) (IndexInstantiators idxadj)  -- ^ The indexing instantiator map from SplitLambdaAD
-    -> DMap (CMapKey ArrayR Int) (AdjList () Int args)  -- ^ The contribution map from indexing
+    -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)  -- ^ The contribution map from indexing
 indexingContributions idxadjlab idxInstMap =
     let ArrayR shtype idxadjType = labelType idxadjlab
        -- Note: we need the <> here because while we split the contributions
@@ -1140,9 +1150,9 @@ indexingContributions idxadjlab idxInstMap =
                   backingShapeT = shapeType backingSht])
          | AnyPartLabel (PartLabel backingLab backingPart) :=> IndexInstantiators insts <- DMap.toList idxInstMap]
 
-arrayPlus :: OpenAcc aenv () () args (Array sh t)
-          -> OpenAcc aenv () () args (Array sh t)
-          -> OpenAcc aenv () () args (Array sh t)
+arrayPlus :: OpenAcc aenv () () args taenv (Array sh t)
+          -> OpenAcc aenv () () args taenv (Array sh t)
+          -> OpenAcc aenv () () args taenv (Array sh t)
 -- arrayPlus a1 a2
 --   | TupRsingle arrty@(ArrayR _ ty) <- atypeOf a1
 --   = ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam ty))) a1 a2
@@ -1177,8 +1187,8 @@ arrayPlus a1 a2 = case atypeOf1 a1 of
 
 arraySum :: ArrayR (Array sh t)
          -> A.ArrayVar aenv (Array sh t)  -- primal result
-         -> [OpenAcc aenv () () args (Array sh t)]
-         -> OpenAcc aenv () () args (Array sh t)
+         -> [OpenAcc aenv () () args taenv (Array sh t)]
+         -> OpenAcc aenv () () args taenv (Array sh t)
 arraySum ty@(ArrayR sht _) pvar [] = 
     generateConstantArray ty (Shape (nilLabel (shapeType sht)) (Left pvar))
 arraySum _ _ [a] = a
@@ -1193,8 +1203,8 @@ shapeIsZeroE (ShapeRsnoc sht@(ShapeRsnoc _)) expr =
 
 arraysSum :: ArraysR t
           -> A.ArrayVars aenv t  -- primal result
-          -> [OpenAcc aenv () () args t]
-          -> OpenAcc aenv () () args t
+          -> [OpenAcc aenv () () args taenv t]
+          -> OpenAcc aenv () () args taenv t
 arraysSum TupRunit TupRunit _ = Anil (nilLabel TupRunit)
 arraysSum (TupRsingle ty@ArrayR{}) (TupRsingle pvar) l =
     arraySum ty pvar l
@@ -1204,12 +1214,12 @@ arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) l
 arraysSum ty _ l =
     foldl1 (tupleZipAcc' ty (\_ _ _ -> arrayPlus) (\_ _ -> False)) l
 
-generateConstantArray :: ArrayR (Array sh t) -> Exp aenv () () () () sh -> OpenAcc aenv () () args (Array sh t)
+generateConstantArray :: ArrayR (Array sh t) -> Exp aenv () () () () sh -> OpenAcc aenv () () args taenv (Array sh t)
 generateConstantArray ty@(ArrayR sht eltty) she =
     Generate (nilLabel ty) she
              (ELPlain (Lam (LeftHandSideWildcard (shapeType sht)) (Body (zeroForType eltty))))
 
-emptiesForType :: ArraysR t -> OpenAcc aenv () () args t
+emptiesForType :: ArraysR t -> OpenAcc aenv () () args taenv t
 emptiesForType TupRunit = Anil (nilLabel TupRunit)
 emptiesForType (TupRsingle ty@(ArrayR sht _)) = generateConstantArray ty (zeroForType (shapeType sht))
 emptiesForType (TupRpair t1 t2) = smartApair (emptiesForType t1) (emptiesForType t2)
@@ -1219,15 +1229,15 @@ expGetLam ti ty
   | LetBoundVars lhs vars <- lhsCopy ty
   = Lam lhs (Body (evars (pickTupR ti vars)))
 
-mapGet :: TupleIdx t t' -> OpenAcc aenv () () tenv (Array sh t) -> OpenAcc aenv () () tenv (Array sh t')
+mapGet :: TupleIdx t t' -> OpenAcc aenv () () tenv taenv (Array sh t) -> OpenAcc aenv () () tenv taenv (Array sh t')
 mapGet ti a =
   let TupRsingle (ArrayR sht ty) = atypeOf a
   in Map (nilLabel (ArrayR sht (pickTupR ti ty))) (ELPlain (expGetLam ti ty)) a
 
-mapFst :: OpenAcc aenv () () tenv (Array sh (a, b)) -> OpenAcc aenv () () tenv (Array sh a)
+mapFst :: OpenAcc aenv () () tenv taenv (Array sh (a, b)) -> OpenAcc aenv () () tenv taenv (Array sh a)
 mapFst = mapGet (TILeft TIHere)
 
-mapSnd :: OpenAcc aenv () () tenv (Array sh (a, b)) -> OpenAcc aenv () () tenv (Array sh b)
+mapSnd :: OpenAcc aenv () () tenv taenv (Array sh (a, b)) -> OpenAcc aenv () () tenv taenv (Array sh b)
 mapSnd = mapGet (TIRight TIHere)
 
 plusLam :: TypeR t -> Fun aenv () alab tenv (t -> t -> t)
@@ -1240,7 +1250,7 @@ uncurryFun :: Fun aenv lab alab tenv (a -> b -> c) -> Fun aenv lab alab tenv ((a
 uncurryFun (Lam l1 (Lam l2 (Body e))) = Lam (LeftHandSidePair l1 l2) (Body e)
 uncurryFun _ = error "uncurryFun: impossible GADTs"
 
-oneHotTup :: ArraysR t -> TupleIdx t t' -> A.ArrayVars aenv t -> OpenAcc aenv () () args t' -> OpenAcc aenv () () args t
+oneHotTup :: ArraysR t -> TupleIdx t t' -> A.ArrayVars aenv t -> OpenAcc aenv () () args taenv t' -> OpenAcc aenv () () args taenv t
 oneHotTup _ TIHere _ ex = ex
 oneHotTup ty@(TupRpair ty1 ty2) (TILeft ti) (TupRpair pvars1 pvars2) ex =
     Apair (nilLabel ty) (oneHotTup ty1 ti pvars1 ex) (arraysSum ty2 pvars2 [])
@@ -1327,18 +1337,18 @@ sliceIndexTypeR (SliceFixed sl) = TupRpair (sliceIndexTypeR sl) (TupRsingle scal
 -- 'reshapesWithZeros ref acc' is a computation that produces an array tuple
 -- with the shape of 'ref' and the values of 'acc', where positions without
 -- corresponding original are filled with zeros.
-reshapesWithZeros :: A.ArrayVars aenv t -> OpenAcc aenv () () args t -> OpenAcc aenv () () args t
+reshapesWithZeros :: A.ArrayVars aenv t -> OpenAcc aenv () () args taenv t -> OpenAcc aenv () () args taenv t
 reshapesWithZeros shapeRef subject
   | LetBoundVars lhs subjectVars <- lhsCopy (atypeOf subject)
   = Alet lhs subject
          (reshapesWithZeros' (weakenVars (A.weakenWithLHS lhs) shapeRef) subjectVars)
   where
-    reshapesWithZeros' :: A.ArrayVars aenv t -> A.ArrayVars aenv t -> OpenAcc aenv () () args t
+    reshapesWithZeros' :: A.ArrayVars aenv t -> A.ArrayVars aenv t -> OpenAcc aenv () () args taenv t
     reshapesWithZeros' shapeRef' subjectVars =
         untupleAccs (zipWithTupR (\refvar@(A.Var ArrayR{} _) subjvar -> reshapeWithZeros' refvar subjvar)
                                  shapeRef' subjectVars)
 
-    reshapeWithZeros' :: A.ArrayVar aenv (Array sh t') -> A.ArrayVar aenv (Array sh t) -> OpenAcc aenv () () args (Array sh t)
+    reshapeWithZeros' :: A.ArrayVar aenv (Array sh t') -> A.ArrayVar aenv (Array sh t) -> OpenAcc aenv () () args taenv (Array sh t)
     reshapeWithZeros' shapeRef' subjectVar@(A.Var ty@(ArrayR sht eltty) _)
       | LetBoundVars lhs vars <- lhsCopy (shapeType sht)
       = Generate (nilLabel ty)

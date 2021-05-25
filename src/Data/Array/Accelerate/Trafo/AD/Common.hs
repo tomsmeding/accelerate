@@ -434,6 +434,34 @@ pvalPushLHS (LeftHandSideWildcard _) tv = tv
 pvalPushLHS (LeftHandSideSingle sty) tv = PTPush tv sty
 pvalPushLHS (LeftHandSidePair lhs1 lhs2) tv = pvalPushLHS lhs2 (pvalPushLHS lhs1 tv)
 
+-- If the variable is local within the known portion of the PartialVal, returns
+-- the variable unchanged; else, returns a reference in the topenv of the
+-- PartialVal.
+checkLocalP :: (forall t1 t2. s t1 -> s t2 -> Maybe (t1 :~: t2)) -> Var s env t -> PartialVal s topenv env -> Either (Var s topenv t) (Var s env t)
+checkLocalP _ var PTEmpty = Left var
+checkLocalP match (Var sty ZeroIdx) (PTPush _ sty')
+  | Just Refl <- match sty sty' =
+      Right (Var sty ZeroIdx)
+  | otherwise = error "Idx/env types do not match up in checkLocalP"
+checkLocalP match (Var sty (SuccIdx idx)) (PTPush tagval _) =
+  case checkLocalP match (Var sty idx) tagval of
+    Right (Var sty' idx') -> Right (Var sty' (SuccIdx idx'))
+    Left topvar -> Left topvar
+
+-- Check if the variable can be re-localised under the known part of the
+-- PartialVal. If so, returns the variable with the re-localised environment.
+-- If not, e.g. if it refers to the unknown portion, returns Nothing.
+checkLocalP' :: (forall t1 t2. s t1 -> s t2 -> Maybe (t1 :~: t2)) -> Var s env2 t -> PartialVal s topenv env -> Maybe (Var s env t)
+checkLocalP' _ _ PTEmpty = Nothing
+checkLocalP' match (Var sty ZeroIdx) (PTPush _ sty')
+  | Just Refl <- match sty sty' =
+      Just (Var sty ZeroIdx)
+  | otherwise = Nothing
+checkLocalP' match (Var sty (SuccIdx idx)) (PTPush tagval _)
+  | Just (Var sty' idx') <- checkLocalP' match (Var sty idx) tagval =
+      Just (Var sty' (SuccIdx idx'))
+  | otherwise = Nothing
+
 
 indexIntoLHS :: LeftHandSide s t env env' -> TupleIdx t t' -> Maybe (Idx env' t')
 indexIntoLHS (LeftHandSideWildcard _) _ = Nothing  -- ignored or out of scope

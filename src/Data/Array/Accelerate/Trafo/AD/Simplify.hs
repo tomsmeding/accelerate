@@ -32,7 +32,7 @@ import Data.Array.Accelerate.Trafo.AD.Sink
 -- TODO: This Simplify module is quadratic in the program size.
 
 
-simplifyAcc :: OpenAcc aenv () () args t -> OpenAcc aenv () () args t
+simplifyAcc :: OpenAcc aenv () () args taenv t -> OpenAcc aenv () () args taenv t
 simplifyAcc a = let res = snd (goAcc a SNil)
                 in trace ("simplify input:\n" ++ prettyPrint a) $ trace ("simplify result:\n" ++ prettyPrint res) res
 -- simplifyAcc = snd . flip goAcc SNil
@@ -44,7 +44,7 @@ simplifyExp a = let res = snd (goExp a (SNil, SNil))
 -- simplifyExp = snd . flip goExp (SNil, SNil)
 -- simplifyExp = id
 
-goAcc :: OpenAcc aenv () () args t -> Stats aenv -> (Stats aenv, OpenAcc aenv () () args t)
+goAcc :: OpenAcc aenv () () args taenv t -> Stats aenv -> (Stats aenv, OpenAcc aenv () () args taenv t)
 goAcc = \case
     -- Let rotation
     Alet lhs1 (Alet lhs2 rhs2 bd2) bd1
@@ -68,7 +68,7 @@ goAcc = \case
     Alet lhs@(LeftHandSideSingle ty) a1 a2 ->
       \s -> let (s1, a1') = goAcc a1 s
                 (SPush s2 n, a2') = goAcc a2 (SPush s1 (Finite 0))
-                isAvar :: OpenAcc aenv lab alab args t -> Bool
+                isAvar :: OpenAcc aenv lab alab args taenv t -> Bool
                 isAvar Avar{} = True
                 isAvar _ = False
             in if isAvar a1' || n <= Finite 1 || (n < AccInExp && duplicableAcc a1')
@@ -123,6 +123,7 @@ goAcc = \case
                    -> (s', Alet lhs'' (reprojectA rj a1') (sinkAcc (sinkWithLHSAllowDrop lhs lhs' weakenId) a2'))
     Avar lab var referLab ->
       \s -> (statAddV var (Finite 1) s, Avar lab var referLab)
+    AfreeVar lab var -> returnS $ AfreeVar lab var
 
 goExp' :: OpenExp env aenv () alab args tenv t -> Stats aenv -> (Stats aenv, OpenExp env aenv () alab args tenv t)
 goExp' e s = let ((s', SNil), e') = goExp e (s, SNil) in (s', e')
@@ -241,7 +242,7 @@ simplifyLam1 :: ExpLambda1 aenv () alab tenv sh t1 t2 -> Stats aenv -> (Stats ae
 simplifyLam1 (ELSplit lam lab) = returnS (ELSplit lam lab)
 simplifyLam1 (ELPlain fun) = \s -> ELPlain <$> simplifyFun fun s
 
-duplicableAcc :: OpenAcc aenv lab alab args t -> Bool
+duplicableAcc :: OpenAcc aenv lab alab args taenv t -> Bool
 duplicableAcc Avar{} = True
 duplicableAcc (Replicate _ _ _ a) = duplicableAcc a
 duplicableAcc _ = False
@@ -252,21 +253,21 @@ duplicableExp (Const _ _) = True
 duplicableExp (PrimConst _ _) = True  -- TODO: depending on the backend this might not be true?
 duplicableExp _ = False
 
-data InlinerA aenv aenv' lab alab args =
-    InlinerA { unInlinerA :: forall t. A.ArrayVar aenv t -> OpenAcc aenv' lab alab args t }
+data InlinerA aenv aenv' lab alab args taenv =
+    InlinerA { unInlinerA :: forall t. A.ArrayVar aenv t -> OpenAcc aenv' lab alab args taenv t }
 
-sinkInlinerASucc :: InlinerA aenv aenv' lab () args -> InlinerA (aenv, a) (aenv', a) lab () args
+sinkInlinerASucc :: InlinerA aenv aenv' lab () args taenv -> InlinerA (aenv, a) (aenv', a) lab () args taenv
 sinkInlinerASucc (InlinerA f) =
     InlinerA (\case A.Var ty@ArrayR{} ZeroIdx -> smartAvar (A.Var ty ZeroIdx)
                     A.Var ty (SuccIdx idx) -> sinkAcc (weakenSucc' weakenId) (f (A.Var ty idx)))
 
-sinkInlinerALHS :: A.ALeftHandSide t aenv aenv2 -> A.ALeftHandSide t aenv' aenv2' -> InlinerA aenv aenv' lab () args -> InlinerA aenv2 aenv2' lab () args
+sinkInlinerALHS :: A.ALeftHandSide t aenv aenv2 -> A.ALeftHandSide t aenv' aenv2' -> InlinerA aenv aenv' lab () args taenv -> InlinerA aenv2 aenv2' lab () args taenv
 sinkInlinerALHS (LeftHandSideWildcard _) (LeftHandSideWildcard _) = id
 sinkInlinerALHS (LeftHandSideSingle _) (LeftHandSideSingle _) = sinkInlinerASucc
 sinkInlinerALHS (LeftHandSidePair lhs1 lhs2) (LeftHandSidePair lhs1' lhs2') = sinkInlinerALHS lhs2 lhs2' . sinkInlinerALHS lhs1 lhs1'
 sinkInlinerALHS _ _ = error "sinkInlinerALHS: Unequal LHS's"
 
-inlineA :: InlinerA aenv aenv' lab () args -> OpenAcc aenv lab () args t -> OpenAcc aenv' lab () args t
+inlineA :: InlinerA aenv aenv' lab () args taenv -> OpenAcc aenv lab () args taenv t -> OpenAcc aenv' lab () args taenv t
 inlineA f = \case
     Aconst lab x -> Aconst lab x
     Apair lab a1 a2 -> Apair lab (inlineA f a1) (inlineA f a2)
@@ -291,8 +292,9 @@ inlineA f = \case
       | Exists lhs2 <- rebuildLHS lhs
       -> Alet lhs2 (inlineA f a1) (inlineA (sinkInlinerALHS lhs lhs2 f) a2)
     Avar _ var _ -> unInlinerA f var
+    AfreeVar lab var -> AfreeVar lab var
 
-inlineAE :: InlinerA aenv aenv' lab alab aargs -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv' lab alab args tenv t
+inlineAE :: InlinerA aenv aenv' lab alab aargs taenv -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv' lab alab args tenv t
 inlineAE f = \case
     Const lab x -> Const lab x
     PrimApp lab op e -> PrimApp lab op (inlineAE f e)
@@ -310,18 +312,18 @@ inlineAE f = \case
     Var lab var referLab -> Var lab var referLab
     FreeVar lab var -> FreeVar lab var
   where
-    inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args -> Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)) -> Either (A.ArrayVar aenv' t) (AAnyPartLabelN alab (Array sh e))
+    inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args taenv -> Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)) -> Either (A.ArrayVar aenv' t) (AAnyPartLabelN alab (Array sh e))
     inlineAE_VarOrLab f' (Left var)
       | Avar _ var' _ <- unInlinerA f' var = Left var'
       | otherwise = error ("inlineAE: Non-array-variable inlined in expression: " ++
                               showsAcc (ShowEnv (const "L?") (const "L?") 0 () []) 0 (unInlinerA f' var) "")
     inlineAE_VarOrLab _ (Right lab) = Right lab
 
-inlineAEF :: InlinerA aenv aenv' lab alab args -> OpenFun env aenv lab alab tenv t -> OpenFun env aenv' lab alab tenv t
+inlineAEF :: InlinerA aenv aenv' lab alab args taenv -> OpenFun env aenv lab alab tenv t -> OpenFun env aenv' lab alab tenv t
 inlineAEF f (Lam lhs fun) = Lam lhs (inlineAEF f fun)
 inlineAEF f (Body e) = Body (inlineAE f e)
 
-inlineALam :: InlinerA aenv aenv' lab alab args -> ExpLambda1 aenv lab alab tenv sh t t' -> ExpLambda1 aenv' lab alab tenv sh t  t'
+inlineALam :: InlinerA aenv aenv' lab alab args taenv -> ExpLambda1 aenv lab alab tenv sh t t' -> ExpLambda1 aenv' lab alab tenv sh t  t'
 inlineALam f = fmapPlain (inlineAEF f)
 
 data InlinerE env env' aenv lab alab args tenv =
@@ -398,7 +400,7 @@ pruneLHS (LeftHandSidePair lhs1 lhs2)
         let lhs' = LeftHandSidePair lhs1' lhs2'
         in PrunedLHS lhs' (RjPair (lhsToTupR lhs') rj1 rj2)
 
-reprojectA :: Reprojection ArrayR t t' -> OpenAcc aenv lab () args t -> OpenAcc aenv lab () args t'
+reprojectA :: Reprojection ArrayR t t' -> OpenAcc aenv lab () args taenv t -> OpenAcc aenv lab () args taenv t'
 reprojectA RjNil _ = Anil (nilLabel TupRunit)
 reprojectA (RjKeep _) a = a
 reprojectA rj@(RjFst resty rj1) acc = case acc of

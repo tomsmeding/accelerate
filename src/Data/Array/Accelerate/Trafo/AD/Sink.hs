@@ -45,7 +45,7 @@ sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab alab tenv t -> OpenFun en
 sinkFunAenv k (Lam lhs fun) = Lam lhs (sinkFunAenv k fun)
 sinkFunAenv k (Body e) = Body (sinkExpAenv k e)
 
-sinkAcc :: env A.:> env' -> OpenAcc env lab alab args t -> OpenAcc env' lab alab args t
+sinkAcc :: env A.:> env' -> OpenAcc env lab alab args taenv t -> OpenAcc env' lab alab args taenv t
 sinkAcc _ (Aconst lab x) = Aconst lab x
 sinkAcc k (Apair lab e1 e2) = Apair lab (sinkAcc k e1) (sinkAcc k e2)
 sinkAcc _ (Anil lab) = Anil lab
@@ -68,6 +68,7 @@ sinkAcc k (Alet lhs rhs e)
   | A.Exists lhs' <- rebuildLHS lhs =
       Alet lhs' (sinkAcc k rhs) (sinkAcc (A.sinkWithLHS lhs lhs' k) e)
 sinkAcc k (Avar lab (A.Var sty idx) referLab) = Avar lab (A.Var sty (k A.>:> idx)) referLab
+sinkAcc _ (AfreeVar lab var) = AfreeVar lab var
 sinkAcc _ (Aarg lab argsty tidx) = Aarg lab argsty tidx
 
 aCheckLocal :: A.ArrayVar env t -> TagVal A.ArrayR env2 -> Maybe (A.ArrayVar env2 t)
@@ -135,11 +136,11 @@ efCheckAClosedInTagval tv (Body e) = Body <$> eCheckAClosedInTagval tv e
 -- | If the expression is closed in env, returns the re-typed expression;
 -- otherwise, returns Nothing.
 aCheckClosedInLHS :: A.ALeftHandSide t' () env
-                  -> OpenAcc env2 lab alab args t
-                  -> Maybe (OpenAcc env lab alab args t)
+                  -> OpenAcc env2 lab alab args taenv t
+                  -> Maybe (OpenAcc env lab alab args taenv t)
 aCheckClosedInLHS lhs expr = aCheckClosedInTagval (valPushLHS lhs TEmpty) expr
 
-aCheckClosedInTagval :: TagVal A.ArrayR env2 -> OpenAcc env lab alab args t -> Maybe (OpenAcc env2 lab alab args t)
+aCheckClosedInTagval :: TagVal A.ArrayR env2 -> OpenAcc env lab alab args taenv t -> Maybe (OpenAcc env2 lab alab args taenv t)
 aCheckClosedInTagval tv expr = case expr of
     Aconst lab x -> Just (Aconst lab x)
     Apair lab e1 e2 -> Apair lab <$> aCheckClosedInTagval tv e1 <*> aCheckClosedInTagval tv e2
@@ -163,6 +164,7 @@ aCheckClosedInTagval tv expr = case expr of
       | A.Exists lhs' <- rebuildLHS lhs ->
           Alet lhs' <$> aCheckClosedInTagval tv rhs <*> aCheckClosedInTagval (valPushLHS lhs' tv) e
     Avar lab var referLab -> Avar lab <$> aCheckLocal var tv <*> return referLab
+    AfreeVar lab var -> Just (AfreeVar lab var)
     Aarg lab argsty tidx -> Just (Aarg lab argsty tidx)
 
 valPushLHS :: A.LeftHandSide s t env env' -> TagVal s env -> TagVal s env'

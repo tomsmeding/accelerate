@@ -35,7 +35,7 @@ instance Semigroup Graph where
 instance Monoid Graph where
     mempty = Graph mempty
 
-writeGraphToFile :: FilePath -> A.ALeftHandSide args () aenv -> AD.OpenAcc aenv () () args' t -> IO ()
+writeGraphToFile :: FilePath -> A.ALeftHandSide args () aenv -> AD.OpenAcc aenv () () args' taenv t -> IO ()
 writeGraphToFile fp lhs a =
     let Graph graph = accToGraph lhs a
     in writeFile fp $ unlines $
@@ -46,12 +46,14 @@ writeGraphToFile fp lhs a =
         | (i, (_, edges)) <- Map.assocs graph
         , (j, label) <- edges]
 
-accToGraph :: A.ALeftHandSide args () aenv -> AD.OpenAcc aenv () () args' t -> Graph
+accToGraph :: A.ALeftHandSide args () aenv -> AD.OpenAcc aenv () () args' taenv t -> Graph
 accToGraph lhs acc =
     let labeled = AD.evalIdGen $ enlabelAccToplevel' lhs (AD.tupleIndices (lhsToTupR lhs)) (AD.generaliseArgs acc)
     in go AD.TEmpty labeled
   where
-    go :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.OpenAcc aenv () Int args t -> Graph
+    -- Combine the graph elements for this particular element with the
+    -- recursively generated graph for all the arguments.
+    go :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.OpenAcc aenv () Int args taenv t -> Graph
     go env a = graphFor env a <> case a of
         AD.Aconst _ _ -> mempty
         AD.Apair _ e1 e2 -> go env e1 <> go env e2
@@ -73,9 +75,10 @@ accToGraph lhs acc =
         AD.Aget _ _ e -> go env e
         AD.Alet lhs' rhs e -> go env rhs <> go (AD.lpushLHS_parts env (AD.alabelOf rhs) AD.TIHere lhs') e
         AD.Avar _ _ _ -> mempty
+        AD.AfreeVar _ _ -> mempty
         AD.Aarg _ _ _ -> mempty
 
-    graphFor :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.OpenAcc aenv () Int args t -> Graph
+    graphFor :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.OpenAcc aenv () Int args taenv t -> Graph
     graphFor _ AD.Alet{} = mempty
     graphFor env a =
         let lab = AD.labelLabel (AD.alabelOf a)
@@ -99,7 +102,7 @@ funAdeps :: AD.OpenFun env aenv lab alab tenv t -> [AccDep (Some (AD.ADLabelN al
 funAdeps (AD.Lam _ fun) = funAdeps fun
 funAdeps (AD.Body ex) = expAdeps ex
 
-accAdeps :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.OpenAcc aenv lab Int args t -> [AccDep Int]
+accAdeps :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.OpenAcc aenv lab Int args taenv t -> [AccDep Int]
 accAdeps env = \case
     AD.Aconst _ _ -> []
     AD.Apair _ e1 e2 -> [alo e1, alo e2]
@@ -126,6 +129,7 @@ accAdeps env = \case
     AD.Avar _ (A.Var _ idx) _
       | AD.AnyPartLabel (AD.PartLabel l _) <- AD.prjT idx env
       -> [DepArg (AD.labelLabel l)]
+    AD.AfreeVar _ _ -> []
     AD.Aarg _ _ _ -> []
   where
     expAdeps' :: AD.OpenExp env aenv lab alab args tenv t -> [AccDep alab]
@@ -134,7 +138,7 @@ accAdeps env = \case
     funAdeps' :: AD.OpenFun env aenv lab alab tenv t -> [AccDep alab]
     funAdeps' = map (fmap $ \(Some l) -> AD.labelLabel l) . funAdeps
 
-    alo :: AD.OpenAcc aenv lab alab args t -> AccDep alab
+    alo :: AD.OpenAcc aenv lab alab args taenv t -> AccDep alab
     alo = DepArg . AD.labelLabel . AD.alabelOf
 
 expFold :: Monoid s
@@ -159,18 +163,18 @@ expFold f ex = f ex <> case ex of
     AD.Arg _ _ _ -> mempty
 
 accFold :: Monoid s
-        => (forall aenv' args' t'. AD.OpenAcc aenv' lab alab args' t' -> s)
+        => (forall aenv' args' t'. AD.OpenAcc aenv' lab alab args' taenv t' -> s)
         -> (forall env aenv' args' tenv t'. AD.OpenExp env aenv' lab alab args' tenv t' -> s)
         -> (forall env aenv' tenv t'. AD.OpenFun env aenv' lab alab tenv t' -> s)
-        -> AD.OpenAcc aenv lab alab args t
+        -> AD.OpenAcc aenv lab alab args taenv t
         -> s
 accFold = \f fe ff e -> f e <> recurse (accFold f fe ff) fe ff e
   where
     recurse :: Monoid s
-            => (forall aenv' args' t'. AD.OpenAcc aenv' lab alab args' t' -> s)
+            => (forall aenv' args' t'. AD.OpenAcc aenv' lab alab args' taenv t' -> s)
             -> (forall env aenv' args' tenv t'. AD.OpenExp env aenv' lab alab args' tenv t' -> s)
             -> (forall env aenv' tenv t'. AD.OpenFun env aenv' lab alab tenv t' -> s)
-            -> AD.OpenAcc aenv lab alab args t
+            -> AD.OpenAcc aenv lab alab args taenv t
             -> s
     recurse _ _  _  (AD.Aconst _ _) = mempty
     recurse f _  _  (AD.Apair _ e1 e2) = f e1 <> f e2
@@ -195,9 +199,10 @@ accFold = \f fe ff e -> f e <> recurse (accFold f fe ff) fe ff e
     recurse f _  _  (AD.Aget _ _ e) = f e
     recurse f _  _  (AD.Alet _ rhs e) = f rhs <> f e
     recurse _ _  _  (AD.Avar _ _ _) = mempty
+    recurse _ _  _  (AD.AfreeVar _ _) = mempty
     recurse _ _  _  (AD.Aarg _ _ _) = mempty
 
-accGraphNodeName :: AD.OpenAcc aenv lab alab args t -> String
+accGraphNodeName :: AD.OpenAcc aenv lab alab args taenv t -> String
 accGraphNodeName = \case
     AD.Aconst{} -> "Aconst"
     AD.Apair{} -> "Apair"
@@ -219,6 +224,7 @@ accGraphNodeName = \case
     AD.Aget{} -> "Aget"
     AD.Alet{} -> "Alet"
     AD.Avar{} -> "Avar"
+    AD.AfreeVar{} -> "AfreeVar"
     AD.Aarg{} -> "Aarg"
 
 option :: Monoid a => Maybe a -> a
@@ -228,18 +234,19 @@ option Nothing = mempty
 -- Enlabels a program of the form 'Alet lhs rhs body', where 'rhs' has type
 -- 'args' and the Alet has been broken out into its three components. In
 -- addition to the full program, returns the label of the enlabeled rhs.
--- Compared to the similarly named function in ADAcc.hs, this does _not_ split
--- lambdas.
+--
+-- This does NOT split lambdas! This is the only difference with the similarly
+-- named function in ADAcc.hs.
 enlabelAccToplevel' :: A.ALeftHandSide args () aenv
                     -> TupR (AD.TupleIdx args) args
-                    -> AD.OpenAcc aenv () () args t
-                    -> AD.IdGen (AD.OpenAcc () () Int args t)
+                    -> AD.OpenAcc aenv () () args taenv t
+                    -> AD.IdGen (AD.OpenAcc () () Int args taenv t)
 enlabelAccToplevel' lhs argindices body = do
     BoundArgs aenv buildf <- bindArgs AD.TEmpty lhs (lhsToTupR lhs) argindices
     body' <- enlabelAcc' aenv body
     return (buildf body')
   where
-    enlabelAcc' :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.OpenAcc aenv () () args t -> AD.IdGen (AD.OpenAcc aenv () Int args t)
+    enlabelAcc' :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.OpenAcc aenv () () args taenv t -> AD.IdGen (AD.OpenAcc aenv () Int args taenv t)
     enlabelAcc' aenv prog = case prog of
         AD.Aconst lab x -> AD.Aconst <$> genLabNS lab <*> return x
         AD.Apair lab a1 a2 -> AD.Apair <$> genLabN lab <*> enlabelAcc' aenv a1 <*> enlabelAcc' aenv a2
@@ -265,6 +272,7 @@ enlabelAccToplevel' lhs argindices body = do
         AD.Avar lab var@(A.Var _ idx) _
           | AD.AnyPartLabel pl <- AD.prjT idx aenv ->
               AD.Avar <$> genLabNS lab <*> return var <*> return pl
+        AD.AfreeVar lab var -> AD.AfreeVar <$> genLabNS lab <*> return var
         AD.Aarg lab argsty tidx -> AD.Aarg <$> genLabNS lab <*> return argsty <*> return tidx
         AD.Map _ AD.ELSplit{} _ -> error "Unexpected split Map in enlabelAcc'"
         AD.ZipWith _ AD.ELSplit{} _ _ -> error "Unexpected split ZipWith in enlabelAcc'"
@@ -276,16 +284,16 @@ enlabelAccToplevel' lhs argindices body = do
         genLabNS :: AD.ADLabelNS () t -> AD.IdGen (AD.ADLabelNS Int t)
         genLabNS = AD.genId' . AD.labelType
 
-data BoundArgs aenv aenv2 args =
+data BoundArgs aenv aenv2 args taenv =
     BoundArgs (AD.TagVal (AD.AAnyPartLabelN Int) aenv2)
-              (forall t. AD.OpenAcc aenv2 () Int args t
-                      -> AD.OpenAcc aenv () Int args t)
+              (forall t. AD.OpenAcc aenv2 () Int args taenv t
+                      -> AD.OpenAcc aenv () Int args taenv t)
 
 bindArgs :: AD.TagVal (AD.AAnyPartLabelN Int) aenv
          -> A.ALeftHandSide args aenv aenv2
          -> ArraysR bigargs
          -> TupR (AD.TupleIdx bigargs) args
-         -> AD.IdGen (BoundArgs aenv aenv2 bigargs)
+         -> AD.IdGen (BoundArgs aenv aenv2 bigargs taenv)
 bindArgs aenv (LeftHandSideWildcard _) _ _ =
     return (BoundArgs aenv id)
 bindArgs aenv (LeftHandSideSingle ty@ArrayR{}) argsty (TupRsingle ti) = do

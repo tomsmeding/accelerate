@@ -15,6 +15,7 @@ import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Type
+import qualified Data.Array.Accelerate.Trafo.AD.Acc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
 import Data.Array.Accelerate.Trafo.AD.Debug
@@ -61,7 +62,7 @@ convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
             | let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyExp transBody' else transBody'
             , AD.ReverseADResE lhs2 body' <-
                 AD.reverseAD lhs1 (simplifiedBody `withAlabType` ())
-            , AD.UntranslateResultE lhs3 body'' <- AD.untranslateLHSboundExp lhs2 (AD.simplifyExp body') (Just weakenId) ->
+            , AD.UntranslateResultE lhs3 body'' <- AD.untranslateLHSboundExp lhs2 (AD.simplifyExp body') weakenId ->
                 Let lhs3 arg body''
           Nothing ->
               error "Body of gradientE not a closed expression"
@@ -118,16 +119,17 @@ convertPAcc (Stencil2 r1 r2 ty f b1 a1 b2 a2) =
     Stencil2 r1 r2 ty (convertFun f) (convertBoundary b1) (convertAcc a1) (convertBoundary b2) (convertAcc a2)
 convertPAcc (GradientA _ sty (Alam lhs (Abody body)) arg)
   | ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))) <- sty
-  , Exists lhs' <- rebuildLHS lhs =
-      case AD.aCheckClosedInLHS lhs' (AD.translateAcc body) of
-          Just transBody
-            | let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyAcc transBody else transBody
+  , AD.Alam _ (AD.Abody transBody) <- AD.translateAfun (Alam lhs (Abody body))
+  , Exists lhs1 <- rebuildLHS lhs =
+      case AD.aCheckClosedInLHS lhs1 transBody of
+          Just transBody'
+            | let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyAcc transBody' else transBody'
             , () <- case AD.getConfigVar AD.Graph of
                       "" -> ()
-                      fname -> unsafePerformIO (AD.writeGraphToFile fname lhs' simplifiedBody)
-            , AD.ReverseADResA lhs'' body' <- AD.reverseADA lhs' simplifiedBody
-            , AD.UntranslateResultA lhs''' body'' <- AD.untranslateLHSboundAcc lhs'' (AD.simplifyAcc body') ->
-                Alet lhs''' arg body''
+                      fname -> unsafePerformIO (AD.writeGraphToFile fname lhs1 simplifiedBody)
+            , AD.ReverseADResA lhs2 body' <- AD.reverseADA lhs1 simplifiedBody
+            , AD.UntranslateResultA lhs3 body'' <- AD.untranslateLHSboundAcc lhs2 (AD.simplifyAcc body') weakenId ->
+                Alet lhs3 arg body''
           Nothing ->
               error "Body of gradientA not a closed expression"
   | otherwise =

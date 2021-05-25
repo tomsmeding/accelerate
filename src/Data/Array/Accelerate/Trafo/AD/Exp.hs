@@ -505,34 +505,6 @@ eCheckLocalT match (A.Var sty (A.SuccIdx idx)) (TPush tagval _)
       Just (A.Var sty' (SuccIdx idx'))
   | otherwise = Nothing
 
--- If the variable is local within the known portion of the PartialVal, returns
--- the variable unchanged; else, returns a reference in the topenv of the
--- PartialVal.
-eCheckLocalP :: (forall t1 t2. s t1 -> s t2 -> Maybe (t1 :~: t2)) -> A.Var s env t -> PartialVal s topenv env -> Either (A.Var s topenv t) (A.Var s env t)
-eCheckLocalP _ var PTEmpty = Left var
-eCheckLocalP match (A.Var sty A.ZeroIdx) (PTPush _ sty')
-  | Just Refl <- match sty sty' =
-      Right (A.Var sty A.ZeroIdx)
-  | otherwise = error "Idx/env types do not match up in eCheckLocalP"
-eCheckLocalP match (A.Var sty (A.SuccIdx idx)) (PTPush tagval _) =
-  case eCheckLocalP match (A.Var sty idx) tagval of
-    Right (A.Var sty' idx') -> Right (A.Var sty' (A.SuccIdx idx'))
-    Left topvar -> Left topvar
-
--- Check if the variable can be re-localised under the known part of the
--- PartialVal. If so, returns the variable with the re-localised environment.
--- If not, e.g. if it refers to the unknown portion, returns Nothing.
-eCheckLocalP' :: (forall t1 t2. s t1 -> s t2 -> Maybe (t1 :~: t2)) -> A.Var s env2 t -> PartialVal s topenv env -> Maybe (A.Var s env t)
-eCheckLocalP' _ _ PTEmpty = Nothing
-eCheckLocalP' match (A.Var sty A.ZeroIdx) (PTPush _ sty')
-  | Just Refl <- match sty sty' =
-      Just (A.Var sty A.ZeroIdx)
-  | otherwise = Nothing
-eCheckLocalP' match (A.Var sty (A.SuccIdx idx)) (PTPush tagval _)
-  | Just (A.Var sty' idx') <- eCheckLocalP' match (A.Var sty idx) tagval =
-      Just (A.Var sty' (SuccIdx idx'))
-  | otherwise = Nothing
-
 expALabels :: OpenExp env aenv lab alab args tenv t -> [Some (AAnyPartLabelN alab)]
 expALabels (Const _ _) = []
 expALabels (PrimApp _ _ e) = expALabels e

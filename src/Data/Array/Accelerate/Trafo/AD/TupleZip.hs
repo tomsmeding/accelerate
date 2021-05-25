@@ -49,26 +49,26 @@ type IgnorerExp lab alab =
                  -> Bool
 
 type CombinerAcc m top topaenv lab alab =
-  forall sh t aenv args.
+  forall sh t aenv args taenv.
        ArrayR (Array sh t)
     -> TupleIdx top (Array sh t)
     -> topaenv :> aenv
-    -> OpenAcc aenv lab alab args (Array sh t)
-    -> OpenAcc aenv lab alab args (Array sh t)
-    -> m (OpenAcc aenv lab alab args (Array sh t))
+    -> OpenAcc aenv lab alab args taenv (Array sh t)
+    -> OpenAcc aenv lab alab args taenv (Array sh t)
+    -> m (OpenAcc aenv lab alab args taenv (Array sh t))
 
 type CombinerAcc' top topaenv lab alab =
-  forall sh t aenv args.
+  forall sh t aenv args taenv.
        ArrayR (Array sh t)
     -> TupleIdx top (Array sh t)
     -> topaenv :> aenv
-    -> OpenAcc aenv lab alab args (Array sh t)
-    -> OpenAcc aenv lab alab args (Array sh t)
-    -> OpenAcc aenv lab alab args (Array sh t)
+    -> OpenAcc aenv lab alab args taenv (Array sh t)
+    -> OpenAcc aenv lab alab args taenv (Array sh t)
+    -> OpenAcc aenv lab alab args taenv (Array sh t)
 
 type IgnorerAcc lab alab =
-  forall sh t aenv args.
-    ArrayR (Array sh t) -> OpenAcc aenv lab alab args (Array sh t)
+  forall sh t aenv args taenv.
+    ArrayR (Array sh t) -> OpenAcc aenv lab alab args taenv (Array sh t)
                         -> Bool
 
 class ExprLike s f | f -> s where
@@ -93,10 +93,10 @@ instance ExprLike ScalarType (OpenExpEnv aenv () alab args tenv) where
   sink w = OpenExpEnv . sinkExp w . unExpEnv
 
 -- This type only exists to move the 'aenv' type variable to the end.
-newtype OpenAccEnv lab alab args aenv t =
-  OpenAccEnv { unAccEnv :: OpenAcc aenv lab alab args t }
+newtype OpenAccEnv lab alab args taenv aenv t =
+  OpenAccEnv { unAccEnv :: OpenAcc aenv lab alab args taenv t }
 
-instance ExprLike ArrayR (OpenAccEnv lab () args) where
+instance ExprLike ArrayR (OpenAccEnv lab () args taenv) where
   nil = OpenAccEnv (Anil (nilLabel TupRunit))
   pair (OpenAccEnv e1) (OpenAccEnv e2) = OpenAccEnv (Apair (nilLabel (TupRpair (atypeOf e1) (atypeOf e2))) e1 e2)
   var v@(A.Var ty@ArrayR{} _) = OpenAccEnv (Avar (nilLabel ty) v (PartLabel (nilLabel (TupRsingle ty)) TIHere))
@@ -178,9 +178,9 @@ tupleZipAcc :: Applicative m
             => ArraysR t
             -> CombinerAcc m t aenv lab ()
             -> IgnorerAcc lab ()
-            -> OpenAcc aenv lab () args t
-            -> OpenAcc aenv lab () args t
-            -> m (OpenAcc aenv lab () args t)
+            -> OpenAcc aenv lab () args taenv t
+            -> OpenAcc aenv lab () args taenv t
+            -> m (OpenAcc aenv lab () args taenv t)
 tupleZipAcc ty combine ignore e1 e2 =
   unAccEnv <$> tupleZipGen ty TIHere weakenId
                    (\t@ArrayR{} tidx w (OpenAccEnv x1) (OpenAccEnv x2) -> OpenAccEnv <$> combine t tidx w x1 x2)
@@ -191,8 +191,8 @@ tupleZipAcc ty combine ignore e1 e2 =
 tupleZipAcc' :: ArraysR t
              -> CombinerAcc' t aenv lab ()
              -> IgnorerAcc lab ()
-             -> OpenAcc aenv lab () args t
-             -> OpenAcc aenv lab () args t
-             -> OpenAcc aenv lab () args t
+             -> OpenAcc aenv lab () args taenv t
+             -> OpenAcc aenv lab () args taenv t
+             -> OpenAcc aenv lab () args taenv t
 tupleZipAcc' ty combine' ignore e1 e2 =
   runIdentity $ tupleZipAcc ty (\sty tidx w x1 x2 -> pure (combine' sty tidx w x1 x2)) ignore e1 e2
