@@ -12,10 +12,16 @@ code. Use the @Plain@-suffixed functions for that.
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Array.Accelerate.ForwardAD (
+    -- * Dual numbers
     ADF, -- pattern ADF,
     ADFClasses,
-    variablePlain, constantPlain, valuePlain, derivativePlain,
+    -- * Forward AD
+    forwardAD, forwardADPlain,
+    forwardAD', forwardAD'Plain,
+    -- * Forward AD, alternative style
     variable, constant, value, derivative,
+    variablePlain, constantPlain, valuePlain, derivativePlain,
+    -- * Additional utilities
     -- adfOut, adfIn
     gradientA_FAD_Vector
 ) where
@@ -91,6 +97,31 @@ instance Floating a => Floating (ADF s a) where
 --     round (ADF_ x _) = round x
 --     ceiling (ADF_ x _) = ceiling x
 --     floor (ADF_ x _) = floor x
+
+-- | The plain version of 'forwardAD'.
+forwardADPlain :: (forall s. ADF s a -> ADF s b) -> (a, a) -> (b, b)
+forwardADPlain f (x, d) = let ADF_ y d' = f (ADF_ x d) in (y, d')
+
+-- | Given a function that can compute with dual numbers, an argument and the
+-- tangent (derivative) of that argument, compute the normal function output
+-- value and the tangent of that output value. This is a Jacobian-vector
+-- product.
+forwardAD :: (Elt a, Elt b) => (forall s. Exp (ADF s a) -> Exp (ADF s b)) -> Exp (a, a) -> Exp (b, b)
+forwardAD f (A.T2 x d) = let ADF y d' = f (ADF x d) in A.T2 y d'
+
+-- | The plain version of 'forwardAD''.
+--
+-- > forwardAD'Plain f x = snd (forwardADPlain f (x, 1))
+forwardAD'Plain :: Num a => (forall s. ADF s a -> ADF s b) -> a -> b
+forwardAD'Plain f x = snd (forwardADPlain f (x, 1))
+
+-- | Given a single-argument function that can compute with dual numbers, and
+-- given an argument, compute the derivative of the function evaluated at that
+-- argument. Convenience wrapper of 'forwardAD'.
+--
+-- > forwardAD' f x = snd (forwardAD f (T2 x 1))
+forwardAD' :: (A.Num a, Elt a, Elt b) => (forall s. Exp (ADF s a) -> Exp (ADF s b)) -> Exp a -> Exp b
+forwardAD' f x = A.snd (forwardAD f (A.T2 x 1))
 
 variablePlain :: Num a => a -> ADF s a
 variablePlain x = ADF_ x 1
@@ -183,7 +214,7 @@ type ADFClasses a = (A.Ord a, A.Num a, A.Fractional a, A.Floating a, A.RealFrac 
 -- This function runs on the meta-level (in Haskell, not in Accelerate),
 -- because it must run the Accelerate function multiple times. Because it uses
 -- forward AD, it will in general be very slow (because it executes the
--- function once for each element in the input vector), but it does not rely in
+-- function once for each element in the input vector), but it does not rely on
 -- the reverse AD implementation and can thus be used to test the correctness
 -- of reverse AD.
 --
