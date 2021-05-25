@@ -147,30 +147,29 @@ untranslateLHSboundExp :: A.ELeftHandSide a () env
                        -> UntranslateResultE a env1 aenv t
 untranslateLHSboundExp toplhs topexpr topweak
   | A.Exists toplhs' <- A.rebuildLHS toplhs =
-      UntranslateResultE toplhs' (go topexpr (A.weakenWithLHS toplhs' A..> topweak) (pvalPushLHS toplhs' PTEmpty))
+      UntranslateResultE toplhs' (go (A.weakenWithLHS toplhs' A..> topweak) (pvalPushLHS toplhs' PTEmpty) topexpr)
   where
-    -- TODO: shuffle arguments so that expr is the last instead of the first
-    go :: D.OpenExp env aenv lab alab args tenv t -> tenv A.:> env2 -> PartialVal ScalarType topenv env2 -> A.OpenExp env2 aenv t
-    go expr w pv = case expr of
+    go :: tenv A.:> env2 -> PartialVal ScalarType topenv env2 -> D.OpenExp env aenv lab alab args tenv t -> A.OpenExp env2 aenv t
+    go w pv expr = case expr of
         D.Const lab con -> A.Const (labelType lab) con
-        D.PrimApp _ f e -> A.PrimApp f (go e w pv)
+        D.PrimApp _ f e -> A.PrimApp f (go w pv e)
         D.PrimConst _ c -> A.PrimConst c
         D.Var _ var _ -> A.Evar (fromJust (D.checkLocalP' matchScalarType var pv))
         D.FreeVar _ var -> A.Evar (A.weaken w var)
         D.Let lhs def body
           | A.Exists lhs' <- A.rebuildLHS lhs
-          -> A.Let lhs' (go def w pv) (go body (A.weakenWithLHS lhs' A..> w) (pvalPushLHS lhs' pv))
+          -> A.Let lhs' (go w pv def) (go (A.weakenWithLHS lhs' A..> w) (pvalPushLHS lhs' pv) body)
         D.Nil _ -> A.Nil
-        D.Pair _ e1 e2 -> A.Pair (go e1 w pv) (go e2 w pv)
-        D.Cond _ e1 e2 e3 -> A.Cond (go e1 w pv) (go e2 w pv) (go e3 w pv)
+        D.Pair _ e1 e2 -> A.Pair (go w pv e1) (go w pv e2)
+        D.Cond _ e1 e2 e3 -> A.Cond (go w pv e1) (go w pv e2) (go w pv e3)
         D.Shape _ (Left avar) -> A.Shape avar
         D.Shape _ (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Shape) in array var position"
-        D.Index _ (Left avar) _ e -> A.Index avar (go e w pv)
+        D.Index _ (Left avar) _ e -> A.Index avar (go w pv e)
         D.Index _ (Right _) _ _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position"
-        D.ShapeSize _ sht e -> A.ShapeSize sht (go e w pv)
+        D.ShapeSize _ sht e -> A.ShapeSize sht (go w pv e)
         D.Get _ path e
           | D.LetBoundVars lhs vars <- euntranslateGet (D.etypeOf e) path
-          -> A.Let lhs (go e w pv) (a_evars vars)
+          -> A.Let lhs (go w pv e) (a_evars vars)
         D.Undef lab -> A.Undef (labelType lab)
         D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
 
