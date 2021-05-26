@@ -16,8 +16,8 @@ module Data.Array.Accelerate.ForwardAD (
     ADF, -- pattern ADF,
     ADFClasses,
     -- * Forward AD
-    forwardAD, forwardADPlain,
-    forwardAD', forwardAD'Plain,
+    forwardADA', forwardADE', forwardAD'Plain,
+    forwardADA, forwardADE, forwardADPlain,
     -- * Forward AD, alternative style
     variable, constant, value, derivative,
     variablePlain, constantPlain, valuePlain, derivativePlain,
@@ -26,7 +26,7 @@ module Data.Array.Accelerate.ForwardAD (
     gradientA_FAD_Vector
 ) where
 
-import Data.Array.Accelerate (Generic, Elt, Exp, Acc, Vector, Scalar)
+import Data.Array.Accelerate (Generic, Elt, Exp, Acc, Array, Vector, Scalar, Shape)
 import qualified Data.Array.Accelerate as A
 
 
@@ -106,10 +106,24 @@ forwardADPlain f (x, d) = let ADF_ y d' = f (ADF_ x d) in (y, d')
 -- tangent (derivative) of that argument, compute the normal function output
 -- value and the tangent of that output value. This is a Jacobian-vector
 -- product.
-forwardAD :: (Elt a, Elt b) => (forall s. Exp (ADF s a) -> Exp (ADF s b)) -> Exp (a, a) -> Exp (b, b)
-forwardAD f (A.T2 x d) = let ADF y d' = f (ADF x d) in A.T2 y d'
+forwardADE :: (Elt a, Elt b) => (forall s. Exp (ADF s a) -> Exp (ADF s b)) -> Exp (a, a) -> Exp (b, b)
+forwardADE f (A.T2 x d) = let ADF y d' = f (ADF x d) in A.T2 y d'
 
--- | The plain version of 'forwardAD''.
+-- | Given a function that can compute with dual numbers, an argument and the
+-- tangent (derivative) of that argument, compute the normal function output
+-- value and the tangent of that output value. This is a Jacobian-vector
+-- product.
+--
+-- Array version of 'forwardADE'.
+forwardADA :: (Elt a, Elt b, Shape sh, Shape sh')
+           => (forall s. Acc (Array sh (ADF s a)) -> Acc (Array sh' (ADF s b)))
+           -> Acc (Array sh a, Array sh a) -> Acc (Array sh' b, Array sh' b)
+forwardADA f (A.T2 xs ds) =
+    let res = f (A.zipWith ADF xs ds)
+    in A.T2 (A.map (\(ADF ys _)  -> ys) res)
+            (A.map (\(ADF _ ds') -> ds') res)
+
+-- | The plain version of 'forwardADE''.
 --
 -- > forwardAD'Plain f x = snd (forwardADPlain f (x, 1))
 forwardAD'Plain :: Num a => (forall s. ADF s a -> ADF s b) -> a -> b
@@ -117,11 +131,21 @@ forwardAD'Plain f x = snd (forwardADPlain f (x, 1))
 
 -- | Given a single-argument function that can compute with dual numbers, and
 -- given an argument, compute the derivative of the function evaluated at that
--- argument. Convenience wrapper of 'forwardAD'.
+-- argument. Convenience wrapper of 'forwardADE'.
 --
--- > forwardAD' f x = snd (forwardAD f (T2 x 1))
-forwardAD' :: (A.Num a, Elt a, Elt b) => (forall s. Exp (ADF s a) -> Exp (ADF s b)) -> Exp a -> Exp b
-forwardAD' f x = A.snd (forwardAD f (A.T2 x 1))
+-- > forwardADE' f x = snd (forwardADE f (T2 x 1))
+forwardADE' :: (A.Num a, Elt a, Elt b) => (forall s. Exp (ADF s a) -> Exp (ADF s b)) -> Exp a -> Exp b
+forwardADE' f x = A.snd (forwardADE f (A.T2 x 1))
+
+-- | Given a function taking a single scalar input that can compute with dual
+-- numbers, and given an argument, compute the derivative of the function
+-- evaluated at that argument. Convenience wrapper of 'forwardADA'.
+--
+-- > forwardADA' f x = asnd (forwardADA f (T2 x (unit 1)))
+forwardADA' :: (A.Num a, Elt a, Elt b, Shape sh)
+           => (forall s. Acc (Scalar (ADF s a)) -> Acc (Array sh (ADF s b)))
+           -> Acc (Scalar a) -> Acc (Array sh b)
+forwardADA' f x = A.asnd (forwardADA f (A.T2 x (A.unit 1)))
 
 variablePlain :: Num a => a -> ADF s a
 variablePlain x = ADF_ x 1
@@ -195,7 +219,7 @@ instance (Elt a, Floating a, Floating (Exp a)) => Floating (Exp (ADF s a)) where
     atanh = expADFUnary atanh
 
 instance (RealFrac a, A.RealFrac a) => A.RealFrac (ADF s a) where
-    properFraction _ = error "properFraction unimplemented, the typeclass is not general enough"
+    properFraction _ = error "properFraction on ADF unimplemented, the typeclass is not general enough"
     truncate (ADF x _) = A.truncate x
     round (ADF x _) = A.round x
     ceiling (ADF x _) = A.ceiling x
