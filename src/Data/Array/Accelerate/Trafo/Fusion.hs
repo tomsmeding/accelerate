@@ -1509,7 +1509,7 @@ aletD' embedAcc elimAcc (LeftHandSideSingle ArrayR{}) (Embed env1 cc1) (Embed en
                                                b
           | otherwise                   -> LinearIndex a (cvtE i)
 
-        GradientE t1 t2 f e             -> GradientE t1 t2 (replaceF sh' f' avar f) (replaceE sh' f' avar e)
+        Evjp t1 f e a                   -> Evjp t1 (replaceF sh' f' avar f) (replaceE sh' f' avar e) (replaceE sh' f' avar a)
 
       where
         cvtE :: OpenExp env aenv s -> OpenExp env aenv s

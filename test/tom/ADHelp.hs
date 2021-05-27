@@ -11,6 +11,7 @@ import Data.List (intercalate)
 import qualified Data.List as List
 
 import qualified Data.Array.Accelerate as A
+import qualified Data.Array.Accelerate.ReverseAD as A
 import qualified Data.Array.Accelerate.Interpreter as I
 import Data.Array.Accelerate (Z(..))
 
@@ -40,7 +41,7 @@ runExp f x =
 
 compareAD :: FinDiff a => (A.Exp a -> A.Exp Float) -> (a -> Float) -> a -> IO ()
 compareAD facc fnative x =
-  let res1 = runExp (A.gradientE facc) x
+  let res1 = runExp (A.gradient facc) x
       res2 = [hfindiff (10.0 ** ex) fnative x | ex <- [-3, -4, -5]]
   in do
       putStrLn ("\x1B[1mAccelerate AD: " ++ show res1 ++ "\x1B[0m")

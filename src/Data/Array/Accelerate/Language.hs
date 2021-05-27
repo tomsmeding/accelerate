@@ -88,9 +88,6 @@ module Data.Array.Accelerate.Language (
   acond, awhile,
   cond,  while,
 
-  -- * Automatic differentiation
-  gradientE, gradientA,
-
   -- * Array operations with a scalar result
   (!), (!!), shape, size, shapeSize,
 
@@ -112,7 +109,6 @@ import Data.Array.Accelerate.Sugar.Array                            ( Arrays(..)
 import Data.Array.Accelerate.Sugar.Elt
 import Data.Array.Accelerate.Sugar.Foreign
 import Data.Array.Accelerate.Sugar.Shape                            ( Shape(..), Slice(..), (:.) )
-import qualified Data.Array.Accelerate.Sugar.Shape                  as Shape
 import Data.Array.Accelerate.Type
 import qualified Data.Array.Accelerate.Representation.Array         as R
 
@@ -122,7 +118,7 @@ import Data.Array.Accelerate.Classes.Integral
 import Data.Array.Accelerate.Classes.Num
 import Data.Array.Accelerate.Classes.Ord
 
-import Prelude                                                      ( ($), (.), Maybe(..), Char, error )
+import Prelude                                                      ( ($), (.), Maybe(..), Char )
 
 
 -- $setup
@@ -1344,32 +1340,6 @@ while c f (Exp e) =
   mkExp $ While @(EltR e) (eltR @e)
             (mkCoerce' . unExp . c . Exp)
             (unExp . f . Exp) e
-
-
--- Automatic Differentiation
--- -------------------------
-
-gradientE :: forall t e. (Elt t, Elt e)
-          => (Exp t -> Exp e)
-          -> Exp t
-          -- -> Exp (e, t)
-          -> Exp t
-gradientE f (Exp e) = mkExp $ GradientE @(EltR t) @(EltR e) (eltR @t) (restrictScalars (eltR @e)) (unExp . f . Exp) e
-  where
-    restrictScalars :: TypeR a -> ScalarType a
-    restrictScalars (TupRsingle s) = s
-    restrictScalars _ = error "Function under operator gradientE must return scalar"
-
-gradientA :: forall a t. (Arrays a, Elt t)
-          => (Acc a -> Acc (Array Shape.Z t))
-          -> Acc a
-          -- -> Acc (t, a)
-          -> Acc a
-gradientA = Acc $$ applyAcc $ GradientA (arraysR @a) (arrayR @Shape.Z @t)
-  -- where
-  --   restrictScalars :: TypeR a -> ScalarType a
-  --   restrictScalars (TupRsingle s) = s
-  --   restrictScalars _ = error "Function under operator gradientE must return scalar"
 
 
 -- Array operations with a scalar result

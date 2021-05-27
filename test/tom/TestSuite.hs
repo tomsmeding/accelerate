@@ -25,7 +25,8 @@ import GHC.Stack (HasCallStack)
 import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Data.Bits as A
 import qualified Data.Array.Accelerate.Interpreter as I
-import qualified Data.Array.Accelerate.ForwardAD as ADF
+import qualified Data.Array.Accelerate.ForwardAD as AD
+import qualified Data.Array.Accelerate.ReverseAD as AD
 
 import qualified ADHelp
 import TestSuite.Util
@@ -72,32 +73,32 @@ arraySum = sum . A.toList
 -- This is not a typeclass because the types don't work out.
 gradientFwdAD :: (HasCallStack, Shape sh)
               => A.Array sh Float
-              -> (forall a. ADF.ADFClasses a => A.Acc (A.Array sh a) -> A.Acc (A.Scalar a))
+              -> (forall a. AD.ADFClasses a => A.Acc (A.Array sh a) -> A.Acc (A.Scalar a))
               -> A.Array sh Float
 gradientFwdAD input func =
   A.fromList (A.arrayShape input)
-             [ADF.derivativePlain $ (`A.linearIndexArray` 0) $ I.run1 func $
+             [AD.derivativePlain $ (`A.linearIndexArray` 0) $ I.run1 func $
                  A.fromFunction (A.arrayShape input)
                                 (\j -> let x = input `A.indexArray` j
-                                       in if j == idx then ADF.variablePlain x
-                                                      else ADF.constantPlain x)
+                                       in if j == idx then AD.variablePlain x
+                                                      else AD.constantPlain x)
              | idx <- enumShape (A.arrayShape input)]
 
 gradientFwdAD2 :: (Shape sh1, Shape sh2)
                => (A.Array sh1 Float, A.Array sh2 Float)
-               -> (forall a. ADF.ADFClasses a => A.Acc (A.Array sh1 a) -> A.Acc (A.Array sh2 a) -> A.Acc (A.Scalar a))
+               -> (forall a. AD.ADFClasses a => A.Acc (A.Array sh1 a) -> A.Acc (A.Array sh2 a) -> A.Acc (A.Scalar a))
                -> (A.Array sh1 Float, A.Array sh2 Float)
 gradientFwdAD2 (input1, input2) func =
   let grad =
-        [ADF.derivativePlain $ (`A.linearIndexArray` 0) $ I.runN func
+        [AD.derivativePlain $ (`A.linearIndexArray` 0) $ I.runN func
             (A.fromFunction (A.arrayShape input1)
                             (\j -> let x = input1 `A.indexArray` j
-                                   in if Left j == eidx then ADF.variablePlain x
-                                                        else ADF.constantPlain x))
+                                   in if Left j == eidx then AD.variablePlain x
+                                                        else AD.constantPlain x))
             (A.fromFunction (A.arrayShape input2)
                             (\j -> let x = input2 `A.indexArray` j
-                                   in if Right j == eidx then ADF.variablePlain x
-                                                         else ADF.constantPlain x))
+                                   in if Right j == eidx then AD.variablePlain x
+                                                         else AD.constantPlain x))
         | eidx <- disjointUnion (enumShape (A.arrayShape input1))
                                 (enumShape (A.arrayShape input2))]
       (pre, post) = splitAt (A.arraySize input1) grad
@@ -122,14 +123,14 @@ checkApproxEqual aGrad aControl =
   in do footnote ("approx-equality diffs: " ++ show diffs)
         when (not correct) $ diff aControl (\_ _ -> False) aGrad >> failure
 
-compareADE :: Gen (A.Vector Float) -> (forall a. ADF.ADFClasses a => A.Exp a -> A.Exp a) -> Property
+compareADE :: Gen (A.Vector Float) -> (forall a. AD.ADFClasses a => A.Exp a -> A.Exp a) -> Property
 compareADE gen f = compareAD' nil gen $ \() a -> A.sum (A.map f a)
 
-compareAD' :: (Show e, Shape sh) => Gen e -> Gen (A.Array sh Float) -> (forall a. ADF.ADFClasses a => e -> A.Acc (A.Array sh a) -> A.Acc (A.Scalar a)) -> Property
+compareAD' :: (Show e, Shape sh) => Gen e -> Gen (A.Array sh Float) -> (forall a. AD.ADFClasses a => e -> A.Acc (A.Array sh a) -> A.Acc (A.Scalar a)) -> Property
 compareAD' egen gen func = withShrinks 10 $ property $ do
   expval <- forAll egen
   arr <- forAll gen
-  let revadResult = I.run1 (A.gradientA (func expval)) arr
+  let revadResult = I.run1 (AD.gradientA (func expval)) arr
       fwdadResult = gradientFwdAD arr (func expval)
       (_, fdResult) = findiff (func expval) arr
   checkApproxEqual revadResult fwdadResult
@@ -141,13 +142,13 @@ compareAD'2 :: (Show e, Shape sh1, Shape sh2)
             => Gen e
             -> Gen (A.Array sh1 Float)
             -> Gen (A.Array sh2 Float)
-            -> (forall a. ADF.ADFClasses a => e -> A.Acc (A.Array sh1 a) -> A.Acc (A.Array sh2 a) -> A.Acc (A.Scalar a))
+            -> (forall a. AD.ADFClasses a => e -> A.Acc (A.Array sh1 a) -> A.Acc (A.Array sh2 a) -> A.Acc (A.Scalar a))
             -> Property
 compareAD'2 egen gen1 gen2 func = withShrinks 10 $ property $ do
   expval <- forAll egen
   arr1 <- forAll gen1
   arr2 <- forAll gen2
-  let revadResult = I.run1 (A.gradientA (\(A.T2 a1 a2) -> func expval a1 a2)) (arr1, arr2)
+  let revadResult = I.run1 (AD.gradientA (\(A.T2 a1 a2) -> func expval a1 a2)) (arr1, arr2)
       fwdadResult = gradientFwdAD2 (arr1, arr2) (func expval)
       (_, fdResult) = findiff (\(A.T2 a1 a2) -> func expval a1 a2) (arr1, arr2)
   checkApproxEqual revadResult fwdadResult
@@ -557,6 +558,22 @@ prop_cond_4 = compareADE sized_vec $ \x ->
 
 prop_ignore_argument :: Property
 prop_ignore_argument = compareADE sized_vec $ \_ -> 42.0
+
+-- Check that the derivative of the composition of two functions is equal to
+-- the composition of their derivative functions.
+prop_vjp :: Property
+prop_vjp = property $ do
+  a1 <- forAll genFloat
+  a2 <- forAll genFloat
+  let f :: A.Exp (Float, Float) -> A.Exp (Float, Float)
+      f (A.T2 x y) = A.T2 (A.sin x * A.cos y) (x * (y + 1) + x / 2)
+      g :: A.Exp (Float, Float) -> A.Exp Float
+      g (A.T2 x y) = 2 * x + 3 * y - x * y
+      arg = (a1, a2)
+      runE func arg' = I.run1 (A.unit . func . (A.! A.Z_)) (A.fromList A.Z [arg']) `A.linearIndexArray` 0
+      transform (x, y) = A.fromList (A.Z A.:. (2 :: Int)) [x, y]
+  checkApproxEqual (transform $ runE (\arg' -> AD.gradient (g . f) arg') arg)
+                   (transform $ runE (\arg' -> AD.reverseAD f arg' (AD.gradient g (f arg'))) arg)
 
 
 -- Main and driver

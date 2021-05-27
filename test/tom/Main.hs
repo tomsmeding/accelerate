@@ -6,6 +6,7 @@ module Main where
 
 import Control.Monad
 import qualified Data.Array.Accelerate as A
+import qualified Data.Array.Accelerate.ReverseAD as A
 import qualified Data.Array.Accelerate.Interpreter as I
 import Data.Array.Accelerate (Z(..), (:.)(..), All(..))
 import System.CPUTime
@@ -36,7 +37,7 @@ logistic = do
   let theta = (A.fromList Z [-1.2], A.fromList (Z :. 2) [2, 1])
   print (Logistic.loglikelihood Logistic.dataset theta)
   print (I.run (Logistic.loglikelihoodAcc (A.use Logistic.dataset) (A.use theta)))
-  -- print (I.run (A.map (A.gradientE id) (A.use (A.fromList Z [1.0 :: Float]))))
+  -- print (I.run (A.map (A.gradient id) (A.use (A.fromList Z [1.0 :: Float]))))
 
 optimise :: IO ()
 optimise = do
@@ -198,41 +199,42 @@ adtest = do
                (\x -> let (y, z)   =      (log (x * x),  log x) in y * z + z * y)
                5
 
-  print $ I.run (A.unit (A.gradientE @Float (\x -> x * x + x) 4))
+  print $ I.run (A.unit (A.gradient @Float (\x -> x * x + x) 4))
 
 adtest2 :: IO ()
 adtest2 = do
-  print (I.run (A.map (A.gradientE (\x -> x * x))
+  print (I.run (A.map (A.gradient (\x -> x * x))
                       (A.generate (A.index1 15) (\i -> A.toFloating @Int @Float (A.unindex1 i)))))
 
 adtest3 :: IO ()
 adtest3 = do
-  print $ I.run (A.unit (A.gradientE @Float (\x -> A.toFloating @Int @Float (A.round x * 2)) 3))
-  print $ I.run (A.map (A.gradientE @Float (\x -> A.cond (x A.> 0) (x + 1) (x * 2)))
+  print $ I.run (A.unit (A.gradient @Float (\x -> A.toFloating @Int @Float (A.round x * 2)) 3))
+  print $ I.run (A.map (A.gradient @Float (\x -> A.cond (x A.> 0) (x + 1) (x * 2)))
                        (A.use (A.fromList (Z :. (11 :: Int)) [-5..5])))
-  print . I.run . A.unit $ A.gradientE (\(A.T2 x i) -> x * A.toFloating (i `div` 2)) (A.T2 (42 :: A.Exp Float) (3 :: A.Exp Int))
+  print . I.run . A.unit $ A.gradient (\(A.T2 x i) -> x * A.toFloating (i `div` 2)) (A.T2 (42 :: A.Exp Float) (3 :: A.Exp Int))
 
 adtest4 :: IO ()
 adtest4 = do
-  let prog = A.gradientE @Float (\x -> let a = 2 * x
-                                           y = A.cond (x A.<= 2) (a + 1) (2 * a - 1)
-                                       in y * a)
-                                3
+  let prog = A.gradient @Float (\x -> let a = 2 * x
+                                          y = A.cond (x A.<= 2) (a + 1) (2 * a - 1)
+                                      in y * a)
+                               3
   print prog
 
 adtestFree :: IO ()
 adtestFree = do
-  print $ I.run (A.map (let c = 1.0 in (c +) . A.gradientE @Float (\x -> c * x))
+  print $ I.run (A.map (let c = 1.0 in (c +) . A.gradient @Float (\x -> c * x))
                        (A.use (A.fromList (Z :. (1 :: Int)) [1.0])))
 
   -- This still fails, because free variables in gradientA are not yet implemented.
+  -- TODO: they now are! Retest?
   -- print $ I.run (let sharedArr = A.use (A.fromList @_ @Float (Z :. (1 :: Int)) [1.0])
   --                    arr1 = A.use (A.fromList @_ @Float (Z :. (1 :: Int)) [2.0])
   --                in A.zipWith (+) sharedArr (A.gradientA (A.sum . A.zipWith (*) sharedArr) arr1))
 
 adtuple1 :: IO ()
 adtuple1 = do
-  print . I.run . A.unit $ A.gradientE @Float
+  print . I.run . A.unit $ A.gradient @Float
     (\x -> let swap (A.T2 a b) = A.T2 b a
                swap _ = undefined
                x1 = A.T2 (A.T2 x (2 * x)) (3 * x)
@@ -244,7 +246,7 @@ adtuple1 = do
 
 adtuple2 :: IO ()
 adtuple2 = do
-  print . I.run . A.unit $ A.gradientE @Float
+  print . I.run . A.unit $ A.gradient @Float
     (\x -> let swap (A.T2 a b) = A.T2 b a
                swap _ = undefined
                x1 = A.cond (x A.> 0) (A.T2 3 4) (A.T2 1 2) :: A.Exp (Float, Float)
@@ -258,7 +260,7 @@ adtuple2 = do
 adtuple3 :: IO ()
 adtuple3 = do
   print . I.run $
-    A.map (A.gradientE @Float
+    A.map (A.gradient @Float
                 (\x -> let A.T2 a b = A.cond (x A.> 0) (A.T2 x 2) (A.T2 x 3) :: A.Exp (Float, Float)
                        in a * b))
           (A.use (A.fromList (Z :. (5 :: Int)) [-3, -2, 0, 2, 3]))

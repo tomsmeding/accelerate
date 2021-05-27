@@ -644,16 +644,21 @@ data OpenExp env aenv t where
                 -> OpenExp env aenv dim
                 -> OpenExp env aenv Int
 
-  -- Take the automatic derivative of the expression (of type F^n -> F, for some scalar type F).
-  -- Note that the function under the gradient operator must be closed, i.e. not have free variables.
-  -- Note the return type of this operator; (((), e), t) is the representation
-  -- type of (e', t'), if e and t are the representation types of e' and t'.
-  GradientE     :: TypeR t
-                -> ScalarType e
-                -> OpenFun env aenv (t -> e)  -- TJS: should be closed, but GHC doesn't like me
-                -> OpenExp env aenv t
-                -- -> OpenExp env aenv (((), e), t)
-                -> OpenExp env aenv t
+  -- Take the automatic derivative of the expression (of type F^n -> F^m, for
+  -- some scalar type F). 'Evjp f x a' computes the derivative of \xi with
+  -- respect to x, assuming that 'a' is the derivative of \xi with respect to
+  -- 'f x'.
+  -- Alternatively, this computes a linear combination of the rows of the
+  -- Jacobian of 'f' at 'x', where the coefficients of said linear combination
+  -- are given by 'a'.
+  -- Note the return type of this operator; (((), t'), t) is the representation
+  -- type of (s', s), if t' and t are the representation types of s' and s.
+  Evjp     :: TypeR t
+           -> OpenFun env aenv (t -> t')
+           -> OpenExp env aenv t
+           -> OpenExp env aenv t'
+           -- -> OpenExp env aenv (((), t'), t)
+           -> OpenExp env aenv t
 
   -- Unsafe operations (may fail or result in undefined behaviour)
   -- An unspecified bit pattern
@@ -857,7 +862,7 @@ expType = \case
   ShapeSize{}                  -> TupRsingle scalarTypeInt
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
-  GradientE ty _ _ _           -> ty
+  Evjp ty _ _ _                -> ty
 
 primConstType :: PrimConst a -> SingleType a
 primConstType = \case
@@ -1113,7 +1118,7 @@ rnfOpenExp topExp =
     Shape a                   -> rnfArrayVar a
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
-    GradientE tp t f e        -> rnfTypeR tp `seq` rnfScalarType t `seq` rnfF f `seq` rnfE e
+    Evjp tp f e a             -> rnfTypeR tp `seq` rnfF f `seq` rnfE e `seq` rnfE a
 
 rnfExpVar :: ExpVar env t -> ()
 rnfExpVar = rnfVar rnfScalarType
@@ -1335,7 +1340,7 @@ liftOpenExp pexp =
     Shape a                   -> [|| Shape $$(liftArrayVar a) ||]
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
-    GradientE tp t f e        -> [|| GradientE $$(liftTypeR tp) $$(liftScalarType t) $$(liftF f) $$(liftE e) ||]
+    Evjp tp f e a             -> [|| Evjp $$(liftTypeR tp) $$(liftF f) $$(liftE e) $$(liftE a) ||]
 
 liftELeftHandSide :: ELeftHandSide t env env' -> Q (TExp (ELeftHandSide t env env'))
 liftELeftHandSide = liftLeftHandSide liftScalarType
@@ -1481,4 +1486,4 @@ showExpOp LinearIndex{}     = "LinearIndex"
 showExpOp Shape{}           = "Shape"
 showExpOp ShapeSize{}       = "ShapeSize"
 showExpOp Coerce{}          = "Coerce"
-showExpOp GradientE{}       = "GradientE"
+showExpOp Evjp{}            = "Evjp"

@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.AD (
   convertExp, convertAccEntry, convertAfunEntry
 ) where
@@ -19,13 +20,15 @@ import qualified Data.Array.Accelerate.Trafo.AD.Acc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
 import Data.Array.Accelerate.Trafo.AD.Debug
+import qualified Data.Array.Accelerate.Trafo.AD.Common as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Config as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Graph as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Simplify as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
-import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
+import Data.Array.Accelerate.Trafo.Substitution (weakenE, rebuildLHS)
+import Data.Array.Accelerate.Trafo.Var
 
 
 convertExp :: OpenExp env aenv e -> OpenExp env aenv e
@@ -53,21 +56,32 @@ convertExp (Shape var) = Shape var
 convertExp (ShapeSize shr e) = ShapeSize shr (convertExp e)
 convertExp (Undef ty) = Undef ty
 convertExp (Coerce t1 t2 e) = Coerce t1 t2 (convertExp e)
-convertExp (GradientE _ sty (Lam lhs (Body body)) arg)
-  | SingleScalarType (NumSingleType (FloatingNumType TypeFloat)) <- sty
-  , AD.Lam _ (AD.Body transBody) <- AD.translateFun (Lam lhs (Body body))
-  , Exists lhs1 <- rebuildLHS lhs =
-      case AD.eCheckClosedInLHS lhs1 transBody of
-          Just transBody'
-            | let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyExp transBody' else transBody'
-            , AD.ReverseADResE lhs2 body' <-
-                AD.reverseAD lhs1 (simplifiedBody `withAlabType` ())
-            , AD.UntranslateResultE lhs3 body'' <- AD.untranslateLHSboundExp lhs2 (AD.simplifyExp body') weakenId ->
-                Let lhs3 arg body''
-          Nothing ->
-              error "Body of gradientE not a closed expression"
-  | otherwise =
-      error "gradientE expression must produce Float, other types currently unsupported"
+convertExp (Evjp _ (Lam lhs (Body body)) (convertExp -> arg) (convertExp -> adj))
+  -- Target is to replace the Evjp with an expression of the following form:
+  --   let _ = adj
+  --   in let _ = arg
+  --      in gradient_body
+  -- We do this because we wish to have the 'let _ = arg in gradient_body' form
+  -- that comes out of AD, but we also wish to be able to pass 'adj' to AD
+  -- without having to translate it to the AD AST. Hence we bind it and pass a
+  -- tuple of FreeVar nodes to AD.
+
+  -- First declare variables for the adjoint...
+  | DeclareVars adjlhs _ adjvarsgen <- declareVars (expType adj)
+  -- ... and we construct the tuple of FreeVar nodes that will be bound to this LHS.
+  , let adj' = AD.untupleExps $ AD.fmapTupR (\var@(Var ty _) -> AD.FreeVar (AD.nilLabel ty) var) (adjvarsgen weakenId)
+  -- Then we translate the original function, after shifting it under the new adjoint let binding;
+  -- the result is suspended under adjlhs and lhs1.
+  , AD.Lam lhs1 (AD.Body transBody) <- AD.translateFun (weakenE (weakenWithLHS adjlhs) $ Lam lhs (Body body))
+  -- Possibly we simplify beforehand, depending on config.
+  , let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyExp transBody else transBody
+  -- Then we do the actual differentiation on the simplified body; the result is suspended under
+  -- adjlhs and lhs2.
+  , AD.ReverseADResE lhs2 body' <- AD.reverseAD lhs1 (simplifiedBody `withAlabType` ()) adj'
+  -- Finally we translate back to the main AST, suspending under adjlhs and lhs3.
+  , AD.UntranslateResultE lhs3 body'' <- AD.untranslateLHSboundExp lhs2 (AD.simplifyExp body') weakenId
+  -- Thus we construct the result.
+  = Let adjlhs adj $ Let lhs3 (weakenE (weakenWithLHS adjlhs) arg) body''
   where
     withAlabType :: AD.OpenExp env aenv lab alab args tenv t -> alab -> AD.OpenExp env aenv lab alab args tenv t
     withAlabType = const

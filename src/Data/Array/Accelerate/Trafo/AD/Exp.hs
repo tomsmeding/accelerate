@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -504,6 +505,36 @@ eCheckLocalT match (A.Var sty (A.SuccIdx idx)) (TPush tagval _)
   | Just (A.Var sty' idx') <- eCheckLocalT match (A.Var sty idx) tagval =
       Just (A.Var sty' (SuccIdx idx'))
   | otherwise = Nothing
+
+freeifyVars :: OpenExp tenv aenv lab alab args tenv t -> OpenExp env' aenv lab alab args tenv t
+freeifyVars = freeifyVars' A.weakenId
+
+freeifyVars' :: env A.:> tenv -> OpenExp env aenv lab alab args tenv t -> OpenExp env' aenv lab alab args tenv t
+freeifyVars' _ (Const lab x) = Const lab x
+freeifyVars' w (PrimApp lab op e) = PrimApp lab op (freeifyVars' w e)
+freeifyVars' _ (PrimConst lab c) = PrimConst lab c
+freeifyVars' w (Pair lab e1 e2) = Pair lab (freeifyVars' w e1) (freeifyVars' w e2)
+freeifyVars' _ (Nil lab) = Nil lab
+freeifyVars' w (Cond lab c t e) = Cond lab (freeifyVars' w c) (freeifyVars' w t) (freeifyVars' w e)
+freeifyVars' _ (Shape lab var) = Shape lab var
+freeifyVars' w (Index lab var execLab idx) = Index lab var execLab (freeifyVars' w idx)
+freeifyVars' w (ShapeSize lab sht e) = ShapeSize lab sht (freeifyVars' w e)
+freeifyVars' w (Get lab ti e) = Get lab ti (freeifyVars' w e)
+freeifyVars' _ (Undef lab) = Undef lab
+freeifyVars' w (Let lhs rhs e)
+  | Exists lhs' <- A.rebuildLHS lhs =
+      Let lhs' (freeifyVars' w rhs) (freeifyVars' (weakenSkipLHS lhs w) e)
+freeifyVars' w (Var lab (A.Var sty idx) _) = FreeVar lab (A.Var sty (w A.>:> idx))
+freeifyVars' _ (FreeVar lab var) = FreeVar lab var
+freeifyVars' _ (Arg lab argsty tidx) = Arg lab argsty tidx
+
+weakenSkipLHS :: LeftHandSide s t env env2 -> env A.:> env3 -> env2 A.:> env3
+weakenSkipLHS (LeftHandSideWildcard _) w = w
+weakenSkipLHS (LeftHandSideSingle _) w =
+    A.Weaken (\case ZeroIdx -> error "weakenSkipLHS: Variable reference to this LHS"
+                    SuccIdx i -> w A.>:> i)
+weakenSkipLHS (LeftHandSidePair lhs1 lhs2) w =
+    weakenSkipLHS lhs2 (weakenSkipLHS lhs1 w)
 
 expALabels :: OpenExp env aenv lab alab args tenv t -> [Some (AAnyPartLabelN alab)]
 expALabels (Const _ _) = []

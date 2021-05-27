@@ -168,9 +168,10 @@ data ReverseADResE aenv alab tenv t =
 
 reverseAD :: Show alab
           => ELeftHandSide t () env
-          -> OpenExp env aenv () alab () tenv Float
+          -> OpenExp env aenv () alab () tenv t'
+          -> OpenExp tenv aenv () alab () tenv t'
           -> ReverseADResE aenv alab tenv t
-reverseAD paramlhs expr = evalIdGen $ do
+reverseAD paramlhs expr adjexpr = evalIdGen $ do
     let paramty = lhsToTupR paramlhs
         argsRHS = untupleExps
                       (zipWithTupR (\ty tidx -> Arg (nilLabel ty) paramty tidx)
@@ -184,7 +185,8 @@ reverseAD paramlhs expr = evalIdGen $ do
     PrimalResult (EBuilder primalCtx primalBuilder) _ _ <-
         primal (Context LEmpty mempty) expr'
 
-    let cmap0 = DMap.singleton (Local (elabelOf expr')) (AdjList (\_ -> [Const scalarLabel 1.0]))
+    let cmap0 = DMap.singleton (Local (elabelOf expr'))
+                               (AdjList (\_ -> [freeifyVars (generaliseArgs adjexpr)]))
     DualResult (EBuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx cmap0 expr'
     let (gradient, _) = collectAdjointCMap dualCMap (Argument paramty) dualCtx
 

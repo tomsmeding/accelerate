@@ -444,7 +444,7 @@ prettyOpenExp ctx env aenv exp =
     LinearIndex arr ix    -> ppF2 (Operator "!!"         Infix L 9) (ppA arr) (ppE ix)
     Coerce _ tp x         -> ppF1 (Operator (withTypeRep tp "coerce") App L 10) (ppE x)
     Undef tp              -> withTypeRep tp "undef"
-    GradientE _ _ f e     -> ppF2 "gradientE"   (ppF f) (ppE e)
+    Evjp _ f e a          -> ppF3 "evjp"        (ppF f) (ppE e) (ppE a)
 
   where
     ppE :: OpenExp env aenv e -> Context -> Adoc

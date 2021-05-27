@@ -338,7 +338,7 @@ encodeOpenExp exp =
     ShapeSize _ sh              -> intHost $(hashQ "ShapeSize")   <> travE sh
     Foreign _ _ f e             -> intHost $(hashQ "Foreign")     <> travF f  <> travE e
     Coerce _ tp e               -> intHost $(hashQ "Coerce")      <> encodeScalarType tp <> travE e
-    GradientE tp t f e          -> intHost $(hashQ "GradientE")   <> encodeTypeR tp <> encodeScalarType t <> travF f  <> travE e
+    Evjp tp f e a               -> intHost $(hashQ "Evjp")        <> encodeTypeR tp <> travF f <> travE e <> travE a
 
 encodeArrayVar :: ArrayVar aenv a -> Builder
 encodeArrayVar (Var repr v) = encodeArrayType repr <> encodeIdx v

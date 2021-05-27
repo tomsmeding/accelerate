@@ -1,5 +1,7 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
@@ -30,9 +32,88 @@ import qualified Data.Array.Accelerate.Trafo.AD.Acc as D
 import qualified Data.Array.Accelerate.Trafo.AD.Additive as D (zeroForType)
 import qualified Data.Array.Accelerate.Trafo.AD.Common as D
 import Data.Array.Accelerate.Trafo.AD.Common (labelType, magicLabel, nilLabel, scalarLabel)
-import Data.Array.Accelerate.Trafo.AD.Common (PartialVal(..), pvalPushLHS)
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as D
 
+
+-- Partial environments
+-- --------------------
+--
+-- The point of these partial environments is that the top of the reified
+-- enviroment is not (), but instead a tracked type variable. PartialVal' has
+-- two synchronous tracked type-level environments because we need to do
+-- translation between differing top environments at some point.
+
+data PartialVal' s topenv env env2 where
+    PTEmpty :: PartialVal' s topenv topenv env2
+    PTPush :: PartialVal' s topenv env env2 -> s t -> PartialVal' s topenv (env, t) (env2, t)
+
+type PartialVal s topenv env = PartialVal' s topenv env env
+
+data PushedLHS prf s t topenv env' env2 =
+    forall env2'.
+        PushedLHS (A.LeftHandSide s t env2 env2') (PartialVal' s topenv env' env2') (FMaybe prf (env' :~: env2'))
+
+-- Fixed Maybe: the branch is fixed by its type
+data FMaybe (b :: Bool) a where
+    FJust    :: a -> FMaybe 'True a
+    FNothing ::      FMaybe 'False a
+
+pvalPushLHS' :: A.LeftHandSide s t env env' -> PartialVal' s topenv env env2 -> FMaybe prf (env :~: env2) -> PushedLHS prf s t topenv env' env2
+pvalPushLHS' toplhs toppv FNothing = pvalPushLHS'1 toplhs toppv
+  where
+    pvalPushLHS'1 :: A.LeftHandSide s t env env' -> PartialVal' s topenv env env2 -> PushedLHS 'False s t topenv env' env2
+    pvalPushLHS'1 (A.LeftHandSideWildcard ty) pv = PushedLHS (A.LeftHandSideWildcard ty) pv FNothing
+    pvalPushLHS'1 (A.LeftHandSideSingle sty) pv = PushedLHS (A.LeftHandSideSingle sty) (PTPush pv sty) FNothing
+    pvalPushLHS'1 (A.LeftHandSidePair lhs1 lhs2) pv
+      | PushedLHS lhs1' pv1 FNothing <- pvalPushLHS'1 lhs1 pv
+      , PushedLHS lhs2' pv2 FNothing <- pvalPushLHS'1 lhs2 pv1
+      = PushedLHS (A.LeftHandSidePair lhs1' lhs2') pv2 FNothing
+pvalPushLHS' toplhs toppv (FJust topprf) = pvalPushLHS'2 toplhs toppv topprf
+  where
+    pvalPushLHS'2 :: A.LeftHandSide s t env env' -> PartialVal' s topenv env env2 -> env :~: env2 -> PushedLHS 'True s t topenv env' env2
+    pvalPushLHS'2 (A.LeftHandSideWildcard ty) pv Refl = PushedLHS (A.LeftHandSideWildcard ty) pv (FJust Refl)
+    pvalPushLHS'2 (A.LeftHandSideSingle sty) pv Refl = PushedLHS (A.LeftHandSideSingle sty) (PTPush pv sty) (FJust Refl)
+    pvalPushLHS'2 (A.LeftHandSidePair lhs1 lhs2) pv prf
+      | PushedLHS lhs1' pv1 (FJust prf1) <- pvalPushLHS'2 lhs1 pv prf
+      , PushedLHS lhs2' pv2 prf2 <- pvalPushLHS'2 lhs2 pv1 prf1
+      = PushedLHS (A.LeftHandSidePair lhs1' lhs2') pv2 prf2
+
+pvalPushLHS :: A.LeftHandSide s t env env' -> PartialVal s topenv env -> PartialVal s topenv env'
+pvalPushLHS lhs pv
+  | PushedLHS _ pv' (FJust Refl) <- pvalPushLHS' lhs pv (FJust Refl)
+  = pv'
+
+-- If the variable is local within the known portion of the PartialVal, returns
+-- the variable unchanged; else, returns a reference in the topenv of the
+-- PartialVal.
+checkLocalP' :: (forall t1 t2. s t1 -> s t2 -> Maybe (t1 :~: t2)) -> A.Var s env t -> PartialVal' s topenv env env2 -> Either (A.Var s topenv t) (A.Var s env2 t)
+checkLocalP' _ var PTEmpty = Left var
+checkLocalP' match (A.Var sty A.ZeroIdx) (PTPush _ sty')
+  | Just Refl <- match sty sty' =
+      Right (A.Var sty A.ZeroIdx)
+  | otherwise = error "Idx/env types do not match up in checkLocalP'"
+checkLocalP' match (A.Var sty (A.SuccIdx idx)) (PTPush tagval _) =
+  case checkLocalP' match (A.Var sty idx) tagval of
+    Right (A.Var sty' idx') -> Right (A.Var sty' (A.SuccIdx idx'))
+    Left topvar -> Left topvar
+
+-- Check if the variable can be re-localised under the known part of the
+-- PartialVal. If so, returns the variable with the re-localised environment.
+-- If not, e.g. if it refers to the unknown portion, returns Nothing.
+checkLocalPFallible :: (forall t1 t2. s t1 -> s t2 -> Maybe (t1 :~: t2)) -> A.Var s env2 t -> PartialVal s topenv env -> Maybe (A.Var s env t)
+checkLocalPFallible _ _ PTEmpty = Nothing
+checkLocalPFallible match (A.Var sty A.ZeroIdx) (PTPush _ sty')
+  | Just Refl <- match sty sty' =
+      Just (A.Var sty A.ZeroIdx)
+  | otherwise = Nothing
+checkLocalPFallible match (A.Var sty (A.SuccIdx idx)) (PTPush tagval _)
+  | Just (A.Var sty' idx') <- checkLocalPFallible match (A.Var sty idx) tagval =
+      Just (A.Var sty' (A.SuccIdx idx'))
+  | otherwise = Nothing
+
+
+-- Translate implementation
+-- ------------------------
 
 translateAfun :: A.OpenAfun aenv t -> D.OpenAfun aenv () () aenv t
 translateAfun = translateAfunInPVal PTEmpty
@@ -42,7 +123,7 @@ translateAfunInPVal pv (A.Alam lhs fun) = D.Alam lhs (translateAfunInPVal (pvalP
 translateAfunInPVal pv (A.Abody e) =
   let vartrans :: PartialVal ArrayR taenv aenv -> A.ArrayVar aenv t -> D.OpenAcc aenv () () args taenv t
       vartrans pv' var@(A.Var ArrayR{} _) =
-        case D.checkLocalP matchArrayR var pv' of
+        case checkLocalP' matchArrayR var pv' of
           Right var'@(A.Var _ _) -> D.smartAvar var'
           Left topvar@(A.Var ty _) -> D.AfreeVar (nilLabel ty) topvar
   in D.Abody (translateAccInPVal vartrans pv e)
@@ -103,38 +184,45 @@ translateAccInPVal vt pv (A.OpenAcc expr) = case expr of
     isZeroConstant (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) 0 = True
     isZeroConstant _ _ = False
 
-translateFun :: A.OpenFun env aenv t -> D.OpenFun env aenv () alab env t
+translateFun :: A.OpenFun env aenv t -> D.OpenFun topenv aenv () alab env t
 translateFun = translateFunInPVal PTEmpty
 
-translateFunInPVal :: PartialVal ScalarType tenv env -> A.OpenFun env aenv t -> D.OpenFun env aenv () alab tenv t
-translateFunInPVal pv (A.Lam lhs fun) = D.Lam lhs (translateFunInPVal (pvalPushLHS lhs pv) fun)
+translateFunInPVal :: PartialVal' ScalarType tenv env env2 -> A.OpenFun env aenv t -> D.OpenFun env2 aenv () alab tenv t
+translateFunInPVal pv (A.Lam lhs fun)
+  | PushedLHS lhs' pv' _ <- pvalPushLHS' lhs pv FNothing
+  = D.Lam lhs' (translateFunInPVal pv' fun)
 translateFunInPVal pv (A.Body e) =
-  let vartrans pv' var = case D.checkLocalP matchScalarType var pv' of
-                           Right var'@(A.Var _ _) -> D.smartVar var'
-                           Left topvar@(A.Var ty _) -> D.FreeVar (nilLabel ty) topvar
-  in D.Body (translateExpInPVal vartrans pv e)
+  let vartrans _ pv' var = case checkLocalP' matchScalarType var pv' of
+                             Right var'@(A.Var _ _) -> D.smartVar var'
+                             Left topvar@(A.Var ty _) -> D.FreeVar (nilLabel ty) topvar
+  in D.Body (translateExpInPVal vartrans pv FNothing e)
 
 translateExp :: A.OpenExp env aenv t -> D.OpenExp env aenv () alab args env t
-translateExp = translateExpInPVal (\_ var -> D.smartVar var) PTEmpty
+translateExp = translateExpInPVal (\(FJust Refl) _ var -> D.smartVar var) PTEmpty (FJust Refl)
 
-translateExpInPVal :: (forall env' t'. PartialVal ScalarType tenv env'
+translateExpInPVal :: (forall env' env2' t'.
+                          FMaybe prf (env' :~: env2')
+                       -> PartialVal' ScalarType tenv env' env2'
                        -> A.ExpVar env' t'
-                       -> D.OpenExp env' aenv () alab args tenv t')
-                   -> PartialVal ScalarType tenv env
+                       -> D.OpenExp env2' aenv () alab args tenv t')
+                   -> PartialVal' ScalarType tenv env env2
+                   -> FMaybe prf (env :~: env2)
                    -> A.OpenExp env aenv t
-                   -> D.OpenExp env aenv () alab args tenv t
-translateExpInPVal vt pv expr = case expr of
+                   -> D.OpenExp env2 aenv () alab args tenv t
+translateExpInPVal vt pv prf expr = case expr of
     A.Const ty con -> D.Const (nilLabel ty) con
-    A.PrimApp f e -> D.PrimApp (nilLabel (A.expType expr)) f (translateExpInPVal vt pv e)
+    A.PrimApp f e -> D.PrimApp (nilLabel (A.expType expr)) f (translateExpInPVal vt pv prf e)
     A.PrimConst c -> D.PrimConst (nilLabel (SingleScalarType (A.primConstType c))) c
-    A.Evar var -> vt pv var
-    A.Let lhs def body -> D.Let lhs (translateExpInPVal vt pv def) (translateExpInPVal vt (pvalPushLHS lhs pv) body)
+    A.Evar var -> vt prf pv var
+    A.Let lhs def body
+      | PushedLHS lhs' pv' prf' <- pvalPushLHS' lhs pv prf
+      -> D.Let lhs' (translateExpInPVal vt pv prf def) (translateExpInPVal vt pv' prf' body)
     A.Nil -> D.Nil magicLabel
-    A.Cond c t e -> D.Cond (nilLabel (A.expType t)) (translateExpInPVal vt pv c) (translateExpInPVal vt pv t) (translateExpInPVal vt pv e)
-    A.Pair e1 e2 -> D.Pair (nilLabel (A.expType expr)) (translateExpInPVal vt pv e1) (translateExpInPVal vt pv e2)
+    A.Cond c t e -> D.Cond (nilLabel (A.expType t)) (translateExpInPVal vt pv prf c) (translateExpInPVal vt pv prf t) (translateExpInPVal vt pv prf e)
+    A.Pair e1 e2 -> D.Pair (nilLabel (A.expType expr)) (translateExpInPVal vt pv prf e1) (translateExpInPVal vt pv prf e2)
     A.Shape var@(A.Var (ArrayR sht _) _) -> D.Shape (nilLabel (shapeType sht)) (Left var)
-    A.Index var@(A.Var (ArrayR _ ty) _) e -> D.Index (nilLabel ty) (Left var) scalarLabel (translateExpInPVal vt pv e)
-    A.ShapeSize sht e -> D.ShapeSize scalarLabel sht (translateExpInPVal vt pv e)
+    A.Index var@(A.Var (ArrayR _ ty) _) e -> D.Index (nilLabel ty) (Left var) scalarLabel (translateExpInPVal vt pv prf e)
+    A.ShapeSize sht e -> D.ShapeSize scalarLabel sht (translateExpInPVal vt pv prf e)
     A.Undef ty -> D.Undef (nilLabel ty)
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
 
@@ -154,7 +242,8 @@ untranslateLHSboundExp toplhs topexpr topweak
         D.Const lab con -> A.Const (labelType lab) con
         D.PrimApp _ f e -> A.PrimApp f (go w pv e)
         D.PrimConst _ c -> A.PrimConst c
-        D.Var _ var _ -> A.Evar (fromJust (D.checkLocalP' matchScalarType var pv))
+        -- TODO: Don't use a fallible call here, perhaps something with the double-tracking of PartialVal' ?
+        D.Var _ var _ -> A.Evar (fromJust (checkLocalPFallible matchScalarType var pv))
         D.FreeVar _ var -> A.Evar (A.weaken w var)
         D.Let lhs def body
           | A.Exists lhs' <- A.rebuildLHS lhs
@@ -187,7 +276,8 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Const lab con -> A.Const (labelType lab) con
         D.PrimApp _ f e -> A.PrimApp f (go e pv)
         D.PrimConst _ c -> A.PrimConst c
-        D.Var _ var _ -> A.Evar (fromJust (D.checkLocalP' matchScalarType var pv))
+        -- TODO: Don't use a fallible call here, perhaps something with the double-tracking of PartialVal' ?
+        D.Var _ var _ -> A.Evar (fromJust (checkLocalPFallible matchScalarType var pv))
         D.FreeVar _ _ -> internalError "AD.untranslateLHSboundExpA: Unexpected free expression variable in array code"
         D.Let lhs def body
           | A.Exists lhs' <- A.rebuildLHS lhs
@@ -195,9 +285,9 @@ untranslateLHSboundExpA toplhs topexpr arrpv
         D.Nil _ -> A.Nil
         D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
         D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
-        D.Shape _ (Left avar) -> A.Shape (fromJust (D.checkLocalP' matchArrayR avar arrpv))
+        D.Shape _ (Left avar) -> A.Shape (fromJust (checkLocalPFallible matchArrayR avar arrpv))
         D.Shape _ (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
-        D.Index _ (Left avar) _ e -> A.Index (fromJust (D.checkLocalP' matchArrayR avar arrpv)) (go e pv)
+        D.Index _ (Left avar) _ e -> A.Index (fromJust (checkLocalPFallible matchArrayR avar arrpv)) (go e pv)
         D.Index _ (Right _) _ _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
         D.ShapeSize _ sht e -> A.ShapeSize sht (go e pv)
         D.Get _ path e
@@ -261,7 +351,7 @@ untranslateLHSboundAcc toplhs topexpr topweak
     go :: taenv A.:> aenv2 -> PartialVal ArrayR topenv aenv2 -> D.OpenAcc aenv lab args alab taenv t -> A.OpenAcc aenv2 t
     go w pv expr = A.OpenAcc $ case expr of
         D.Aconst lab con -> A.Use (D.labelType lab) con
-        D.Avar _ var _ -> A.Avar (fromJust (D.checkLocalP' matchArrayR var pv))
+        D.Avar _ var _ -> A.Avar (fromJust (checkLocalPFallible matchArrayR var pv))
         D.AfreeVar _ var -> A.Avar (A.weaken w var)
         D.Alet lhs def body
           | A.Exists lhs' <- A.rebuildLHS lhs

@@ -3,6 +3,7 @@ module Playground.Neural where
 -- import qualified Prelude as P
 import Prelude (IO, print)
 import Data.Array.Accelerate
+import Data.Array.Accelerate.ReverseAD
 
 
 -- This module explores the program in notes-neural-1layer*.txt. This program results from the following program:

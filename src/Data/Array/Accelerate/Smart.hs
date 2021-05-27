@@ -586,11 +586,11 @@ data PreSmartExp acc exp t where
                 -> exp x
                 -> PreSmartExp acc exp y
 
-  GradientE     :: TypeR t
-                -> ScalarType e
-                -> (SmartExp t -> exp e)
+  Evjp          :: TypeR t
+                -> (SmartExp t -> exp t')
                 -> exp t
-                -- -> PreSmartExp acc exp (((), e), t)
+                -> exp t'
+                -- -> PreSmartExp acc exp (((), t'), t)
                 -> PreSmartExp acc exp t
 
   Undef         :: ScalarType t
@@ -884,7 +884,7 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Foreign tp _ _ _                -> tp
     Undef tp                        -> TupRsingle tp
     Coerce _ tp _                   -> TupRsingle tp
-    GradientE t _ _ _               -> t
+    Evjp t _ _ _                    -> t
 
 
 -- Smart constructors
@@ -1379,4 +1379,5 @@ showPreExpOp Shape{}        = "Shape"
 showPreExpOp ShapeSize{}    = "ShapeSize"
 showPreExpOp Foreign{}      = "Foreign"
 showPreExpOp Coerce{}       = "Coerce"
+showPreExpOp Evjp{}             = "Evjp"
 

@@ -781,7 +781,7 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
           ShapeSize shr e       -> AST.ShapeSize shr (cvt e)
           Foreign repr ff f e   -> AST.Foreign repr ff (convertSmartFun config (typeR e) f) (cvt e)
           Coerce t1 t2 e        -> AST.Coerce t1 t2 (cvt e)
-          GradientE tp t f e    -> AST.GradientE tp t (cvtFun1 tp f) (cvt e)
+          Evjp tp f e a         -> AST.Evjp tp (cvtFun1 tp f) (cvt e) (cvt a)
 
     cvtPrj :: forall a b c env1 aenv1. PairIdx (a, b) c -> AST.OpenExp env1 aenv1 (a, b) -> AST.OpenExp env1 aenv1 c
     cvtPrj PairIdxLeft  (AST.Pair a _) = a
@@ -1876,10 +1876,11 @@ makeOccMapSharingExp config accOccMap expOccMap = travE
                                       (e', h) <- travE lvl e
                                       return  (Foreign tp ff f e', h+1)
             Coerce t1 t2 e      -> travE1 (Coerce t1 t2) e
-            GradientE tp t f e  -> do
+            Evjp tp f e a       -> do
                                       (f', h1) <- traverseFun1 lvl tp f
                                       (e', h2) <- travE lvl e
-                                      return (GradientE tp t f' e', h1 `max` h2 + 1)
+                                      (a', h3) <- travE lvl a
+                                      return (Evjp tp f' e' a', h1 `max` h2 `max` h3 + 1)
 
       where
         traverseAcc :: HasCallStack => Level -> SmartAcc arrs -> IO (UnscopedAcc arrs, Int)
@@ -2793,10 +2794,11 @@ determineScopesSharingExp config accOccMap expOccMap = scopesExp
           ShapeSize shr e       -> travE1 (ShapeSize shr) e
           Foreign tp ff f e     -> travE1 (Foreign tp ff f) e
           Coerce t1 t2 e        -> travE1 (Coerce t1 t2) e
-          GradientE tp t f e    -> let
+          Evjp tp f e a         -> let
                                      (f', accCount1) = scopesFun1 f
                                      (e', accCount2) = scopesExp e
-                                   in reconstruct (GradientE tp t f' e') (accCount1 +++ accCount2)
+                                     (a', accCount3) = scopesExp a
+                                   in reconstruct (Evjp tp f' e' a') (accCount1 +++ accCount2 +++ accCount3)
       where
         travE1 :: HasCallStack
                => (ScopedExp a -> PreSmartExp ScopedAcc ScopedExp t)

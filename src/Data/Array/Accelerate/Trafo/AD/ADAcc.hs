@@ -740,7 +740,7 @@ dual ctx cmap = \case
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
                             Alet (LeftHandSideSingle (labelType envlab1))
-                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody) of
+                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody) (Const scalarLabel 1.0) of
                                     ADExp.ReverseADResE lambdalhs' dualbody ->
                                         -- let sc = init (scanl f x0 a)
                                         -- in zipWith (*) (zipWith D₂f sc a)
@@ -802,7 +802,7 @@ dual ctx cmap = \case
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
                             Alet (LeftHandSideSingle (labelType envlab1))
-                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody) of
+                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody) (Const scalarLabel 1.0) of
                                     ADExp.ReverseADResE lambdalhs' dualbody ->
                                         -- let sc = init (scanl1 f a)
                                         -- in zipWith (*) ([1] ++ zipWith D₂f sc (tail l))

@@ -7,6 +7,7 @@
 module Neural where
 
 import qualified Data.Array.Accelerate as A
+import qualified Data.Array.Accelerate.ReverseAD as A
 import Data.Array.Accelerate (pattern Z_, pattern (::.))
 
 import Neural.Help
