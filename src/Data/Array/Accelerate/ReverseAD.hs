@@ -57,7 +57,7 @@ areverseAD = Acc $$$ applyAcc $ Avjp (arraysR @a)
 
 -- | A special case of 'areverseAD' that works only for functions that return a single scalar, floating-point value.
 --
--- > gradient f x = reverseAD f x (constant 1)
+-- > agradient f x = areverseAD f x (unit (constant 1))
 --
 -- Note: The restriction to a floating-point result is technically unnecessary,
 -- but returning an integral value would always produce a zero gradient, which
