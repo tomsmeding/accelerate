@@ -51,7 +51,7 @@ learnSingle :: A.Arrays a => Network A.Acc a -> A.Acc RowBatch -> A.Acc RowBatch
 learnSingle net input expectedOutput =
     let learnRate = 0.05
         A.T3 contribution' _ _ =
-          A.gradientA (\(A.T3 lnet input' expectedOutput') ->
+          A.agradient (\(A.T3 lnet input' expectedOutput') ->
                           let net' = unliftNetwork net lnet
                               output = forward net' input'
                              -- loss = 1/2 (out - expected) ∙ (out - expected)

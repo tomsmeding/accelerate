@@ -14,13 +14,13 @@ import Data.Array.Accelerate.Analysis.Match (matchConst)
 
 
 class IsAdditive s where
-    zeroForType' :: (forall a. Num a => a) -> s t -> OpenExp env aenv () alab args tenv t
-    expPlus :: s t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t
+    zeroForType' :: (forall a. Num a => a) -> s t -> OpenExp env aenv () alab args tenv taenv t
+    expPlus :: s t -> OpenExp env aenv () alab args tenv taenv t -> OpenExp env aenv () alab args tenv taenv t -> OpenExp env aenv () alab args tenv taenv t
 
-    zeroForType :: s t -> OpenExp env aenv () alab args tenv t
+    zeroForType :: s t -> OpenExp env aenv () alab args tenv taenv t
     zeroForType = zeroForType' 0
 
-    expSum :: s t -> [OpenExp env aenv () alab args tenv t] -> OpenExp env aenv () alab args tenv t
+    expSum :: s t -> [OpenExp env aenv () alab args tenv taenv t] -> OpenExp env aenv () alab args tenv taenv t
     expSum ty [] = zeroForType ty
     expSum ty es = foldl1 (expPlus ty) es
 

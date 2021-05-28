@@ -149,7 +149,7 @@ mutations f g = go id
 
 aCompareAD :: AFinDiff a => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> IO ()
 aCompareAD facc x =
-  let res1 = I.run1 (A.gradientA facc) x
+  let res1 = I.run1 (A.agradient facc) x
       afdr = afindiffPerform facc x
       absdiffs xref xcmp = fdfmap (\[xr, xc] -> abs (xc - xr)) [xref, xcmp]
   in do

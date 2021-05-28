@@ -180,7 +180,7 @@ manifest config (OpenAcc pacc) =
     Atrace msg a1 a2        -> Atrace msg (manifest config a1) (manifest config a2)
     Apply repr f a          -> apply repr (cvtAF f) (manifest config a)
     Aforeign repr ff f a    -> Aforeign repr ff (cvtAF f) (manifest config a)
-    GradientA t1 t2 f a     -> GradientA t1 t2 (cvtAF f) (manifest config a)
+    Avjp t1 f a b           -> Avjp t1 (cvtAF f) (manifest config a) (manifest config b)
 
     -- Producers
     -- ---------
@@ -373,7 +373,7 @@ embedPreOpenAcc config matchAcc embedAcc elimAcc pacc
     Atrace msg a1 a2    -> done $ Atrace msg (cvtA a1) (cvtA a2)
     Aforeign aR ff f a  -> done $ Aforeign aR ff (cvtAF f) (cvtA a)
     -- Collect s           -> collectD s
-    GradientA t1 t2 f a -> done $ GradientA t1 t2 (cvtAF f) (cvtA a)
+    Avjp t1 f a b       -> done $ Avjp t1 (cvtAF f) (cvtA a) (cvtA b)
 
     -- Array injection
     Avar v              -> done $ Avar v
@@ -1572,7 +1572,7 @@ aletD' embedAcc elimAcc (LeftHandSideSingle ArrayR{}) (Embed env1 cc1) (Embed en
         Stencil s t f x a       -> Stencil s t (cvtF f) (cvtB x) (cvtA a)
         Stencil2 s1 s2 t f x a y b
                                 -> Stencil2 s1 s2 t (cvtF f) (cvtB x) (cvtA a) (cvtB y) (cvtA b)
-        GradientA t1 t2 f a     -> GradientA t1 t2 (cvtAF f) (cvtA a)
+        Avjp t1 f a b           -> Avjp t1 (cvtAF f) (cvtA a) (cvtA b)
         -- Collect seq             -> Collect (cvtSeq seq)
 
       where

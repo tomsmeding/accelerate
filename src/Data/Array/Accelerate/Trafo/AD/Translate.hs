@@ -115,114 +115,142 @@ checkLocalPFallible match (A.Var sty (A.SuccIdx idx)) (PTPush tagval _)
 -- Translate implementation
 -- ------------------------
 
-translateAfun :: A.OpenAfun aenv t -> D.OpenAfun aenv () () aenv t
+translateAfun :: A.OpenAfun aenv t -> D.OpenAfun topaenv () () aenv t
 translateAfun = translateAfunInPVal PTEmpty
 
-translateAfunInPVal :: PartialVal ArrayR taenv aenv -> A.OpenAfun aenv t -> D.OpenAfun aenv () () taenv t
-translateAfunInPVal pv (A.Alam lhs fun) = D.Alam lhs (translateAfunInPVal (pvalPushLHS lhs pv) fun)
+translateAfunInPVal :: PartialVal' ArrayR taenv aenv aenv2 -> A.OpenAfun aenv t -> D.OpenAfun aenv2 () () taenv t
+translateAfunInPVal pv (A.Alam lhs fun)
+  | PushedLHS lhs' pv' _ <- pvalPushLHS' lhs pv FNothing
+  = D.Alam lhs' (translateAfunInPVal pv' fun)
 translateAfunInPVal pv (A.Abody e) =
-  let vartrans :: PartialVal ArrayR taenv aenv -> A.ArrayVar aenv t -> D.OpenAcc aenv () () args taenv t
-      vartrans pv' var@(A.Var ArrayR{} _) =
+  let vartrans :: FMaybe prf (aenv :~: aenv2) -> PartialVal' ArrayR taenv aenv aenv2 -> A.ArrayVar aenv t -> Either (A.ArrayVar aenv2 t) (A.ArrayVar taenv t)
+      vartrans _ pv' var@(A.Var ArrayR{} _) =
         case checkLocalP' matchArrayR var pv' of
-          Right var'@(A.Var _ _) -> D.smartAvar var'
-          Left topvar@(A.Var ty _) -> D.AfreeVar (nilLabel ty) topvar
-  in D.Abody (translateAccInPVal vartrans pv e)
+          Right var' -> Left var'
+          Left topvar -> Right topvar
+  in D.Abody (translateAccInPVal vartrans pv FNothing e)
 
 translateAcc :: A.OpenAcc aenv t -> D.OpenAcc aenv () () args aenv t
-translateAcc = translateAccInPVal (\_ var@(A.Var ArrayR{} _) -> D.smartAvar var) PTEmpty
+translateAcc = translateAccInPVal (\(FJust Refl) _ var@(A.Var ArrayR{} _) -> Left var) PTEmpty (FJust Refl)
 
-translateAccInPVal :: (forall aenv' t'. PartialVal ArrayR taenv aenv'
+translateAccInPVal :: forall aenv aenv2 taenv args t prf.
+                      (forall aenv' aenv2' t'.
+                          FMaybe prf (aenv' :~: aenv2')
+                       -> PartialVal' ArrayR taenv aenv' aenv2'
                        -> A.ArrayVar aenv' t'
-                       -> D.OpenAcc aenv' () () args taenv t')
-                   -> PartialVal ArrayR taenv aenv
+                       -> Either (A.ArrayVar aenv2' t') (A.ArrayVar taenv t'))
+                   -> PartialVal' ArrayR taenv aenv aenv2
+                   -> FMaybe prf (aenv :~: aenv2)
                    -> A.OpenAcc aenv t
-                   -> D.OpenAcc aenv () () args taenv t
-translateAccInPVal vt pv (A.OpenAcc expr) = case expr of
-    A.Use ty arr -> D.Aconst (nilLabel ty) arr
-    A.Apair e1 e2 ->
-        D.Apair (nilLabel (A.arraysR expr)) (translateAccInPVal vt pv e1) (translateAccInPVal vt pv e2)
-    A.Anil -> D.Anil (nilLabel TupRunit)
-    A.Acond c t e ->
-        D.Acond (nilLabel (A.arraysR expr)) (translateExp c) (translateAccInPVal vt pv t) (translateAccInPVal vt pv e)
-    A.Map _ f e -> D.Map (nilLabel (A.arrayR expr)) (D.ELPlain $ translateFun f) (translateAccInPVal vt pv e)
-    A.ZipWith _ f e1 e2 ->
-        D.ZipWith (nilLabel (A.arrayR expr)) (D.ELPlain $ toPairedBinop $ translateFun f) (translateAccInPVal vt pv e1) (translateAccInPVal vt pv e2)
+                   -> D.OpenAcc aenv2 () () args taenv t
+translateAccInPVal vt pv prf (A.OpenAcc expr) = case expr of
+    A.Use ty arr              -> D.Aconst (nilLabel ty) arr
+    A.Apair e1 e2             -> D.Apair (nilLabel (A.arraysR expr)) (trA e1) (trA e2)
+    A.Anil                    -> D.Anil (nilLabel TupRunit)
+    A.Acond c t e             -> D.Acond (nilLabel (A.arraysR expr)) (trE c) (trA t) (trA e)
+    A.Map _ f e               -> D.Map (nilLabel (A.arrayR expr)) (D.ELPlain $ trF f) (trA e)
+    A.ZipWith _ f e1 e2       -> D.ZipWith (nilLabel (A.arrayR expr)) (D.ELPlain $ toPairedBinop $ trF f) (trA e1) (trA e2)
     A.Fold (A.Lam (A.LeftHandSideSingle t) (A.Lam (A.LeftHandSideSingle _)
               (A.Body (A.PrimApp (A.PrimAdd _)
                                  (A.Pair (A.Evar (A.Var _ (A.SuccIdx A.ZeroIdx)))
                                          (A.Evar (A.Var _ A.ZeroIdx)))))))
            initval e
       | Just (A.Const _ x) <- initval, isZeroConstant t x ->
-          D.Sum (nilLabel (A.arrayR expr)) (translateAccInPVal vt pv e)
+          D.Sum (nilLabel (A.arrayR expr)) (trA e)
       | Nothing <- initval ->
-          D.Sum (nilLabel (A.arrayR expr)) (translateAccInPVal vt pv e)
-    A.Fold f me0 e ->
-        D.Fold (nilLabel (A.arrayR expr)) (toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAccInPVal vt pv e)
-    A.Scan dir f me0 e ->
-        D.Scan (nilLabel (A.arrayR expr)) dir (toPairedBinop $ translateFun f) (translateExp <$> me0) (translateAccInPVal vt pv e)
-    A.Scan' dir f e0 e ->
-        D.Scan' (nilLabel (A.arraysR expr)) dir (toPairedBinop $ translateFun f) (translateExp e0) (translateAccInPVal vt pv e)
-    A.Generate ty she f ->
-        D.Generate (nilLabel ty) (translateExp she) (D.ELPlain $ translateFun f)
-    A.Replicate slt sle e ->
-        D.Replicate (nilLabel (A.arrayR expr)) slt (translateExp sle) (translateAccInPVal vt pv e)
-    A.Slice slt e sle ->
-        D.Slice (nilLabel (A.arrayR expr)) slt (translateAccInPVal vt pv e) (translateExp sle)
-    A.Reshape _ sle e ->
-        D.Reshape (nilLabel (A.arrayR expr)) (translateExp sle) (translateAccInPVal vt pv e)
-    A.Backpermute shr dim f e ->
-        D.Backpermute (nilLabel (ArrayR shr (arrayRtype (A.arrayR e)))) (translateExp dim) (translateFun f) (translateAccInPVal vt pv e)
-    A.Alet lhs def body -> D.Alet lhs (translateAccInPVal vt pv def) (translateAccInPVal vt (pvalPushLHS lhs pv) body)
-    A.Avar var -> vt pv var
+          D.Sum (nilLabel (A.arrayR expr)) (trA e)
+    A.Fold f me0 e            -> D.Fold (nilLabel (A.arrayR expr)) (toPairedBinop $ trF f) (trE <$> me0) (trA e)
+    A.Scan dir f me0 e        -> D.Scan (nilLabel (A.arrayR expr)) dir (toPairedBinop $ trF f) (trE <$> me0) (trA e)
+    A.Scan' dir f e0 e        -> D.Scan' (nilLabel (A.arraysR expr)) dir (toPairedBinop $ trF f) (trE e0) (trA e)
+    A.Generate ty she f       -> D.Generate (nilLabel ty) (trE she) (D.ELPlain $ trF f)
+    A.Replicate slt sle e     -> D.Replicate (nilLabel (A.arrayR expr)) slt (trE sle) (trA e)
+    A.Slice slt e sle         -> D.Slice (nilLabel (A.arrayR expr)) slt (trA e) (trE sle)
+    A.Reshape _ sle e         -> D.Reshape (nilLabel (A.arrayR expr)) (trE sle) (trA e)
+    A.Backpermute shr dim f e -> D.Backpermute (nilLabel (ArrayR shr (arrayRtype (A.arrayR e)))) (trE dim) (trF f) (trA e)
+    A.Alet lhs def body
+      | PushedLHS lhs' pv' prf' <- pvalPushLHS' lhs pv prf
+      -> D.Alet lhs' (trA def) (translateAccInPVal vt pv' prf' body)
+    A.Avar var                -> either D.smartAvar D.smartAfreeVar (vt prf pv var)
     _ -> internalError ("AD.translateAccInPVal: Cannot perform AD on Acc node <" ++ A.showPreAccOp expr ++ ">")
   where
-    toPairedBinop :: D.OpenFun env aenv lab alab tenv (t1 -> t2 -> t3) -> D.OpenFun env aenv lab alab tenv ((t1, t2) -> t3)
+    trE :: A.OpenExp env aenv t' -> D.OpenExp env aenv2 () () args' env taenv t'
+    trE = translateExp' (vt prf pv)
+
+    trF :: A.OpenFun env aenv t' -> D.OpenFun env aenv2 () () env taenv t'
+    trF = translateFun' (vt prf pv)
+
+    trA :: A.OpenAcc aenv t' -> D.OpenAcc aenv2 () () args taenv t'
+    trA = translateAccInPVal vt pv prf
+
+    toPairedBinop :: D.OpenFun env aenv' lab alab tenv taenv' (t1 -> t2 -> t3) -> D.OpenFun env aenv' lab alab tenv taenv' ((t1, t2) -> t3)
     toPairedBinop (D.Lam lhs1 (D.Lam lhs2 (D.Body ex))) = D.Lam (A.LeftHandSidePair lhs1 lhs2) (D.Body ex)
     toPairedBinop _ = error "Impossible GADTs"
 
-    isZeroConstant :: ScalarType t -> t -> Bool
+    isZeroConstant :: ScalarType t' -> t' -> Bool
     isZeroConstant (SingleScalarType (NumSingleType (FloatingNumType TypeFloat))) 0 = True
     isZeroConstant _ _ = False
 
-translateFun :: A.OpenFun env aenv t -> D.OpenFun topenv aenv () alab env t
-translateFun = translateFunInPVal PTEmpty
+translateFun :: A.OpenFun env aenv t -> D.OpenFun topenv aenv () alab env taenv t
+translateFun = translateFun' Left
 
-translateFunInPVal :: PartialVal' ScalarType tenv env env2 -> A.OpenFun env aenv t -> D.OpenFun env2 aenv () alab tenv t
-translateFunInPVal pv (A.Lam lhs fun)
+translateFun' :: (forall t'.
+                     A.ArrayVar aenv t'
+                  -> Either (A.ArrayVar aenv2 t') (A.ArrayVar taenv t'))
+              -> A.OpenFun env aenv t
+              -> D.OpenFun topenv aenv2 () alab env taenv t
+translateFun' avt = translateFunInPVal avt PTEmpty
+
+translateFunInPVal :: (forall t'.
+                          A.ArrayVar aenv t'
+                       -> Either (A.ArrayVar aenv2 t') (A.ArrayVar taenv t'))
+                   -> PartialVal' ScalarType tenv env env2
+                   -> A.OpenFun env aenv t
+                   -> D.OpenFun env2 aenv2 () alab tenv taenv t
+translateFunInPVal arrvartrans pv (A.Lam lhs fun)
   | PushedLHS lhs' pv' _ <- pvalPushLHS' lhs pv FNothing
-  = D.Lam lhs' (translateFunInPVal pv' fun)
-translateFunInPVal pv (A.Body e) =
+  = D.Lam lhs' (translateFunInPVal arrvartrans pv' fun)
+translateFunInPVal arrvartrans pv (A.Body e) =
   let vartrans _ pv' var = case checkLocalP' matchScalarType var pv' of
                              Right var'@(A.Var _ _) -> D.smartVar var'
                              Left topvar@(A.Var ty _) -> D.FreeVar (nilLabel ty) topvar
-  in D.Body (translateExpInPVal vartrans pv FNothing e)
+  in D.Body (translateExpInPVal vartrans arrvartrans pv FNothing e)
 
-translateExp :: A.OpenExp env aenv t -> D.OpenExp env aenv () alab args env t
-translateExp = translateExpInPVal (\(FJust Refl) _ var -> D.smartVar var) PTEmpty (FJust Refl)
+translateExp :: A.OpenExp env aenv t -> D.OpenExp env aenv () alab args env taenv t
+translateExp = translateExp' Left
+
+translateExp' :: (forall t'.
+                     A.ArrayVar aenv t'
+                  -> Either (A.ArrayVar aenv2 t') (A.ArrayVar taenv t'))
+              -> A.OpenExp env aenv t
+              -> D.OpenExp env aenv2 () alab args env taenv t
+translateExp' avt = translateExpInPVal (\(FJust Refl) _ var -> D.smartVar var) avt PTEmpty (FJust Refl)
 
 translateExpInPVal :: (forall env' env2' t'.
                           FMaybe prf (env' :~: env2')
                        -> PartialVal' ScalarType tenv env' env2'
                        -> A.ExpVar env' t'
-                       -> D.OpenExp env2' aenv () alab args tenv t')
+                       -> D.OpenExp env2' aenv2 () alab args tenv taenv t')
+                   -> (forall t'.
+                          A.ArrayVar aenv t'
+                       -> Either (A.ArrayVar aenv2 t') (A.ArrayVar taenv t'))
                    -> PartialVal' ScalarType tenv env env2
                    -> FMaybe prf (env :~: env2)
                    -> A.OpenExp env aenv t
-                   -> D.OpenExp env2 aenv () alab args tenv t
-translateExpInPVal vt pv prf expr = case expr of
+                   -> D.OpenExp env2 aenv2 () alab args tenv taenv t
+translateExpInPVal vt avt pv prf expr = case expr of
     A.Const ty con -> D.Const (nilLabel ty) con
-    A.PrimApp f e -> D.PrimApp (nilLabel (A.expType expr)) f (translateExpInPVal vt pv prf e)
+    A.PrimApp f e -> D.PrimApp (nilLabel (A.expType expr)) f (translateExpInPVal vt avt pv prf e)
     A.PrimConst c -> D.PrimConst (nilLabel (SingleScalarType (A.primConstType c))) c
     A.Evar var -> vt prf pv var
     A.Let lhs def body
       | PushedLHS lhs' pv' prf' <- pvalPushLHS' lhs pv prf
-      -> D.Let lhs' (translateExpInPVal vt pv prf def) (translateExpInPVal vt pv' prf' body)
+      -> D.Let lhs' (translateExpInPVal vt avt pv prf def) (translateExpInPVal vt avt pv' prf' body)
     A.Nil -> D.Nil magicLabel
-    A.Cond c t e -> D.Cond (nilLabel (A.expType t)) (translateExpInPVal vt pv prf c) (translateExpInPVal vt pv prf t) (translateExpInPVal vt pv prf e)
-    A.Pair e1 e2 -> D.Pair (nilLabel (A.expType expr)) (translateExpInPVal vt pv prf e1) (translateExpInPVal vt pv prf e2)
-    A.Shape var@(A.Var (ArrayR sht _) _) -> D.Shape (nilLabel (shapeType sht)) (Left var)
-    A.Index var@(A.Var (ArrayR _ ty) _) e -> D.Index (nilLabel ty) (Left var) scalarLabel (translateExpInPVal vt pv prf e)
-    A.ShapeSize sht e -> D.ShapeSize scalarLabel sht (translateExpInPVal vt pv prf e)
+    A.Cond c t e -> D.Cond (nilLabel (A.expType t)) (translateExpInPVal vt avt pv prf c) (translateExpInPVal vt avt pv prf t) (translateExpInPVal vt avt pv prf e)
+    A.Pair e1 e2 -> D.Pair (nilLabel (A.expType expr)) (translateExpInPVal vt avt pv prf e1) (translateExpInPVal vt avt pv prf e2)
+    A.Shape var@(A.Var (ArrayR sht _) _) -> D.Shape (nilLabel (shapeType sht)) (either D.ARVar D.ARFree (avt var))
+    A.Index var@(A.Var (ArrayR _ ty) _) e -> D.Index (nilLabel ty) (either D.ARVar D.ARFree (avt var)) scalarLabel (translateExpInPVal vt avt pv prf e)
+    A.ShapeSize sht e -> D.ShapeSize scalarLabel sht (translateExpInPVal vt avt pv prf e)
     A.Undef ty -> D.Undef (nilLabel ty)
     _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
 
@@ -230,112 +258,120 @@ data UntranslateResultE a env aenv t =
     forall env'. UntranslateResultE (A.ELeftHandSide a env env') (A.OpenExp env' aenv t)
 
 untranslateLHSboundExp :: A.ELeftHandSide a () env
-                       -> D.OpenExp env aenv lab alab args tenv t
+                       -> D.OpenExp env aenv lab alab args tenv taenv t
+                       -> taenv A.:> aenv
                        -> tenv A.:> env1
                        -> UntranslateResultE a env1 aenv t
-untranslateLHSboundExp toplhs topexpr topweak
+untranslateLHSboundExp toplhs topexpr topaweak topweak
   | A.Exists toplhs' <- A.rebuildLHS toplhs =
-      UntranslateResultE toplhs' (go (A.weakenWithLHS toplhs' A..> topweak) (pvalPushLHS toplhs' PTEmpty) topexpr)
+      UntranslateResultE toplhs' (go topaweak (A.weakenWithLHS toplhs' A..> topweak) (pvalPushLHS toplhs' PTEmpty) topexpr)
   where
-    go :: tenv A.:> env2 -> PartialVal ScalarType topenv env2 -> D.OpenExp env aenv lab alab args tenv t -> A.OpenExp env2 aenv t
-    go w pv expr = case expr of
+    go :: taenv A.:> aenv -> tenv A.:> env2 -> PartialVal ScalarType topenv env2 -> D.OpenExp env aenv lab alab args tenv taenv t -> A.OpenExp env2 aenv t
+    go aw w pv expr = case expr of
         D.Const lab con -> A.Const (labelType lab) con
-        D.PrimApp _ f e -> A.PrimApp f (go w pv e)
+        D.PrimApp _ f e -> A.PrimApp f (go aw w pv e)
         D.PrimConst _ c -> A.PrimConst c
         -- TODO: Don't use a fallible call here, perhaps something with the double-tracking of PartialVal' ?
         D.Var _ var _ -> A.Evar (fromJust (checkLocalPFallible matchScalarType var pv))
         D.FreeVar _ var -> A.Evar (A.weaken w var)
         D.Let lhs def body
           | A.Exists lhs' <- A.rebuildLHS lhs
-          -> A.Let lhs' (go w pv def) (go (A.weakenWithLHS lhs' A..> w) (pvalPushLHS lhs' pv) body)
+          -> A.Let lhs' (go aw w pv def) (go aw (A.weakenWithLHS lhs' A..> w) (pvalPushLHS lhs' pv) body)
         D.Nil _ -> A.Nil
-        D.Pair _ e1 e2 -> A.Pair (go w pv e1) (go w pv e2)
-        D.Cond _ e1 e2 e3 -> A.Cond (go w pv e1) (go w pv e2) (go w pv e3)
-        D.Shape _ (Left avar) -> A.Shape avar
-        D.Shape _ (Right _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Shape) in array var position"
-        D.Index _ (Left avar) _ e -> A.Index avar (go w pv e)
-        D.Index _ (Right _) _ _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position"
-        D.ShapeSize _ sht e -> A.ShapeSize sht (go w pv e)
+        D.Pair _ e1 e2 -> A.Pair (go aw w pv e1) (go aw w pv e2)
+        D.Cond _ e1 e2 e3 -> A.Cond (go aw w pv e1) (go aw w pv e2) (go aw w pv e3)
+        D.Shape _ (D.ARVar avar) -> A.Shape avar
+        D.Shape _ (D.ARFree avar) -> A.Shape (A.weaken aw avar)
+        D.Shape _ (D.ARLab _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Shape) in array var position"
+        D.Index _ (D.ARVar avar) _ e -> A.Index avar (go aw w pv e)
+        D.Index _ (D.ARFree avar) _ e -> A.Index (A.weaken aw avar) (go aw w pv e)
+        D.Index _ (D.ARLab _) _ _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position"
+        D.ShapeSize _ sht e -> A.ShapeSize sht (go aw w pv e)
         D.Get _ path e
           | D.LetBoundVars lhs vars <- euntranslateGet (D.etypeOf e) path
-          -> A.Let lhs (go w pv e) (a_evars vars)
+          -> A.Let lhs (go aw w pv e) (a_evars vars)
         D.Undef lab -> A.Undef (labelType lab)
         D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
 
-untranslateLHSboundExpA :: forall a env env1 lab alab args tenv t aenv topaenv aenv2.
+untranslateLHSboundExpA :: forall a env env1 lab alab args tenv taenv t aenv topaenv aenv2.
                            A.ELeftHandSide a () env
-                        -> D.OpenExp env aenv lab alab args tenv t
+                        -> D.OpenExp env aenv lab alab args tenv taenv t
+                        -> taenv A.:> aenv2
                         -> PartialVal ArrayR topaenv aenv2
                         -> UntranslateResultE a env1 aenv2 t
-untranslateLHSboundExpA toplhs topexpr arrpv
+untranslateLHSboundExpA toplhs topexpr arrweak arrpv
   | A.Exists toplhs' <- A.rebuildLHS toplhs =
-      UntranslateResultE toplhs' (go topexpr (pvalPushLHS toplhs' PTEmpty))
+      UntranslateResultE toplhs' (go arrweak (pvalPushLHS toplhs' PTEmpty) topexpr)
   where
-    go :: D.OpenExp env' aenv lab alab args tenv t' -> PartialVal ScalarType topenv env2 -> A.OpenExp env2 aenv2 t'
-    go expr pv = case expr of
+    go :: taenv A.:> aenv2 -> PartialVal ScalarType topenv env2 -> D.OpenExp env' aenv lab alab args tenv taenv t' -> A.OpenExp env2 aenv2 t'
+    go aw pv expr = case expr of
         D.Const lab con -> A.Const (labelType lab) con
-        D.PrimApp _ f e -> A.PrimApp f (go e pv)
+        D.PrimApp _ f e -> A.PrimApp f (go aw pv e)
         D.PrimConst _ c -> A.PrimConst c
         -- TODO: Don't use a fallible call here, perhaps something with the double-tracking of PartialVal' ?
         D.Var _ var _ -> A.Evar (fromJust (checkLocalPFallible matchScalarType var pv))
         D.FreeVar _ _ -> internalError "AD.untranslateLHSboundExpA: Unexpected free expression variable in array code"
         D.Let lhs def body
           | A.Exists lhs' <- A.rebuildLHS lhs
-          -> A.Let lhs' (go def pv) (go body (pvalPushLHS lhs' pv))
+          -> A.Let lhs' (go aw pv def) (go aw (pvalPushLHS lhs' pv) body)
         D.Nil _ -> A.Nil
-        D.Pair _ e1 e2 -> A.Pair (go e1 pv) (go e2 pv)
-        D.Cond _ e1 e2 e3 -> A.Cond (go e1 pv) (go e2 pv) (go e3 pv)
-        D.Shape _ (Left avar) -> A.Shape (fromJust (checkLocalPFallible matchArrayR avar arrpv))
-        D.Shape _ (Right _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
-        D.Index _ (Left avar) _ e -> A.Index (fromJust (checkLocalPFallible matchArrayR avar arrpv)) (go e pv)
-        D.Index _ (Right _) _ _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
-        D.ShapeSize _ sht e -> A.ShapeSize sht (go e pv)
+        D.Pair _ e1 e2 -> A.Pair (go aw pv e1) (go aw pv e2)
+        D.Cond _ e1 e2 e3 -> A.Cond (go aw pv e1) (go aw pv e2) (go aw pv e3)
+        D.Shape _ (D.ARVar avar) -> A.Shape (fromJust (checkLocalPFallible matchArrayR avar arrpv))
+        D.Shape _ (D.ARFree avar) -> A.Shape (A.weaken aw avar)
+        D.Shape _ (D.ARLab _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
+        D.Index _ (D.ARVar avar) _ e -> A.Index (fromJust (checkLocalPFallible matchArrayR avar arrpv)) (go aw pv e)
+        D.Index _ (D.ARFree avar) _ e -> A.Index (A.weaken aw avar) (go aw pv e)
+        D.Index _ (D.ARLab _) _ _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
+        D.ShapeSize _ sht e -> A.ShapeSize sht (go aw pv e)
         D.Get _ path e
           | D.LetBoundVars lhs vars <- euntranslateGet (D.etypeOf e) path
-          -> A.Let lhs (go e pv) (a_evars vars)
+          -> A.Let lhs (go aw pv e) (a_evars vars)
         D.Undef lab -> A.Undef (labelType lab)
         D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExpA: Unexpected Arg in untranslate!"
 
-untranslateClosedExp :: forall lab alab args t aenv. D.OpenExp () aenv lab alab args () t -> A.OpenExp () aenv t
-untranslateClosedExp expr
+untranslateClosedExp :: forall lab alab args t aenv taenv. taenv A.:> aenv -> D.OpenExp () aenv lab alab args () taenv t -> A.OpenExp () aenv t
+untranslateClosedExp aweak expr
   | UntranslateResultE A.LeftHandSideUnit res <-
-        untranslateLHSboundExp A.LeftHandSideUnit expr A.weakenId
+        untranslateLHSboundExp A.LeftHandSideUnit expr aweak A.weakenId
             :: UntranslateResultE () () aenv t
   = res
-untranslateClosedExp _ = error "unreachable"
+untranslateClosedExp _ _ = error "unreachable"
 
-untranslateClosedExpA :: forall aenv lab alab args tenv t topaenv aenv2.
-                         D.OpenExp () aenv lab alab args tenv t
+untranslateClosedExpA :: forall aenv lab alab args tenv taenv t topaenv aenv2.
+                         taenv A.:> aenv2
                       -> PartialVal ArrayR topaenv aenv2
+                      -> D.OpenExp () aenv lab alab args tenv taenv t
                       -> A.OpenExp () aenv2 t
-untranslateClosedExpA expr arrpv
+untranslateClosedExpA arrweak arrpv expr
   | UntranslateResultE A.LeftHandSideUnit res <-
-        untranslateLHSboundExpA A.LeftHandSideUnit expr arrpv
+        untranslateLHSboundExpA A.LeftHandSideUnit expr arrweak arrpv
             :: UntranslateResultE () () aenv2 t
   = res
-untranslateClosedExpA _ _ = error "unreachable"
+untranslateClosedExpA _ _ _ = error "unreachable"
 
 data UntranslateFunResultE a env aenv t =
     forall env'. UntranslateFunResultE (A.ELeftHandSide a env env') (A.OpenFun env' aenv t)
 
-untranslateClosedFunA :: forall lab alab t tenv topaenv aenv aenv2.
-                         D.OpenFun () aenv lab alab tenv t
+untranslateClosedFunA :: forall lab alab t tenv taenv topaenv aenv aenv2.
+                         D.OpenFun () aenv lab alab tenv taenv t
+                      -> taenv A.:> aenv2
                       -> PartialVal ArrayR topaenv aenv2
                       -> A.OpenFun () aenv2 t
-untranslateClosedFunA topfun arrpv
+untranslateClosedFunA topfun arrweak arrpv
   | UntranslateFunResultE A.LeftHandSideUnit fun' <- go A.LeftHandSideUnit topfun
   = fun'
   where
-    go :: A.ELeftHandSide a () env -> D.OpenFun env aenv lab alab tenv t' -> UntranslateFunResultE a () aenv2 t'
+    go :: A.ELeftHandSide a () env -> D.OpenFun env aenv lab alab tenv taenv t' -> UntranslateFunResultE a () aenv2 t'
     go lhs (D.Lam bindings fun)
       | UntranslateFunResultE (A.LeftHandSidePair lhs' bindings') res
           <- go (A.LeftHandSidePair lhs bindings) fun
       = UntranslateFunResultE lhs' (A.Lam bindings' res)
     go lhs (D.Body body)
-      | UntranslateResultE lhs' res <- untranslateLHSboundExpA lhs body arrpv
+      | UntranslateResultE lhs' res <- untranslateLHSboundExpA lhs body arrweak arrpv
       = UntranslateFunResultE lhs' (A.Body res)
     go _ _ = error "unreachable"
-untranslateClosedFunA _ _ = error "unreachable"
+untranslateClosedFunA _ _ _ = error "unreachable"
 
 data UntranslateResultA a aenv t =
     forall aenv'. UntranslateResultA (A.ALeftHandSide a aenv aenv') (A.OpenAcc aenv' t)
@@ -358,22 +394,22 @@ untranslateLHSboundAcc toplhs topexpr topweak
           -> A.Alet lhs' (go w pv def) (go (A.weakenWithLHS lhs' A..> w) (pvalPushLHS lhs' pv) body)
         D.Anil _ -> A.Anil
         D.Apair _ e1 e2 -> A.Apair (go w pv e1) (go w pv e2)
-        D.Acond _ e1 e2 e3 -> A.Acond (untranslateClosedExpA e1 pv) (go w pv e2) (go w pv e3)
-        D.Map (labelType -> ArrayR _ ty) (D.ELPlain f) e -> A.Map ty (untranslateClosedFunA f pv) (go w pv e)
-        D.ZipWith (labelType -> ArrayR _ ty) (D.ELPlain f) e1 e2 -> A.ZipWith ty (untranslateClosedFunA (fromPairedBinop f) pv) (go w pv e1) (go w pv e2)
-        D.Fold _ f me0 e -> A.Fold (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go w pv e)
-        D.Scan _ dir f me0 e -> A.Scan dir (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA <$> me0 <*> Just pv) (go w pv e)
-        D.Scan' _ dir f e0 e -> A.Scan' dir (untranslateClosedFunA (fromPairedBinop f) pv) (untranslateClosedExpA e0 pv) (go w pv e)
+        D.Acond _ e1 e2 e3 -> A.Acond (untranslateClosedExpA w pv e1) (go w pv e2) (go w pv e3)
+        D.Map (labelType -> ArrayR _ ty) (D.ELPlain f) e -> A.Map ty (untranslateClosedFunA f w pv) (go w pv e)
+        D.ZipWith (labelType -> ArrayR _ ty) (D.ELPlain f) e1 e2 -> A.ZipWith ty (untranslateClosedFunA (fromPairedBinop f) w pv) (go w pv e1) (go w pv e2)
+        D.Fold _ f me0 e -> A.Fold (untranslateClosedFunA (fromPairedBinop f) w pv) (untranslateClosedExpA w pv <$> me0) (go w pv e)
+        D.Scan _ dir f me0 e -> A.Scan dir (untranslateClosedFunA (fromPairedBinop f) w pv) (untranslateClosedExpA w pv <$> me0) (go w pv e)
+        D.Scan' _ dir f e0 e -> A.Scan' dir (untranslateClosedFunA (fromPairedBinop f) w pv) (untranslateClosedExpA w pv e0) (go w pv e)
         D.Sum (labelType -> ArrayR _ (TupRsingle ty@(SingleScalarType (NumSingleType nt)))) e ->
             A.Fold (A.Lam (A.LeftHandSideSingle ty) (A.Lam (A.LeftHandSideSingle ty)
                       (A.Body (A.PrimApp (A.PrimAdd nt)
                                          (A.Pair (A.Evar (A.Var ty (A.SuccIdx A.ZeroIdx)))
                                                  (A.Evar (A.Var ty A.ZeroIdx)))))))
-                   (Just (untranslateClosedExp (D.zeroForType ty)))
+                   (Just (untranslateClosedExp w (D.zeroForType ty)))
                    (go w pv e)
-        D.Generate (labelType -> ty) e (D.ELPlain f) -> A.Generate ty (untranslateClosedExpA e pv) (untranslateClosedFunA f pv)
-        D.Replicate _ slt sle e -> A.Replicate slt (untranslateClosedExpA sle pv) (go w pv e)
-        D.Slice _ slt e sle -> A.Slice slt (go w pv e) (untranslateClosedExpA sle pv)
+        D.Generate (labelType -> ty) e (D.ELPlain f) -> A.Generate ty (untranslateClosedExpA w pv e) (untranslateClosedFunA f w pv)
+        D.Replicate _ slt sle e -> A.Replicate slt (untranslateClosedExpA w pv sle) (go w pv e)
+        D.Slice _ slt e sle -> A.Slice slt (go w pv e) (untranslateClosedExpA w pv sle)
         D.Reduce _ spec combfun e
           | ReduceConvert shtype sortedSpec shlhs fullToSorted sortedToFull <- reduceConvert spec
           , TupRsingle argtype@(ArrayR shtype' _) <- D.atypeOf e
@@ -382,13 +418,13 @@ untranslateLHSboundAcc toplhs topexpr topweak
                      (let shexp = A.Let shlhs (A.Shape (A.Var argtype A.ZeroIdx)) (a_evars fullToSorted)
                           pv' = pvalPushLHS (A.LeftHandSideSingle argtype) pv
                           reshapeExp = A.Let shlhs shexp (multiplyReduced sortedSpec)
-                      in A.OpenAcc $ A.Fold (untranslateClosedFunA combfun pv') Nothing $
+                      in A.OpenAcc $ A.Fold (untranslateClosedFunA combfun (A.weakenSucc' w) pv') Nothing $
                              A.OpenAcc $ A.Reshape (ShapeRsnoc (D.rsReducedShapeR spec)) reshapeExp $
                                  A.OpenAcc $ A.Backpermute shtype shexp (A.Lam shlhs (A.Body (a_evars sortedToFull)))
                                                            (A.OpenAcc $ A.Avar (A.Var argtype A.ZeroIdx)))
-        D.Reshape (labelType -> ArrayR sht _) she e -> A.Reshape sht (untranslateClosedExpA she pv) (go w pv e)
-        D.Backpermute (labelType -> ArrayR sht _) dim f e -> A.Backpermute sht (untranslateClosedExpA dim pv) (untranslateClosedFunA f pv) (go w pv e)
-        D.Permute _ cf def pf e -> A.Permute (untranslateClosedFunA cf pv) (go w pv def) (untranslateClosedFunA pf pv) (go w pv e)
+        D.Reshape (labelType -> ArrayR sht _) she e -> A.Reshape sht (untranslateClosedExpA w pv she) (go w pv e)
+        D.Backpermute (labelType -> ArrayR sht _) dim f e -> A.Backpermute sht (untranslateClosedExpA w pv dim) (untranslateClosedFunA f w pv) (go w pv e)
+        D.Permute _ cf def pf e -> A.Permute (untranslateClosedFunA cf w pv) (go w pv def) (untranslateClosedFunA pf w pv) (go w pv e)
         D.Aget _ path e
           | D.LetBoundVars lhs vars <- auntranslateGet (D.atypeOf e) path
           -> A.Alet lhs (go w pv e) (a_avars vars)
@@ -399,7 +435,7 @@ untranslateLHSboundAcc toplhs topexpr topweak
         D.Generate _ _ _ -> error "Unexpected Generate shape in untranslate"
         D.Reduce _ _ _ _ -> error "Unexpected Reduce shape in untranslate"
 
-    fromPairedBinop :: D.OpenFun env aenv lab alab tenv ((t1, t2) -> t3) -> D.OpenFun env aenv lab alab tenv (t1 -> t2 -> t3)
+    fromPairedBinop :: D.OpenFun env aenv lab alab tenv taenv ((t1, t2) -> t3) -> D.OpenFun env aenv lab alab tenv taenv (t1 -> t2 -> t3)
     fromPairedBinop (D.Lam (A.LeftHandSidePair lhs1 lhs2) (D.Body ex)) = D.Lam lhs1 (D.Lam lhs2 (D.Body ex))
     fromPairedBinop (D.Lam (A.LeftHandSideWildcard (TupRpair t1 t2)) (D.Body ex)) =
         D.Lam (A.LeftHandSideWildcard t1) (D.Lam (A.LeftHandSideWildcard t2) (D.Body ex))

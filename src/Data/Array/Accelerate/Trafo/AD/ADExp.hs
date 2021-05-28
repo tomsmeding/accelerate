@@ -9,7 +9,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.AD.ADExp (
-  reverseAD, ReverseADResE(..),
+  reverseAD, ReverseADResE(..), RelocatableExp(..),
   splitLambdaAD, labeliseFunA,
   labeliseExpA, inlineAvarLabels'
 ) where
@@ -66,7 +66,7 @@ genSingleIds (TupRpair t1 t2) = do
 
 
 -- Assumes the expression does not contain Arg
-generaliseArgs :: OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args' tenv t
+generaliseArgs :: OpenExp env aenv lab alab args tenv taenv t -> OpenExp env aenv lab alab args' tenv taenv t
 generaliseArgs (Const lab x) = Const lab x
 generaliseArgs (PrimApp lab op ex) = PrimApp lab op (generaliseArgs ex)
 generaliseArgs (PrimConst lab c) = PrimConst lab c
@@ -88,8 +88,8 @@ generaliseArgs (Arg _ _ _) = error "generaliseArgs: Arg found"
 -- Asserts that there are no array labels yet in the expression, and resets the array environment.
 labeliseFunA :: Ord alab
              => TagVal (AAnyPartLabelN alab) aenv
-             -> OpenFun env aenv lab alab' tenv t
-             -> ([Some (AAnyPartLabelN alab)], OpenFun env aenv' lab alab tenv t)
+             -> OpenFun env aenv lab alab' tenv taenv t
+             -> ([Some (AAnyPartLabelN alab)], OpenFun env aenv' lab alab tenv taenv t)
 labeliseFunA labelenv (Lam lhs fun) = Lam lhs <$> labeliseFunA labelenv fun
 labeliseFunA labelenv (Body ex) = Body <$> labeliseExpA labelenv ex
 
@@ -98,8 +98,8 @@ labeliseFunA labelenv (Body ex) = Body <$> labeliseExpA labelenv ex
 -- Asserts that there are no array labels yet in the expression, and resets the array environment.
 labeliseExpA :: Ord alab
              => TagVal (AAnyPartLabelN alab) aenv
-             -> OpenExp env aenv lab alab' args tenv t
-             -> ([Some (AAnyPartLabelN alab)], OpenExp env aenv' lab alab args tenv t)
+             -> OpenExp env aenv lab alab' args tenv taenv t
+             -> ([Some (AAnyPartLabelN alab)], OpenExp env aenv' lab alab args tenv taenv t)
 labeliseExpA labelenv = \ex -> let (labs, ex') = go ex
                                in (sortUniq labs, ex')
   where
@@ -110,16 +110,18 @@ labeliseExpA labelenv = \ex -> let (labs, ex') = go ex
       Pair lab e1 e2 -> Pair lab <$> labeliseExpA labelenv e1 <*> labeliseExpA labelenv e2
       Nil lab -> return (Nil lab)
       Cond lab e1 e2 e3 -> Cond lab <$> labeliseExpA labelenv e1 <*> labeliseExpA labelenv e2 <*> labeliseExpA labelenv e3
-      Shape lab (Left (A.Var _ idx)) -> do
+      Shape lab (ARVar (A.Var _ idx)) -> do
           let alab = prjT idx labelenv
           W.tell [Some alab]
-          return (Shape lab (Right alab))
-      Shape _ (Right _) -> error "Unexpected Shape(Label) in labeliseExpA"
-      Index lab (Left (A.Var _ idx)) execLab idxe -> do
+          return (Shape lab (ARLab alab))
+      Shape lab (ARFree var) -> return (Shape lab (ARFree var))
+      Shape _ (ARLab _) -> error "Unexpected Shape(Label) in labeliseExpA"
+      Index lab (ARVar (A.Var _ idx)) execLab idxe -> do
           let alab = prjT idx labelenv
           W.tell [Some alab]
-          Index lab (Right alab) execLab <$> labeliseExpA labelenv idxe
-      Index _ (Right _) _ _ -> error "Unexpected Index(Label) in labeliseExpA"
+          Index lab (ARLab alab) execLab <$> labeliseExpA labelenv idxe
+      Index lab (ARFree var) execLab idxe -> Index lab (ARFree var) execLab <$> labeliseExpA labelenv idxe
+      Index _ (ARLab _) _ _ -> error "Unexpected Index(Label) in labeliseExpA"
       ShapeSize lab sht e -> ShapeSize lab sht <$> labeliseExpA labelenv e
       Get lab ti e -> Get lab ti <$> labeliseExpA labelenv e
       Undef lab -> return (Undef lab)
@@ -131,8 +133,8 @@ labeliseExpA labelenv = \ex -> let (labs, ex') = go ex
 inlineAvarLabels :: (HasCallStack, Ord alab)
                  => TupR (AAnyPartLabelN alab) fv
                  -> A.ArrayVars aenv' fv
-                 -> OpenExp env aenv lab alab args tenv t
-                 -> OpenExp env aenv' lab alab' args tenv t
+                 -> OpenExp env aenv lab alab args tenv taenv t
+                 -> OpenExp env aenv' lab alab' args tenv taenv t
 inlineAvarLabels labs vars =
     let mp = zipTupRmap labs vars
     in inlineAvarLabels' (\lab -> case DMap.lookup lab mp of
@@ -140,8 +142,8 @@ inlineAvarLabels labs vars =
                                     Nothing -> error "inlineAvarLabels: Not all labels instantiated")
 
 inlineAvarLabels' :: (forall sh t'. AAnyPartLabelN alab (Array sh t') -> A.ArrayVar aenv' (Array sh t'))
-                  -> OpenExp env aenv lab alab args tenv t
-                  -> OpenExp env aenv' lab alab' args tenv t
+                  -> OpenExp env aenv lab alab args tenv taenv t
+                  -> OpenExp env aenv' lab alab' args tenv taenv t
 inlineAvarLabels' f = \case
     Const lab x -> Const lab x
     PrimApp lab op ex -> PrimApp lab op (inlineAvarLabels' f ex)
@@ -149,11 +151,13 @@ inlineAvarLabels' f = \case
     Pair lab e1 e2 -> Pair lab (inlineAvarLabels' f e1) (inlineAvarLabels' f e2)
     Nil lab -> Nil lab
     Cond lab e1 e2 e3 -> Cond lab (inlineAvarLabels' f e1) (inlineAvarLabels' f e2) (inlineAvarLabels' f e3)
-    Shape lab (Right alab) -> Shape lab (Left (f alab))
-    Shape _ (Left _) -> error "inlineAvarLabels': Array variable found in labelised expression (Shape)"
+    Shape lab (ARLab alab) -> Shape lab (ARVar (f alab))
+    Shape lab (ARFree var) -> Shape lab (ARFree var)
+    Shape _ (ARVar _) -> error "inlineAvarLabels': Array variable found in labelised expression (Shape)"
     ShapeSize lab sht e -> ShapeSize lab sht (inlineAvarLabels' f e)
-    Index lab (Right alab) execLab idxe -> Index lab (Left (f alab)) execLab (inlineAvarLabels' f idxe)
-    Index _ (Left _) _ _ -> error "inlineAvarLabels': Array variable found in labelised expression (Index)"
+    Index lab (ARLab alab) execLab idxe -> Index lab (ARVar (f alab)) execLab (inlineAvarLabels' f idxe)
+    Index lab (ARFree var) execLab idxe -> Index lab (ARFree var) execLab (inlineAvarLabels' f idxe)
+    Index _ (ARVar _) _ _ -> error "inlineAvarLabels': Array variable found in labelised expression (Index)"
     Get lab tidx ex -> Get lab tidx (inlineAvarLabels' f ex)
     Undef lab -> Undef lab
     Let lhs rhs ex -> Let lhs (inlineAvarLabels' f rhs) (inlineAvarLabels' f ex)
@@ -161,17 +165,21 @@ inlineAvarLabels' f = \case
     FreeVar lab v -> FreeVar lab v
     Arg lab argsty tidx -> Arg lab argsty tidx
 
-data ReverseADResE aenv alab tenv t =
+data RelocatableExp tenv taenv t =
+    RelocatableExp (forall env aenv alab args.
+                    OpenExp env aenv () alab args tenv taenv t)
+
+data ReverseADResE aenv alab tenv taenv t =
     forall env.
         ReverseADResE (A.ELeftHandSide t () env)
-                      (OpenExp env aenv () alab () tenv t)
+                      (OpenExp env aenv () alab () tenv taenv t)
 
 reverseAD :: Show alab
           => ELeftHandSide t () env
-          -> OpenExp env aenv () alab () tenv t'
-          -> OpenExp tenv aenv () alab () tenv t'
-          -> ReverseADResE aenv alab tenv t
-reverseAD paramlhs expr adjexpr = evalIdGen $ do
+          -> OpenExp env aenv () alab () tenv taenv t'
+          -> RelocatableExp tenv taenv t'
+          -> ReverseADResE aenv alab tenv taenv t
+reverseAD paramlhs expr (RelocatableExp adjexpr) = evalIdGen $ do
     let paramty = lhsToTupR paramlhs
         argsRHS = untupleExps
                       (zipWithTupR (\ty tidx -> Arg (nilLabel ty) paramty tidx)
@@ -185,8 +193,7 @@ reverseAD paramlhs expr adjexpr = evalIdGen $ do
     PrimalResult (EBuilder primalCtx primalBuilder) _ _ <-
         primal (Context LEmpty mempty) expr'
 
-    let cmap0 = DMap.singleton (Local (elabelOf expr'))
-                               (AdjList (\_ -> [freeifyVars (generaliseArgs adjexpr)]))
+    let cmap0 = DMap.singleton (Local (elabelOf expr')) (AdjList (\_ -> [adjexpr]))
     DualResult (EBuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx cmap0 expr'
     let (gradient, _) = collectAdjointCMap dualCMap (Argument paramty) dualCtx
 
@@ -197,9 +204,9 @@ reverseAD paramlhs expr adjexpr = evalIdGen $ do
              . dualBuilder
              $ gradient))
 
-splitLambdaAD :: forall t t' tenv.
-                 Fun () () Int tenv (t -> t')
-              -> SomeSplitLambdaAD t t' () Int tenv
+splitLambdaAD :: forall t t' tenv taenv.
+                 Fun () () Int tenv taenv (t -> t')
+              -> SomeSplitLambdaAD t t' () Int tenv taenv
 splitLambdaAD (Lam paramlhs (Body expr))
   | let paramty = lhsToTupR paramlhs
         resty = etypeOf expr
@@ -255,13 +262,13 @@ splitLambdaAD _ =
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
-realiseArgs :: forall args argsenv aenv alab tenv res.
+realiseArgs :: forall args argsenv aenv alab tenv taenv res.
                ELeftHandSide args () argsenv
-            -> Exp aenv () alab args tenv res
-            -> OpenExp argsenv aenv () alab () tenv res
+            -> Exp aenv () alab args tenv taenv res
+            -> OpenExp argsenv aenv () alab () tenv taenv res
 realiseArgs paramlhs = \expr -> go A.weakenId (A.weakenWithLHS paramlhs) expr
   where
-    go :: argsenv A.:> env' -> env A.:> env' -> OpenExp env aenv () alab args tenv t -> OpenExp env' aenv () alab () tenv t
+    go :: argsenv A.:> env' -> env A.:> env' -> OpenExp env aenv () alab args tenv taenv t -> OpenExp env' aenv () alab () tenv taenv t
     go argWeaken varWeaken expr = case expr of
         Const lab x -> Const lab x
         PrimApp lab op ex -> PrimApp lab op (go argWeaken varWeaken ex)
@@ -294,7 +301,7 @@ data IndexNodeInfo lab alab =
                       (EDLabelNS lab A.PrimBool)     -- The label of the virtual was-executed node
                       (AAnyPartLabelN alab (Array sh t))  -- The array label of the indexed array
 
-listIndexNodes :: OpenExp env aenv lab alab args tenv t -> [IndexNodeInfo lab alab]
+listIndexNodes :: OpenExp env aenv lab alab args tenv taenv t -> [IndexNodeInfo lab alab]
 listIndexNodes (Const _ _) = []
 listIndexNodes (PrimApp _ _ ex) = listIndexNodes ex
 listIndexNodes (PrimConst _ _) = []
@@ -302,9 +309,10 @@ listIndexNodes (Pair _ e1 e2) = listIndexNodes e1 ++ listIndexNodes e2
 listIndexNodes (Nil _) = []
 listIndexNodes (Cond _ e1 e2 e3) = listIndexNodes e1 ++ listIndexNodes e2 ++ listIndexNodes e3
 listIndexNodes (Shape _ _) = []
-listIndexNodes (Index lab (Right alab) execLab e) =
+listIndexNodes (Index lab (ARLab alab) execLab e) =
     IndexNodeInfo lab (elabelOf e) execLab alab : listIndexNodes e
-listIndexNodes (Index _ (Left _) _ _) = error "listIndexNodes: Array variables not labelised"
+listIndexNodes (Index _ (ARVar _) _ _) = error "listIndexNodes: Array variables not labelised"
+listIndexNodes (Index _ (ARFree _) _ _) = []  -- indexing of free array variable is uninteresting
 listIndexNodes (ShapeSize _ _ e) = listIndexNodes e
 listIndexNodes (Get _ _ ex) = listIndexNodes ex
 listIndexNodes (Undef _) = []
@@ -313,18 +321,18 @@ listIndexNodes (Var _ _ _) = []
 listIndexNodes (FreeVar _ _) = []
 listIndexNodes (Arg _ _ _) = []
 
-data CollectIndexAdjoints env aenv alab args tenv =
+data CollectIndexAdjoints env aenv alab args tenv taenv =
     forall idxadj.
-        CollectIndexAdjoints (OpenExp env aenv () alab args tenv idxadj)
+        CollectIndexAdjoints (OpenExp env aenv () alab args tenv taenv idxadj)
                              (DMap (AAnyPartLabelN alab) (IndexInstantiators idxadj))
 
 collectIndexAdjoints :: (Ord lab, Show lab, Ord alab)
                      => [IndexNodeInfo lab alab]
                      -> EContext lab env
-                     -> CollectIndexAdjoints env aenv alab args tenv
+                     -> CollectIndexAdjoints env aenv alab args tenv taenv
 collectIndexAdjoints indexNodes dualCtx =
     let constructExp :: (Ord lab, Show lab)
-                     => EContext lab env -> IndexNodeInfo lab alab -> Some (OpenExp env aenv () alab args tenv)
+                     => EContext lab env -> IndexNodeInfo lab alab -> Some (OpenExp env aenv () alab args tenv taenv)
         constructExp dualCtx' (IndexNodeInfo adjlab idxlab execlab _) =
             let adjexpr = evars . resolveEnvLabs dualCtx' <$> findAdjointBMap' dualCtx' adjlab
                 idxexpr = evars (resolveEnvLabs dualCtx' (findPrimalBMap dualCtx' idxlab))
@@ -346,7 +354,7 @@ collectIndexAdjoints indexNodes dualCtx =
                         _ -> error "invalid GADTs"
                      | (Some (AnyPartLabel partl), Some (Product.Pair expr tidx)) <- tupTraces])
 
-enlabelExp :: TagVal (EAnyPartLabelN Int) env -> OpenExp env aenv () alab args tenv t -> IdGen (OpenExp env aenv Int alab args tenv t)
+enlabelExp :: TagVal (EAnyPartLabelN Int) env -> OpenExp env aenv () alab args tenv taenv t -> IdGen (OpenExp env aenv Int alab args tenv taenv t)
 enlabelExp env expr = case expr of
     Const lab x -> Const <$> genLabNS lab <*> return x
     PrimApp lab op ex -> PrimApp <$> genLabN lab <*> return op <*> enlabelExp env ex
@@ -374,21 +382,21 @@ enlabelExp env expr = case expr of
     genLabNS :: EDLabelNS () t -> IdGen (EDLabelNS Int t)
     genLabNS = genIdNodeSingle . labelType
 
-data EBuilder env aenv alab args tenv =
+data EBuilder env aenv alab args tenv taenv =
     forall env'.
         EBuilder (EContext Int env')
-                 (forall res. OpenExp env' aenv () alab args tenv res
-                           -> OpenExp env aenv () alab args tenv res)
+                 (forall res. OpenExp env' aenv () alab args tenv taenv res
+                           -> OpenExp env aenv () alab args tenv taenv res)
 
-data PrimalResult env aenv alab args tenv t =
-    PrimalResult (EBuilder env aenv alab args tenv)  -- Primal builder
-                 [Some (EDLabel Int)]                -- To-store "set" (really list)
-                 (TupR (EDLabel Int) t)              -- Env labels of the subtree root
+data PrimalResult env aenv alab args tenv taenv t =
+    PrimalResult (EBuilder env aenv alab args tenv taenv)  -- Primal builder
+                 [Some (EDLabel Int)]                      -- To-store "set" (really list)
+                 (TupR (EDLabel Int) t)                    -- Env labels of the subtree root
 
 primal :: Show alab
        => EContext Int env
-       -> OpenExp progenv aenv Int alab args tenv t
-       -> IdGen (PrimalResult env aenv alab args tenv t)
+       -> OpenExp progenv aenv Int alab args tenv taenv t
+       -> IdGen (PrimalResult env aenv alab args tenv taenv t)
 primal ctx = \case
     -- e | trace ("exp primal: " ++ head (words (show e))) False -> undefined
 
@@ -497,15 +505,15 @@ primal ctx = \case
         simplePrimal TLNil ctx lab (\_ lab' _ -> Arg lab' argsty tidx)
 
 simplePrimal :: (IsTupleType ScalarType s, GCompare s, Show alab)
-             => TypedList (OpenExp progenv aenv Int alab args tenv) argts
+             => TypedList (OpenExp progenv aenv Int alab args tenv taenv) argts
              -> EContext Int env
              -> DLabel NodeLabel s Int t
              -> (forall env'.
                     EContext Int env'
                  -> DLabel nodeLabel s () t
-                 -> TypedList (OpenExp env' aenv () alab args tenv) argts
-                 -> OpenExp env' aenv () alab args tenv t)
-             -> IdGen (PrimalResult env aenv alab args tenv t)
+                 -> TypedList (OpenExp env' aenv () alab args tenv taenv) argts
+                 -> OpenExp env' aenv () alab args tenv taenv t)
+             -> IdGen (PrimalResult env aenv alab args tenv taenv t)
 simplePrimal args ctx lab buildf =
     runArgs args ctx $ \(EBuilder ctx' f1) stores arglabss -> do
         (Exists lhs, envlabs) <- genSingleIds (toTupleType (labelType lab))
@@ -518,9 +526,9 @@ simplePrimal args ctx lab buildf =
             envlabs
   where
     runArgs :: Show alab
-            => TypedList (OpenExp progenv aenv Int alab args tenv) argts
+            => TypedList (OpenExp progenv aenv Int alab args tenv taenv) argts
             -> EContext Int env
-            -> (   EBuilder env aenv alab args tenv
+            -> (   EBuilder env aenv alab args tenv taenv
                 -> [Some (EDLabel Int)]
                 -> TypedList (TupR (EDLabel Int)) argts
                 -> IdGen r)
@@ -536,23 +544,23 @@ simplePrimal args ctx lab buildf =
 -- List of adjoints, collected for a particular label.
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
 -- environment (and the bindmap) is needed.
-newtype AdjList aenv lab alab args tenv t =
-    AdjList (forall env. EContext lab env -> [OpenExp env aenv () alab args tenv t])
+newtype AdjList aenv lab alab args tenv taenv t =
+    AdjList (forall env. EContext lab env -> [OpenExp env aenv () alab args tenv taenv t])
 
-instance Semigroup (AdjList aenv lab alab args tenv t) where
+instance Semigroup (AdjList aenv lab alab args tenv taenv t) where
     AdjList f1 <> AdjList f2 = AdjList (\ctx -> f1 ctx ++ f2 ctx)
 
-data DualResult env aenv alab args tenv =
-    DualResult (EBuilder env aenv alab args tenv)  -- Dual builder
+data DualResult env aenv alab args tenv taenv =
+    DualResult (EBuilder env aenv alab args tenv taenv)  -- Dual builder
                [Some (EDLabelN Int)]               -- To-store "set" (really list)
                (DMap (CMapKey ScalarType Int)      -- Contribution map
-                     (AdjList aenv Int alab args tenv))
+                     (AdjList aenv Int alab args tenv taenv))
 
 dual :: Show alab
      => EContext Int env
-     -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)  -- Contribution map
-     -> OpenExp progenv aenv Int alab args tenv t
-     -> IdGen (DualResult env aenv alab args tenv)
+     -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv taenv)  -- Contribution map
+     -> OpenExp progenv aenv Int alab args tenv taenv t
+     -> IdGen (DualResult env aenv alab args tenv taenv)
 dual ctx cmap = \case
     e | trace ("exp dual: " ++ head (words (show e))) False -> undefined
 
@@ -732,15 +740,15 @@ dual ctx cmap = \case
     Index lab _ _ _ -> simpleDual ctx cmap lab
   where
     emptyDual :: EContext Int env
-              -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)  -- Contribution map
-              -> DualResult env aenv alab args tenv
+              -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv taenv)  -- Contribution map
+              -> DualResult env aenv alab args tenv taenv
     emptyDual ctx' cmap' = DualResult (EBuilder ctx' id) [] cmap'
 
     simpleDual :: (Show alab, IsTupleType ScalarType s)
                => EContext Int env
-               -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
+               -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv taenv)
                -> DLabel NodeLabel s Int t
-               -> IdGen (DualResult env aenv alab args tenv)
+               -> IdGen (DualResult env aenv alab args tenv taenv)
     simpleDual ctx' cmap' lab = do
         let (adjoint, cmap'') = collectAdjointCMap cmap' (Local (tupleLabel lab)) ctx'
         (Exists lhs, envlabs) <- genSingleIds (etypeOf adjoint)
@@ -754,10 +762,10 @@ dual ctx cmap = \case
 -- references.
 primAppDerivative :: TypeR t
                   -> A.PrimFun (t -> t')
-                  -> OpenExp env aenv () alab args tenv t   -- primal value of argument
-                  -> OpenExp env aenv () alab args tenv t'  -- primal value of result
-                  -> OpenExp env aenv () alab args tenv t'  -- adjoint of result
-                  -> OpenExp env aenv () alab args tenv t   -- adjoint of argument
+                  -> OpenExp env aenv () alab args tenv taenv t   -- primal value of argument
+                  -> OpenExp env aenv () alab args tenv taenv t'  -- primal value of result
+                  -> OpenExp env aenv () alab args tenv taenv t'  -- adjoint of result
+                  -> OpenExp env aenv () alab args tenv taenv t   -- adjoint of argument
 primAppDerivative argty oper parg pres adjoint = case oper of
     A.PrimAdd _ ->
         Pair (nilLabel argty) adjoint adjoint
@@ -812,11 +820,11 @@ isIntegralType _ = False
 
 -- Collect adjoint from the contribution map, and returns the map with this label's entries removed.
 collectAdjointCMap :: Show alab
-                   => DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
+                   => DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv taenv)
                    -> CMapKey ScalarType Int t
                    -> EContext Int env
-                   -> (OpenExp env aenv () alab args tenv t
-                      ,DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv))
+                   -> (OpenExp env aenv () alab args tenv taenv t
+                      ,DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv taenv))
 collectAdjointCMap contribmap key ctx =
     case DMap.lookup key contribmap of
         Just (AdjList listgen) ->
@@ -829,12 +837,12 @@ collectAdjointCMap contribmap key ctx =
                       (res, contribmap)
 
 addContrib :: CMapKey ScalarType Int t
-           -> (forall env. EContext Int env -> OpenExp env aenv () alab args tenv t)
-           -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
-           -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv)
+           -> (forall env. EContext Int env -> OpenExp env aenv () alab args tenv taenv t)
+           -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv taenv)
+           -> DMap (CMapKey ScalarType Int) (AdjList aenv Int alab args tenv taenv)
 addContrib key gen = DMap.insertWith (<>) key (AdjList (pure . gen))
 
-oneHotTup :: TypeR t -> TupleIdx t t' -> OpenExp env aenv () alab args tenv t' -> OpenExp env aenv () alab args tenv t
+oneHotTup :: TypeR t -> TupleIdx t t' -> OpenExp env aenv () alab args tenv taenv t' -> OpenExp env aenv () alab args tenv taenv t
 oneHotTup _ TIHere ex = ex
 oneHotTup ty@(TupRpair ty1 ty2) (TILeft ti) ex = Pair (nilLabel ty) (oneHotTup ty1 ti ex) (zeroForType ty2)
 oneHotTup ty@(TupRpair ty1 ty2) (TIRight ti) ex = Pair (nilLabel ty) (zeroForType ty1) (oneHotTup ty2 ti ex)

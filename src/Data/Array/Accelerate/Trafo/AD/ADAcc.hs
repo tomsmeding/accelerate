@@ -34,7 +34,7 @@ import Data.Array.Accelerate.Representation.Slice
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.AD.Acc
 import Data.Array.Accelerate.Trafo.AD.Additive
-import Data.Array.Accelerate.Trafo.AD.ADExp (splitLambdaAD, labeliseExpA, labeliseFunA, inlineAvarLabels')
+import Data.Array.Accelerate.Trafo.AD.ADExp (RelocatableExp(..), splitLambdaAD, labeliseExpA, labeliseFunA, inlineAvarLabels')
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as ADExp
 import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Config
@@ -97,9 +97,10 @@ data ReverseADResA alab tenv taenv t =
                       (OpenAcc aenv () () () taenv t)
 
 reverseADA :: ALeftHandSide t () aenv
-           -> OpenAcc aenv () () () taenv (Array () Float)
+           -> OpenAcc aenv () () () taenv t'
+           -> A.ArrayVars taenv t'
            -> ReverseADResA alab tenv taenv t
-reverseADA paramlhs expr = evalIdGen $ do
+reverseADA paramlhs expr adjfreevars = evalIdGen $ do
     let paramty = lhsToTupR paramlhs
     (argsRHSlabel, expr') <-
         enlabelAccToplevel paramlhs (argumentTuple paramty) (generaliseArgs expr)
@@ -109,11 +110,8 @@ reverseADA paramlhs expr = evalIdGen $ do
     PrimalResult (ABuilder primalCtx primalBuilder) _ _ <-
         primal (Context LEmpty mempty) expr'
 
-    let cmap0 = DMap.singleton (Local (alabelOf expr')) (AdjList (\_ ->
-                  [Generate (nilLabel (ArrayR ShapeRz tupleType))
-                            (Nil magicLabel)
-                            (ELPlain (Lam (LeftHandSideWildcard tupleType)
-                                          (Body (Const scalarLabel 1.0))))]))
+    let cmap0 = DMap.singleton (Local (alabelOf expr'))
+                               (AdjList (\_ -> [untupleAccs (fmapTupR smartAfreeVar adjfreevars)]))
     DualResult (ABuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx cmap0 expr'
     let argpvars = resolveEnvLabs dualCtx (findPrimalBMap dualCtx argsRHSlabel)
         (gradient, _) = collectAdjointCMap dualCMap (Argument paramty) argpvars dualCtx
@@ -225,7 +223,7 @@ enlabelAcc aenv prog = case prog of
     genLabNS :: ADLabelNS () t -> IdGen (ADLabelNS Int t)
     genLabNS = genIdNodeSingle . labelType
 
-    splitLambda :: ArrayR (Array sh e) -> TagVal (AAnyPartLabelN Int) aenv -> Fun aenv () () tenv (t1 -> t2) -> IdGen (ExpLambda1 aenv () Int tenv sh t1 t2)
+    splitLambda :: ArrayR (Array sh e) -> TagVal (AAnyPartLabelN Int) aenv -> Fun aenv () () tenv taenv (t1 -> t2) -> IdGen (ExpLambda1 aenv () Int tenv taenv sh t1 t2)
     splitLambda (ArrayR sht _) aenv' fun
       | SomeSplitLambdaAD split@(SplitLambdaAD _ _ _ tmpty _ _) <- splitLambdaAD (snd (labeliseFunA aenv' fun))
       = ELSplit split <$> genIdNodeSingle (ArrayR sht tmpty)
@@ -426,8 +424,8 @@ primal ctx = \case
 -- If the lambda is not small, the result computes the primal once and shares it.
 primalProducerFromLambda
     :: AContext Int aenv
-    -> SplitLambdaAD t1 t2 () Int () tmp idxadj
-    -> (Fun aenv () () () (t1 -> (t2, tmp))
+    -> SplitLambdaAD t1 t2 () Int () taenv tmp idxadj
+    -> (Fun aenv () () () taenv (t1 -> (t2, tmp))
            -> OpenAcc aenv () () args taenv (Array sh (t2, tmp)))
     -> OpenAcc aenv () () args taenv (Array sh t2, Array sh tmp)
 primalProducerFromLambda ctx (SplitLambdaAD primalLambda _ fvlabs _ _ _) buildf =
@@ -726,7 +724,7 @@ dual ctx cmap = \case
                                     -- zipWith (*) (replicate (shape a) adjoint) (usual_derivative)
                                     let tempvar = resolveEnvLab ctx2 envlab1
                                     in smartZipWith (timesLam numType)
-                                        (Replicate (nilLabel (atypeOf1 arg1)) onemoreSlix (onemoreExpf (smartShape (Left tempvar)))
+                                        (Replicate (nilLabel (atypeOf1 arg1)) onemoreSlix (onemoreExpf (smartShape tempvar))
                                                    (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
                                         (smartAvar tempvar))
                                 cmap'
@@ -740,7 +738,8 @@ dual ctx cmap = \case
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
                             Alet (LeftHandSideSingle (labelType envlab1))
-                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody) (Const scalarLabel 1.0) of
+                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody)
+                                                       (RelocatableExp $ Const scalarLabel 1.0) of
                                     ADExp.ReverseADResE lambdalhs' dualbody ->
                                         -- let sc = init (scanl f x0 a)
                                         -- in zipWith (*) (zipWith D₂f sc a)
@@ -788,7 +787,7 @@ dual ctx cmap = \case
                                     -- zipWith (*) (replicate (shape a) adjoint) (usual_derivative)
                                     let tempvar = resolveEnvLab ctx2 envlab1
                                     in smartZipWith (timesLam numType)
-                                        (Replicate (nilLabel (atypeOf1 arg1)) onemoreSlix (onemoreExpf (smartShape (Left tempvar)))
+                                        (Replicate (nilLabel (atypeOf1 arg1)) onemoreSlix (onemoreExpf (smartShape tempvar))
                                                    (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
                                         (smartAvar tempvar))
                                 cmap'
@@ -802,7 +801,8 @@ dual ctx cmap = \case
         return $ DualResult
             (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
                             Alet (LeftHandSideSingle (labelType envlab1))
-                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody) (Const scalarLabel 1.0) of
+                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody)
+                                                       (RelocatableExp $ Const scalarLabel 1.0) of
                                     ADExp.ReverseADResE lambdalhs' dualbody ->
                                         -- let sc = init (scanl1 f a)
                                         -- in zipWith (*) ([1] ++ zipWith D₂f sc (tail l))
@@ -835,8 +835,8 @@ dual ctx cmap = \case
             (\ctx2 ->
                 Replicate (nilLabel (atypeOf1 arg1))
                           slixType
-                          (slixExpGen (smartShape (Left
-                              (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1)))))))
+                          (slixExpGen (smartShape
+                              (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1))))))
                           (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
 
     Replicate lab slixspec _ arg1 ->
@@ -851,8 +851,8 @@ dual ctx cmap = \case
         simpleArrayDual "Slice" lab arg1 ctx cmap
             (\ctx2 ->
                 Generate (nilLabel (atypeOf1 arg1))
-                         (smartShape (Left
-                            (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1))))))
+                         (smartShape
+                            (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1)))))
                          (ELPlain (sliceDualLambda slixspec
                                                    (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))
                                                    (resolveAlabs ctx2 slexp))))
@@ -861,8 +861,8 @@ dual ctx cmap = \case
         simpleArrayDual "Reshape" lab arg1 ctx cmap
             (\ctx2 ->
                 Reshape (nilLabel (atypeOf1 arg1))
-                        (smartShape (Left
-                            (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1))))))
+                        (smartShape
+                            (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1)))))
                         (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
 
     Backpermute lab _ lam arg1
@@ -871,8 +871,8 @@ dual ctx cmap = \case
             (\ctx2 ->
                 Permute (nilLabel (atypeOf1 arg1))
                         (plusLam (arrayRtype (atypeOf1 arg1)))
-                        (generateConstantArray (atypeOf1 arg1) (smartShape (Left
-                            (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1)))))))
+                        (generateConstantArray (atypeOf1 arg1) (smartShape
+                            (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1))))))
                         (Lam funLHS (Body (mkJust (resolveAlabs ctx2 funBody))))
                         (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
 
@@ -953,16 +953,16 @@ dual ctx cmap = \case
     Reduce _ _ _ _ -> error "AD: Reduce currently unsupported"
     Permute _ _ _ _ _ -> error "AD: Permute currently unsupported"
   where
-    timesLam :: NumType t -> Fun aenv () alab tenv ((t, t) -> t)
+    timesLam :: NumType t -> Fun aenv () alab tenv taenv ((t, t) -> t)
     timesLam ty =
         let sty = SingleScalarType (NumSingleType ty)
         in Lam (LeftHandSidePair (LeftHandSideSingle sty) (LeftHandSideSingle sty))
                (Body (smartMul ty (smartVar (A.Var sty (SuccIdx ZeroIdx))) (smartVar (A.Var sty ZeroIdx))))
 
-    smartInnerPermute :: (forall env aenv'. OpenExp env aenv' () () () () Int
-                                         -> OpenExp env aenv' () () () () Int)  -- ^ new inner dimension size
-                      -> (forall env aenv'. OpenExp env aenv' () () () () Int
-                                         -> OpenExp env aenv' () () () () Int)  -- ^ inner index transformer
+    smartInnerPermute :: (forall env aenv'. OpenExp env aenv' () () () () taenv Int
+                                         -> OpenExp env aenv' () () () () taenv Int)  -- ^ new inner dimension size
+                      -> (forall env aenv'. OpenExp env aenv' () () () () taenv Int
+                                         -> OpenExp env aenv' () () () () taenv Int)  -- ^ inner index transformer
                       -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
                       -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
     smartInnerPermute sizeExpr indexExpr a
@@ -972,7 +972,7 @@ dual ctx cmap = \case
           Alet (LeftHandSideSingle ty) a
                (Backpermute (nilLabel ty)
                    (Let (LeftHandSidePair shlhs (LeftHandSideSingle scalarType))
-                        (smartShape (Left (A.Var ty ZeroIdx)))
+                        (smartShape (A.Var ty ZeroIdx))
                         (smartPair
                             (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
                             (sizeExpr (smartVar (A.Var scalarType ZeroIdx)))))
@@ -991,7 +991,7 @@ dual ctx cmap = \case
     smartInit = smartInnerPermute (\sz -> smartSub numType sz (Const scalarLabel 1))
                                   (\idx -> idx)
 
-    smartCons :: (forall env aenv'. OpenExp env aenv' () () () () t)
+    smartCons :: (forall env aenv'. OpenExp env aenv' () () () () taenv t)
               -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
               -> OpenAcc aenv () () args taenv (Array (sh, Int) t)
     smartCons prefix a
@@ -1001,7 +1001,7 @@ dual ctx cmap = \case
           Alet (LeftHandSideSingle ty) a
                (Generate (nilLabel ty)
                    (Let (LeftHandSidePair shlhs (LeftHandSideSingle scalarType))
-                        (smartShape (Left (A.Var ty ZeroIdx)))
+                        (smartShape (A.Var ty ZeroIdx))
                         (smartPair
                             (evars (weakenVars (A.weakenSucc A.weakenId) shvars))
                             (smartAdd numType (smartVar (A.Var scalarType ZeroIdx)) (Const scalarLabel 1))))
@@ -1044,13 +1044,13 @@ simpleArrayDual name lab arg ctx cmap contribution = do
 -- Utility functions
 -- -----------------
 
-data MatchLamBody env aenv lab alab tenv t t' =
+data MatchLamBody env aenv lab alab tenv taenv t t' =
     forall env'.
-        MatchLamBody (A.ELeftHandSide t env env') (OpenExp env' aenv lab alab () tenv t')
+        MatchLamBody (A.ELeftHandSide t env env') (OpenExp env' aenv lab alab () tenv taenv t')
 
 -- This function exists only to be able to bind a 'Lam lhs (Body body)' in a non-MonadFail
 -- environment without hassle.
-matchLamBody :: HasCallStack => OpenFun env aenv lab alab tenv (t -> t') -> MatchLamBody env aenv lab alab tenv t t'
+matchLamBody :: HasCallStack => OpenFun env aenv lab alab tenv taenv (t -> t') -> MatchLamBody env aenv lab alab tenv taenv t t'
 matchLamBody (Lam lhs (Body body)) = MatchLamBody lhs body
 matchLamBody _ = error "matchLamBody: function has more than one argument"
 
@@ -1119,16 +1119,14 @@ indexingContributions idxadjlab idxInstMap =
                  contrib = Permute (nilLabel backingType)
                                    (plusLam backingEltType)
                                    (generateConstantArray backingType
-                                        (Shape (nilLabel backingShapeT) (Left backingPVar)))
+                                        (smartShape backingPVar))
                                    (case lhsCopy (shapeType shtype) of  -- Lambda: map use-point index to backing index
                                       LetBoundVars idxlhs idxvars
                                         | LetBoundVars ialhs iavars <- lhsCopy idxadjType ->
                                             Lam idxlhs (Body
                                               (Let ialhs
-                                                   (Index (nilLabel idxadjType)  -- get idxadj tuple
-                                                          (Left (resolveEnvLab ctx idxadjlab))
-                                                          scalarLabel
-                                                          (evars idxvars))
+                                                   (smartIndex (resolveEnvLab ctx idxadjlab)  -- get idxadj tuple
+                                                               (evars idxvars))
                                                    (smartCond  -- if the Index was executed
                                                         (smartSnd (instantiator (evars iavars)))
                                                         (mkJust (smartGet (TILeft (TIRight TIHere))  -- get the index
@@ -1176,11 +1174,11 @@ arrayPlus a1 a2 = case atypeOf1 a1 of
               --              (smartAvar a1var)
               --              (ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam ty))) (smartAvar a1var) (smartAvar a2var)))
               Generate (nilLabel arrty)
-                       (maxShapeE sht (smartShape (Left a1var)) (smartShape (Left a2var)))
+                       (maxShapeE sht (smartShape a1var) (smartShape a2var))
                        (ELPlain (Lam shlhs (Body
-                           (smartCond (shapeIsZeroE sht (smartShape (Left a1var)))
+                           (smartCond (shapeIsZeroE sht (smartShape a1var))
                                       (smartIndex a2var (evars shvars))
-                                      (smartCond (shapeIsZeroE sht (smartShape (Left a2var)))
+                                      (smartCond (shapeIsZeroE sht (smartShape a2var))
                                                  (smartIndex a1var (evars shvars))
                                                  (expPlus ty (smartIndex a1var (evars shvars))
                                                              (smartIndex a2var (evars shvars))))))))
@@ -1189,12 +1187,11 @@ arraySum :: ArrayR (Array sh t)
          -> A.ArrayVar aenv (Array sh t)  -- primal result
          -> [OpenAcc aenv () () args taenv (Array sh t)]
          -> OpenAcc aenv () () args taenv (Array sh t)
-arraySum ty@(ArrayR sht _) pvar [] = 
-    generateConstantArray ty (Shape (nilLabel (shapeType sht)) (Left pvar))
+arraySum ty pvar [] = generateConstantArray ty (smartShape pvar)
 arraySum _ _ [a] = a
 arraySum arrty pvar (a1:as) = arrayPlus a1 (arraySum arrty pvar as)
 
-shapeIsZeroE :: ShapeR (sh, Int) -> OpenExp env aenv () alab args tenv (sh, Int) -> OpenExp env aenv () alab args tenv A.PrimBool
+shapeIsZeroE :: ShapeR (sh, Int) -> OpenExp env aenv () alab args tenv taenv (sh, Int) -> OpenExp env aenv () alab args tenv taenv A.PrimBool
 shapeIsZeroE (ShapeRsnoc ShapeRz) expr =
     smartEq singleType (smartSnd expr) (Const (nilLabel scalarType) 0)
 shapeIsZeroE (ShapeRsnoc sht@(ShapeRsnoc _)) expr =
@@ -1214,7 +1211,7 @@ arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) l
 arraysSum ty _ l =
     foldl1 (tupleZipAcc' ty (\_ _ _ -> arrayPlus) (\_ _ -> False)) l
 
-generateConstantArray :: ArrayR (Array sh t) -> Exp aenv () () () () sh -> OpenAcc aenv () () args taenv (Array sh t)
+generateConstantArray :: ArrayR (Array sh t) -> Exp aenv () () () () taenv sh -> OpenAcc aenv () () args taenv (Array sh t)
 generateConstantArray ty@(ArrayR sht eltty) she =
     Generate (nilLabel ty) she
              (ELPlain (Lam (LeftHandSideWildcard (shapeType sht)) (Body (zeroForType eltty))))
@@ -1224,7 +1221,7 @@ emptiesForType TupRunit = Anil (nilLabel TupRunit)
 emptiesForType (TupRsingle ty@(ArrayR sht _)) = generateConstantArray ty (zeroForType (shapeType sht))
 emptiesForType (TupRpair t1 t2) = smartApair (emptiesForType t1) (emptiesForType t2)
 
-expGetLam :: TupleIdx t t' -> TypeR t -> Fun aenv () alab tenv (t -> t')
+expGetLam :: TupleIdx t t' -> TypeR t -> Fun aenv () alab tenv taenv (t -> t')
 expGetLam ti ty
   | LetBoundVars lhs vars <- lhsCopy ty
   = Lam lhs (Body (evars (pickTupR ti vars)))
@@ -1240,13 +1237,13 @@ mapFst = mapGet (TILeft TIHere)
 mapSnd :: OpenAcc aenv () () tenv taenv (Array sh (a, b)) -> OpenAcc aenv () () tenv taenv (Array sh b)
 mapSnd = mapGet (TIRight TIHere)
 
-plusLam :: TypeR t -> Fun aenv () alab tenv (t -> t -> t)
+plusLam :: TypeR t -> Fun aenv () alab tenv taenv (t -> t -> t)
 plusLam ty
   | DeclareVars lhs1 _ varsgen1 <- declareVars ty
   , DeclareVars lhs2 weaken2 varsgen2 <- declareVars ty
   = Lam lhs1 . Lam lhs2 . Body $ expPlus ty (evars (varsgen1 weaken2)) (evars (varsgen2 A.weakenId))
 
-uncurryFun :: Fun aenv lab alab tenv (a -> b -> c) -> Fun aenv lab alab tenv ((a, b) -> c)
+uncurryFun :: Fun aenv lab alab tenv taenv (a -> b -> c) -> Fun aenv lab alab tenv taenv ((a, b) -> c)
 uncurryFun (Lam l1 (Lam l2 (Body e))) = Lam (LeftHandSidePair l1 l2) (Body e)
 uncurryFun _ = error "uncurryFun: impossible GADTs"
 
@@ -1267,9 +1264,9 @@ reduceSpecFromReplicate (SliceFixed slix) = RSpecReduce (reduceSpecFromReplicate
 data ReplicateOneMore sh =
     forall slix.
         ReplicateOneMore (SliceIndex slix sh ((), Int) (sh, Int))
-                         (forall env aenv alab args tenv.
-                              OpenExp env aenv () alab args tenv (sh, Int)
-                           -> OpenExp env aenv () alab args tenv slix)
+                         (forall env aenv alab args tenv taenv.
+                              OpenExp env aenv () alab args tenv taenv (sh, Int)
+                           -> OpenExp env aenv () alab args tenv taenv slix)
 
 -- Produces a SliceIndex that can be passed to Replicate, and a function that
 -- produces the slix expression parameter to Replicate, given an expression for
@@ -1286,7 +1283,7 @@ replicateOneMore sh
 data SliceCopy sh =
     forall slix.
         SliceCopy (SliceIndex slix sh () sh)
-                  (forall env aenv alab args tenv. OpenExp env aenv () alab args tenv slix)
+                  (forall env aenv alab args tenv taenv. OpenExp env aenv () alab args tenv taenv slix)
 
 sliceCopy :: ShapeR sh -> SliceCopy sh
 sliceCopy ShapeRz = SliceCopy SliceNil (Nil magicLabel)
@@ -1300,8 +1297,8 @@ sliceCopy (ShapeRsnoc sh)
 -- Generate.
 sliceDualLambda :: SliceIndex slix sl co sh
                 -> A.Var ArrayR aenv (Array sl e)
-                -> Exp aenv () alab () tenv slix
-                -> Fun aenv () alab tenv (sh -> e)
+                -> Exp aenv () alab () tenv taenv slix
+                -> Fun aenv () alab tenv taenv (sh -> e)
 sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
   | LetBoundVars indexlhs indexvars' <- lhsCopy (shapeType (sliceDomainR slix))
   , LetBoundVars slicelhs slicevars <- lhsCopy (sliceIndexTypeR slix)
@@ -1310,7 +1307,7 @@ sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
       Let slicelhs (sinkExp (A.weakenWithLHS indexlhs) slexpr) $
           Cond (nilLabel eltty)
                (genCond slix indexvars slicevars)
-               (Index (nilLabel eltty) (Left adjvar) scalarLabel (evars (indexSlice slix indexvars)))
+               (smartIndex adjvar (evars (indexSlice slix indexvars)))
                (zeroForType eltty)
   where
     indexSlice :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env sl
@@ -1319,7 +1316,7 @@ sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
     indexSlice (SliceFixed slix') (TupRpair vars _) = indexSlice slix' vars
     indexSlice _ _ = error "impossible GADTs"
 
-    genCond :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env slix -> OpenExp env aenv () alab args tenv A.PrimBool
+    genCond :: SliceIndex slix sl co sh -> A.ExpVars env sh -> A.ExpVars env slix -> OpenExp env aenv () alab args tenv taenv A.PrimBool
     genCond SliceNil TupRunit TupRunit = mkBool True
     genCond (SliceAll slix') (TupRpair idxvs _) (TupRpair slvs _) = genCond slix' idxvs slvs
     genCond (SliceFixed slix') (TupRpair idxvs (TupRsingle idxv)) (TupRpair slvs (TupRsingle slv)) =
@@ -1352,15 +1349,15 @@ reshapesWithZeros shapeRef subject
     reshapeWithZeros' shapeRef' subjectVar@(A.Var ty@(ArrayR sht eltty) _)
       | LetBoundVars lhs vars <- lhsCopy (shapeType sht)
       = Generate (nilLabel ty)
-                 (smartShape (Left shapeRef'))
+                 (smartShape shapeRef')
                  (ELPlain (Lam lhs (Body
-                     (smartCond (shapeInBoundsE sht (evars vars) (smartShape (Left subjectVar)))
+                     (smartCond (shapeInBoundsE sht (evars vars) (smartShape subjectVar))
                                 (smartIndex subjectVar (evars vars))
                                 (zeroForType eltty)))))
 
 -- 'shapeInBoundsE a b' computes whether a < b, or more specifically: indexing
 -- an array with shape 'b' at index 'a' will succeed.
-shapeInBoundsE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv A.PrimBool
+shapeInBoundsE :: ShapeR sh -> OpenExp env aenv () alab args tenv taenv sh -> OpenExp env aenv () alab args tenv taenv sh -> OpenExp env aenv () alab args tenv taenv A.PrimBool
 shapeInBoundsE sht a b
   | LetBoundVars lhs1 vars1 <- lhsCopy (shapeType sht)
   , LetBoundVars lhs2 vars2 <- lhsCopy (shapeType sht)
@@ -1368,7 +1365,7 @@ shapeInBoundsE sht a b
     Let lhs2 (sinkExp (A.weakenWithLHS lhs1) b) $
       shapeInBoundsEvars sht (weakenVars (A.weakenWithLHS lhs2) vars1) vars2
   where
-    shapeInBoundsEvars :: ShapeR sh -> A.ExpVars env sh -> A.ExpVars env sh -> OpenExp env aenv () alab args tenv A.PrimBool
+    shapeInBoundsEvars :: ShapeR sh -> A.ExpVars env sh -> A.ExpVars env sh -> OpenExp env aenv () alab args tenv taenv A.PrimBool
     shapeInBoundsEvars ShapeRz _ _ = Const scalarLabel 1
     shapeInBoundsEvars (ShapeRsnoc ShapeRz) (TupRpair _ (TupRsingle var1)) (TupRpair _ (TupRsingle var2)) =
         smartLt singleType (smartVar var1) (smartVar var2)
@@ -1378,8 +1375,8 @@ shapeInBoundsE sht a b
 
 resolveAlabs :: HasCallStack
              => AContext Int aenv
-             -> OpenExp env aenv' lab Int args tenv t
-             -> OpenExp env aenv lab alab' args tenv t
+             -> OpenExp env aenv' lab Int args tenv taenv t
+             -> OpenExp env aenv lab alab' args tenv taenv t
 resolveAlabs ctx ex =
     inlineAvarLabels'
         (\(AnyPartLabel (PartLabel lab tidx)) ->
@@ -1388,15 +1385,15 @@ resolveAlabs ctx ex =
 
 resolveAlabsFun :: HasCallStack
                 => AContext Int aenv
-                -> OpenFun env aenv' lab Int tenv t
-                -> OpenFun env aenv lab alab' tenv t
+                -> OpenFun env aenv' lab Int tenv taenv t
+                -> OpenFun env aenv lab alab' tenv taenv t
 resolveAlabsFun ctx (Lam lhs fun) = Lam lhs (resolveAlabsFun ctx fun)
 resolveAlabsFun ctx (Body ex) = Body (resolveAlabs ctx ex)
 
 -- minShapeE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh
 -- minShapeE sht = tupleZipExp' (shapeType sht) (\(SingleScalarType sty) e1 e2 -> smartMin sty e1 e2) (\_ _ -> False)
 
-maxShapeE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh
+maxShapeE :: ShapeR sh -> OpenExp env aenv () alab args tenv taenv sh -> OpenExp env aenv () alab args tenv taenv sh -> OpenExp env aenv () alab args tenv taenv sh
 maxShapeE sht = tupleZipExp' (shapeType sht) (\(SingleScalarType sty) _ _ e1 e2 -> smartMax sty e1 e2) (\_ _ -> False)
 
 sortUniq :: Ord a => [a] -> [a]

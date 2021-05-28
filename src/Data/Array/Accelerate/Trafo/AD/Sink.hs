@@ -22,17 +22,19 @@ import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 
 
-sinkExpAenv :: aenv A.:> aenv' -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv' lab alab args tenv t
+sinkExpAenv :: aenv A.:> aenv' -> OpenExp env aenv lab alab args tenv taenv t -> OpenExp env aenv' lab alab args tenv taenv t
 sinkExpAenv _ (Const lab x) = Const lab x
 sinkExpAenv k (PrimApp lab op e) = PrimApp lab op (sinkExpAenv k e)
 sinkExpAenv _ (PrimConst lab c) = PrimConst lab c
 sinkExpAenv k (Pair ty e1 e2) = Pair ty (sinkExpAenv k e1) (sinkExpAenv k e2)
 sinkExpAenv _ (Nil lab) = Nil lab
 sinkExpAenv k (Cond lab c t e) = Cond lab (sinkExpAenv k c) (sinkExpAenv k t) (sinkExpAenv k e)
-sinkExpAenv k (Shape lab (Left (A.Var sht idx))) = Shape lab (Left (A.Var sht (k A.>:> idx)))
-sinkExpAenv _ (Shape lab (Right alab)) = Shape lab (Right alab)
-sinkExpAenv k (Index lab (Left (A.Var sht idx)) execLab idxe) = Index lab (Left (A.Var sht (k A.>:> idx))) execLab (sinkExpAenv k idxe)
-sinkExpAenv k (Index lab (Right alab) execLab idxe) = Index lab (Right alab) execLab (sinkExpAenv k idxe)
+sinkExpAenv k (Shape lab (ARVar (A.Var sht idx))) = Shape lab (ARVar (A.Var sht (k A.>:> idx)))
+sinkExpAenv _ (Shape lab (ARFree var)) = Shape lab (ARFree var)
+sinkExpAenv _ (Shape lab (ARLab alab)) = Shape lab (ARLab alab)
+sinkExpAenv k (Index lab (ARVar (A.Var sht idx)) execLab idxe) = Index lab (ARVar (A.Var sht (k A.>:> idx))) execLab (sinkExpAenv k idxe)
+sinkExpAenv k (Index lab (ARFree var) execLab idxe) = Index lab (ARFree var) execLab (sinkExpAenv k idxe)
+sinkExpAenv k (Index lab (ARLab alab) execLab idxe) = Index lab (ARLab alab) execLab (sinkExpAenv k idxe)
 sinkExpAenv k (ShapeSize lab sht e) = ShapeSize lab sht (sinkExpAenv k e)
 sinkExpAenv k (Get lab ti e) = Get lab ti (sinkExpAenv k e)
 sinkExpAenv _ (Undef lab) = Undef lab
@@ -41,7 +43,7 @@ sinkExpAenv _ (Var lab var referLab) = Var lab var referLab
 sinkExpAenv _ (FreeVar lab var) = FreeVar lab var
 sinkExpAenv _ (Arg lab argsty tidx) = Arg lab argsty tidx
 
-sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab alab tenv t -> OpenFun env aenv' lab alab tenv t
+sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab alab tenv taenv t -> OpenFun env aenv' lab alab tenv taenv t
 sinkFunAenv k (Lam lhs fun) = Lam lhs (sinkFunAenv k fun)
 sinkFunAenv k (Body e) = Body (sinkExpAenv k e)
 
@@ -85,11 +87,11 @@ aCheckLocal (A.Var sty (A.SuccIdx idx)) (TPush tagval _)
 -- | If the expression is closed in env, returns the re-typed expression;
 -- otherwise, returns Nothing.
 eCheckClosedInLHS :: A.ELeftHandSide t' () env
-                  -> OpenExp env2 aenv lab alab args tenv t
-                  -> Maybe (OpenExp env aenv lab alab args tenv t)
+                  -> OpenExp env2 aenv lab alab args tenv taenv t
+                  -> Maybe (OpenExp env aenv lab alab args tenv taenv t)
 eCheckClosedInLHS lhs expr = eCheckClosedInTagval (valPushLHS lhs TEmpty) expr
 
-eCheckClosedInTagval :: TagVal A.ScalarType env2 -> OpenExp env aenv lab alab args tenv t -> Maybe (OpenExp env2 aenv lab alab args tenv t)
+eCheckClosedInTagval :: TagVal A.ScalarType env2 -> OpenExp env aenv lab alab args tenv taenv t -> Maybe (OpenExp env2 aenv lab alab args tenv taenv t)
 eCheckClosedInTagval tv expr = case expr of
     Const lab x -> Just (Const lab x)
     PrimApp lab op e -> PrimApp lab op <$> eCheckClosedInTagval tv e
@@ -109,17 +111,19 @@ eCheckClosedInTagval tv expr = case expr of
     FreeVar lab var -> Just (FreeVar lab var)
     Arg lab argsty tidx -> Just (Arg lab argsty tidx)
 
-eCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenExp env aenv lab alab args tenv t -> Maybe (OpenExp env aenv2 lab alab args tenv t)
+eCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenExp env aenv lab alab args tenv taenv t -> Maybe (OpenExp env aenv2 lab alab args tenv taenv t)
 eCheckAClosedInTagval tv expr = case expr of
     Const lab x -> Just (Const lab x)
     PrimApp lab op e -> PrimApp lab op <$> eCheckAClosedInTagval tv e
     PrimConst lab c -> Just (PrimConst lab c)
     Pair lab e1 e2 -> Pair lab <$> eCheckAClosedInTagval tv e1 <*> eCheckAClosedInTagval tv e2
     Nil lab -> Just (Nil lab)
-    Shape lab (Left var) -> Shape lab . Left <$> aCheckLocal var tv
-    Shape _ (Right _) -> error "Exp with label in arrayvar position (Shape) is not closed, todo?"
-    Index lab (Left var) execLab idxe -> Index lab <$> (Left <$> aCheckLocal var tv) <*> return execLab <*> eCheckAClosedInTagval tv idxe
-    Index _ (Right _) _ _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
+    Shape lab (ARVar var) -> Shape lab . ARVar <$> aCheckLocal var tv
+    Shape lab (ARFree var) -> Just (Shape lab (ARFree var))
+    Shape _ (ARLab _) -> error "Exp with label in arrayvar position (Shape) is not closed, todo?"
+    Index lab (ARVar var) execLab idxe -> Index lab <$> (ARVar <$> aCheckLocal var tv) <*> return execLab <*> eCheckAClosedInTagval tv idxe
+    Index lab (ARFree var) execLab idxe -> Index lab (ARFree var) <$> return execLab <*> eCheckAClosedInTagval tv idxe
+    Index _ (ARLab _) _ _ -> error "Exp with label in arrayvar position (Index) is not closed, todo?"
     ShapeSize lab sht e -> ShapeSize lab sht <$> eCheckAClosedInTagval tv e
     Cond lab c t e -> Cond lab <$> eCheckAClosedInTagval tv c  <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
     Get lab ti e -> Get lab ti <$> eCheckAClosedInTagval tv e
@@ -129,7 +133,7 @@ eCheckAClosedInTagval tv expr = case expr of
     FreeVar lab var -> Just (FreeVar lab var)
     Arg lab argsty tidx -> Just (Arg lab argsty tidx)
 
-efCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenFun env aenv lab alab tenv t -> Maybe (OpenFun env aenv2 lab alab tenv t)
+efCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenFun env aenv lab alab tenv taenv t -> Maybe (OpenFun env aenv2 lab alab tenv taenv t)
 efCheckAClosedInTagval tv (Lam lhs fun) = Lam lhs <$> efCheckAClosedInTagval tv fun
 efCheckAClosedInTagval tv (Body e) = Body <$> eCheckAClosedInTagval tv e
 

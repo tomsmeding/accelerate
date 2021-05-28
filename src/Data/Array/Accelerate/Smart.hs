@@ -463,11 +463,11 @@ data PreSmartAcc acc exp as where
                 -> acc (Array sh b)
                 -> PreSmartAcc acc exp (Array sh c)
 
-  GradientA     :: ArraysR a
-                -> ArrayR (Array () t)
-                -> (SmartAcc a -> acc (Array () t))
+  Avjp          :: ArraysR a
+                -> (SmartAcc a -> acc b)
                 -> acc a
-                -- -> PreSmartAcc acc exp (((), t), a)
+                -> acc b
+                -- -> PreSmartAcc acc exp (((), b), a)
                 -> PreSmartAcc acc exp a
 
 
@@ -846,7 +846,7 @@ instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
                                  in  TupRsingle (ArrayR shr tp)
     Stencil s tp _ _ _        -> TupRsingle $ ArrayR (stencilShapeR s) tp
     Stencil2 s _ tp _ _ _ _ _ -> TupRsingle $ ArrayR (stencilShapeR s) tp
-    GradientA t _ _ _         -> t
+    Avjp t _ _ _              -> t
 
 
 class HasTypeR f where
@@ -1350,7 +1350,7 @@ showPreAccOp Backpermute{}         = "Backpermute"
 showPreAccOp Stencil{}             = "Stencil"
 showPreAccOp Stencil2{}            = "Stencil2"
 showPreAccOp Aforeign{}            = "Aforeign"
-showPreAccOp GradientA{}           = "GradientA"
+showPreAccOp Avjp{}                = "Avjp"
 
 showDirection :: Direction -> Builder
 showDirection LeftToRight = singleton 'l'

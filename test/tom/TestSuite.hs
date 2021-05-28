@@ -130,7 +130,7 @@ compareAD' :: (Show e, Shape sh) => Gen e -> Gen (A.Array sh Float) -> (forall a
 compareAD' egen gen func = withShrinks 10 $ property $ do
   expval <- forAll egen
   arr <- forAll gen
-  let revadResult = I.run1 (AD.gradientA (func expval)) arr
+  let revadResult = I.run1 (AD.agradient (func expval)) arr
       fwdadResult = gradientFwdAD arr (func expval)
       (_, fdResult) = findiff (func expval) arr
   checkApproxEqual revadResult fwdadResult
@@ -148,7 +148,7 @@ compareAD'2 egen gen1 gen2 func = withShrinks 10 $ property $ do
   expval <- forAll egen
   arr1 <- forAll gen1
   arr2 <- forAll gen2
-  let revadResult = I.run1 (AD.gradientA (\(A.T2 a1 a2) -> func expval a1 a2)) (arr1, arr2)
+  let revadResult = I.run1 (AD.agradient (\(A.T2 a1 a2) -> func expval a1 a2)) (arr1, arr2)
       fwdadResult = gradientFwdAD2 (arr1, arr2) (func expval)
       (_, fdResult) = findiff (\(A.T2 a1 a2) -> func expval a1 a2) (arr1, arr2)
   checkApproxEqual revadResult fwdadResult
@@ -509,6 +509,18 @@ prop_acond_cond1 = compareAD' nil (Gen.filter ((> 0) . A.arraySize) sized_vec) $
                     (A.generate (A.I1 (2 * n)) (\(A.I1 i) -> A.cond (i A.<= idx) (a A.! A.I1 i) (b A.! A.I1 ((i - idx) `div` 2))))
                     (A.generate (A.I1 (2 * n)) (\(A.I1 i) -> a A.! A.I1 (idx - n) + A.cond (i A.>= n) (b A.! A.I1 (i - n)) (a A.! A.I1 i))))
 
+-- Check that the derivative of the composition of two functions is equal to
+-- the composition of their derivative functions.
+prop_avjp :: Property
+prop_avjp = property $ do
+  arg <- forAll sized_vec
+  let f :: A.Acc (A.Vector Float) -> A.Acc (A.Vector Float)
+      f = A.map (\x -> A.sin x * A.cos (x + 3))
+      g :: A.Acc (A.Vector Float) -> A.Acc (A.Scalar Float)
+      g = A.sum . A.map (\x -> x * A.sqrt x)
+  checkApproxEqual (I.run1 (\arg' -> AD.agradient (g . f) arg') arg)
+                   (I.run1 (\arg' -> AD.areverseAD f arg' (AD.agradient g (f arg'))) arg)
+
 
 -- Expression tests
 -- ----------------
@@ -561,8 +573,8 @@ prop_ignore_argument = compareADE sized_vec $ \_ -> 42.0
 
 -- Check that the derivative of the composition of two functions is equal to
 -- the composition of their derivative functions.
-prop_vjp :: Property
-prop_vjp = property $ do
+prop_evjp :: Property
+prop_evjp = property $ do
   a1 <- forAll genFloat
   a2 <- forAll genFloat
   let f :: A.Exp (Float, Float) -> A.Exp (Float, Float)

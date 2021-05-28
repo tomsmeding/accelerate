@@ -156,7 +156,7 @@ learnSingle :: (A.Arrays a, A.Arrays state) => Int -> Network A.Acc a state -> A
 learnSingle seqLen net initState input expectedOutput =
     let learnRate = 0.05
         A.T4 contribution' _ _ _ =
-          A.gradientA (\(A.T4 lnet input' state' expectedOutput') ->
+          A.agradient (\(A.T4 lnet input' state' expectedOutput') ->
                           let net' = unliftNetwork net lnet
                               (_, errors) = mapAccumL
                                   (\s (item, expectedOut) ->

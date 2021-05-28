@@ -571,7 +571,7 @@ usesOfPreAcc withShape countAcc idx = count
       Backpermute _ sh f a       -> countE sh + countF f  + countA a
       Stencil _ _ f _ a          -> countF f  + countA a
       Stencil2 _ _ _ f _ a1 _ a2 -> countF f  + countA a1 + countA a2
-      GradientA _ _ f a          -> countA a  + countAF f idx  -- TODO: is this counting correct?
+      Avjp _ f a b               -> countAF f idx + countA a + countA b  -- TODO: is this counting correct (in particular of 'f')?
       -- Collect s                 -> countS s
 
     countE :: OpenExp env aenv e -> Int

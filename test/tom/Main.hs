@@ -65,15 +65,15 @@ neural = do
 
   -- print $ I.run $ Neural.forward network1 input1
 
-  -- print $ I.run1 (A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)))
+  -- print $ I.run1 (A.agradient (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)))
   --                (network1_l1, network1_l2)
 
-  -- print $ A.gradientA (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)) (A.T2 network1_l1' network1_l2')
+  -- print $ A.agradient (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1)) (A.T2 network1_l1' network1_l2')
 
   -- AD.aCompareAD (\(A.T2 l1 l2) -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 (Neural.NextLayer l2 Neural.InputLayer)) input1))
   --               (network1_l1, network1_l2)
 
-  print $ A.gradientA (\l1 -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 Neural.InputLayer) input1)) network1_l1'
+  print $ A.agradient (\l1 -> lossfunc output1 (Neural.forward (Neural.NextLayer l1 Neural.InputLayer) input1)) network1_l1'
 
 neural2 :: IO ()
 neural2 = do
@@ -155,12 +155,12 @@ indexing = do
   --                          (A.indexed source)
 
   print . I.run $
-    A.gradientA (\(A.T2 a b) -> A.sum (A.map (\x -> x * (a A.! A.I1 (2 * A.round x))) b))
+    A.agradient (\(A.T2 a b) -> A.sum (A.map (\x -> x * (a A.! A.I1 (2 * A.round x))) b))
                 (A.T2 (A.use (A.fromList (Z :. (11 :: Int)) [1.0::Float ..]))
                       (A.use (A.fromList (Z :. (5 :: Int)) [1.0::Float ..])))
 
   print $
-    A.gradientA (\a -> A.sum (A.generate (A.I1 5) (\(A.I1 i) -> A.cond (i A.> 2) (a A.! A.I1 (2 * i)) (a A.! A.I1 1))))
+    A.agradient (\a -> A.sum (A.generate (A.I1 5) (\(A.I1 i) -> A.cond (i A.> 2) (a A.! A.I1 (2 * i)) (a A.! A.I1 1))))
                 (A.use (A.fromList (Z :. (10 :: Int)) [1.0::Float ..]))
 
 apply :: IO ()
@@ -226,11 +226,11 @@ adtestFree = do
   print $ I.run (A.map (let c = 1.0 in (c +) . A.gradient @Float (\x -> c * x))
                        (A.use (A.fromList (Z :. (1 :: Int)) [1.0])))
 
-  -- This still fails, because free variables in gradientA are not yet implemented.
+  -- This still fails, because free variables in 'agradient' are not yet implemented.
   -- TODO: they now are! Retest?
   -- print $ I.run (let sharedArr = A.use (A.fromList @_ @Float (Z :. (1 :: Int)) [1.0])
   --                    arr1 = A.use (A.fromList @_ @Float (Z :. (1 :: Int)) [2.0])
-  --                in A.zipWith (+) sharedArr (A.gradientA (A.sum . A.zipWith (*) sharedArr) arr1))
+  --                in A.zipWith (+) sharedArr (A.agradient (A.sum . A.zipWith (*) sharedArr) arr1))
 
 adtuple1 :: IO ()
 adtuple1 = do
@@ -268,11 +268,11 @@ adtuple3 = do
 arrad :: IO ()
 arrad = do
   -- print . I.run $
-  --   A.gradientA (\arr -> A.sum (A.map (\x -> x * x) arr))
+  --   A.agradient (\arr -> A.sum (A.map (\x -> x * x) arr))
   --               (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
 
   -- print . I.run $
-  --   A.gradientA (\arr -> A.sum (A.map (\x -> x * log x) (A.map (\x -> 2 * (x + 3)) arr)))
+  --   A.agradient (\arr -> A.sum (A.map (\x -> x * log x) (A.map (\x -> 2 * (x + 3)) arr)))
   --               (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
 
   -- print . I.run $
@@ -280,11 +280,11 @@ arrad = do
   --       (A.use (A.fromList (Z :. (5 :: Int)) [1 :: Float, 2, 3, 4, 5]))
 
   -- print . I.run $
-  --   A.gradientA (\arr -> A.sum (A.map (\x -> A.toFloating (A.unindex1 (A.shape arr)) * x) arr))
+  --   A.agradient (\arr -> A.sum (A.map (\x -> A.toFloating (A.unindex1 (A.shape arr)) * x) arr))
   --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
 
   -- print . I.run $
-  --   A.gradientA (\arr ->
+  --   A.agradient (\arr ->
   --                   let a1 = A.map (\x -> 2 * x) arr
   --                       a2 = A.map (\x -> log x) arr
   --                       a3 = A.map (\x -> x + 3) a1
@@ -297,30 +297,30 @@ arrad = do
   -- -- expected result: 6 * 6 * 6 = 216
 
   -- print $
-  --   A.gradientA (\arr -> A.sum (A.map (\x -> x * x * x + 2 * x) arr))
+  --   A.agradient (\arr -> A.sum (A.map (\x -> x * x * x + 2 * x) arr))
   --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
 
   -- print . I.run $
-  --   A.gradientA (\a -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a (A.map (+6) a)))
+  --   A.agradient (\a -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a (A.map (+6) a)))
   --               (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
 
   -- print . I.run $
-  --   A.gradientA (\(A.T2 a1 a2) -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a1 a2))
+  --   A.agradient (\(A.T2 a1 a2) -> A.sum (A.zipWith (\x y -> x * x * y + 2 * y) a1 a2))
   --               (A.T2 (A.use (A.fromList (Z :. (6 :: Int)) [1 :: Float, 2, 3, 4, 5, 6]))
   --                     (A.use (A.fromList (Z :. (6 :: Int)) [7, 8, 9, 10, 11, 12])))
 
   -- print . I.run $
-  --     A.gradientA (\arr -> (A.sum . A.flatten) (A.map (\x -> x * x) (A.replicate (A.lift (Z :. (3 :: Int) :. All :. (2 :: Int) :. All)) arr)))
+  --     A.agradient (\arr -> (A.sum . A.flatten) (A.map (\x -> x * x) (A.replicate (A.lift (Z :. (3 :: Int) :. All :. (2 :: Int) :. All)) arr)))
   --                 (A.use (A.fromList (Z :. 3 :. 4) [1 :: Float .. 12]))
 
   print . I.run $
-      A.gradientA (\arr -> A.sum $ A.zipWith (*) arr (A.generate (A.shape arr) (\(A.I1 i) -> A.cond (i A.< 5) 0 1)))
+      A.agradient (\arr -> A.sum $ A.zipWith (*) arr (A.generate (A.shape arr) (\(A.I1 i) -> A.cond (i A.< 5) 0 1)))
                   (A.use (A.fromList (Z :. 10) [1 :: Float .. 10]))
 
 adfold :: IO ()
 adfold = do
   -- print $
-  --     A.gradientA (\arr -> A.maximum arr)
+  --     A.agradient (\arr -> A.maximum arr)
   --                 (A.use (A.fromList (Z :. 10) [1 :: Float .. 10]))
   let input = A.fromList (Z :. 8) [1 :: Float .. 8]
 
@@ -328,7 +328,7 @@ adfold = do
   AD.aCompareAD (\arr -> A.product arr) input
 
   print $
-      A.gradientA (\arr -> let p = A.product arr
+      A.agradient (\arr -> let p = A.product arr
                          in A.zipWith (+) (A.map (*2) p) (A.map (*3) p))
                   (A.use input)
 

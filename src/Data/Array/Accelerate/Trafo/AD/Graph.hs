@@ -92,13 +92,13 @@ accToGraph lhs acc =
 data AccDep a = DepArg a | DepIdx a | DepSh a
   deriving (Functor)
 
-expAdeps :: AD.OpenExp env aenv lab alab args tenv t -> [AccDep (Some (AD.ADLabelN alab))]
+expAdeps :: AD.OpenExp env aenv lab alab args tenv taenv t -> [AccDep (Some (AD.ADLabelN alab))]
 expAdeps = expFold $ \case
-    AD.Shape _ (Right (AD.AnyPartLabel (AD.PartLabel lab _))) -> [DepSh (Some lab)]
-    AD.Index _ (Right (AD.AnyPartLabel (AD.PartLabel lab _))) _ _ -> [DepIdx (Some lab)]
+    AD.Shape _ (AD.ARLab (AD.AnyPartLabel (AD.PartLabel lab _))) -> [DepSh (Some lab)]
+    AD.Index _ (AD.ARLab (AD.AnyPartLabel (AD.PartLabel lab _))) _ _ -> [DepIdx (Some lab)]
     _ -> []
 
-funAdeps :: AD.OpenFun env aenv lab alab tenv t -> [AccDep (Some (AD.ADLabelN alab))]
+funAdeps :: AD.OpenFun env aenv lab alab tenv taenv t -> [AccDep (Some (AD.ADLabelN alab))]
 funAdeps (AD.Lam _ fun) = funAdeps fun
 funAdeps (AD.Body ex) = expAdeps ex
 
@@ -132,18 +132,18 @@ accAdeps env = \case
     AD.AfreeVar _ _ -> []
     AD.Aarg _ _ _ -> []
   where
-    expAdeps' :: AD.OpenExp env aenv lab alab args tenv t -> [AccDep alab]
+    expAdeps' :: AD.OpenExp env aenv lab alab args tenv taenv t -> [AccDep alab]
     expAdeps' = map (fmap $ \(Some l) -> AD.labelLabel l) . expAdeps
 
-    funAdeps' :: AD.OpenFun env aenv lab alab tenv t -> [AccDep alab]
+    funAdeps' :: AD.OpenFun env aenv lab alab tenv taenv t -> [AccDep alab]
     funAdeps' = map (fmap $ \(Some l) -> AD.labelLabel l) . funAdeps
 
     alo :: AD.OpenAcc aenv lab alab args taenv t -> AccDep alab
     alo = DepArg . AD.labelLabel . AD.alabelOf
 
 expFold :: Monoid s
-        => (forall env' t'. AD.OpenExp env' aenv lab alab args tenv t' -> s)
-        -> AD.OpenExp env aenv lab alab args tenv t
+        => (forall env' t'. AD.OpenExp env' aenv lab alab args tenv taenv t' -> s)
+        -> AD.OpenExp env aenv lab alab args tenv taenv t
         -> s
 expFold f ex = f ex <> case ex of
     AD.Const _ _ -> mempty
@@ -164,16 +164,16 @@ expFold f ex = f ex <> case ex of
 
 accFold :: Monoid s
         => (forall aenv' args' t'. AD.OpenAcc aenv' lab alab args' taenv t' -> s)
-        -> (forall env aenv' args' tenv t'. AD.OpenExp env aenv' lab alab args' tenv t' -> s)
-        -> (forall env aenv' tenv t'. AD.OpenFun env aenv' lab alab tenv t' -> s)
+        -> (forall env aenv' args' tenv t'. AD.OpenExp env aenv' lab alab args' tenv taenv t' -> s)
+        -> (forall env aenv' tenv t'. AD.OpenFun env aenv' lab alab tenv taenv t' -> s)
         -> AD.OpenAcc aenv lab alab args taenv t
         -> s
 accFold = \f fe ff e -> f e <> recurse (accFold f fe ff) fe ff e
   where
     recurse :: Monoid s
             => (forall aenv' args' t'. AD.OpenAcc aenv' lab alab args' taenv t' -> s)
-            -> (forall env aenv' args' tenv t'. AD.OpenExp env aenv' lab alab args' tenv t' -> s)
-            -> (forall env aenv' tenv t'. AD.OpenFun env aenv' lab alab tenv t' -> s)
+            -> (forall env aenv' args' tenv t'. AD.OpenExp env aenv' lab alab args' tenv taenv t' -> s)
+            -> (forall env aenv' tenv t'. AD.OpenFun env aenv' lab alab tenv taenv t' -> s)
             -> AD.OpenAcc aenv lab alab args taenv t
             -> s
     recurse _ _  _  (AD.Aconst _ _) = mempty

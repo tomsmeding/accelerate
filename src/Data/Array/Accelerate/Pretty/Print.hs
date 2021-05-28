@@ -215,7 +215,7 @@ prettyPreOpenAcc config ctx prettyAcc extractAcc aenv pacc =
     Backpermute _ sh f a            -> ppN "backpermute" .$ [ ppE sh, ppF f, ppA a ]
     Stencil s _ f b a               -> ppN "stencil"     .$ [ ppF f,  ppB (stencilEltR s) b, ppA a ]
     Stencil2 s1 s2 _ f b1 a1 b2 a2  -> ppN "stencil2"    .$ [ ppF f,  ppB (stencilEltR s1) b1, ppA a1, ppB (stencilEltR s2) b2, ppA a2 ]
-    GradientA _ _ f a               -> ppN "gradientA"   .$ [ ppAF f, ppA a ]
+    Avjp _ f a b                    -> ppN "avjp"        .$ [ ppAF f, ppA a, ppA b ]
   where
     infixr 0 .$
     f .$ xs

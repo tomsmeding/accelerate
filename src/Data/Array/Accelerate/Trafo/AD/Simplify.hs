@@ -38,7 +38,7 @@ simplifyAcc a = let res = snd (goAcc a SNil)
 -- simplifyAcc = snd . flip goAcc SNil
 -- simplifyAcc = id
 
-simplifyExp :: Show alab => OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t
+simplifyExp :: Show alab => OpenExp env aenv () alab args tenv taenv t -> OpenExp env aenv () alab args tenv taenv t
 simplifyExp a = let res = snd (goExp a (SNil, SNil))
                 in trace ("simplify input:\n" ++ prettyPrint a) $ trace ("simplify result:\n" ++ prettyPrint res) res
 -- simplifyExp = snd . flip goExp (SNil, SNil)
@@ -125,10 +125,10 @@ goAcc = \case
       \s -> (statAddV var (Finite 1) s, Avar lab var referLab)
     AfreeVar lab var -> returnS $ AfreeVar lab var
 
-goExp' :: OpenExp env aenv () alab args tenv t -> Stats aenv -> (Stats aenv, OpenExp env aenv () alab args tenv t)
+goExp' :: OpenExp env aenv () alab args tenv taenv t -> Stats aenv -> (Stats aenv, OpenExp env aenv () alab args tenv taenv t)
 goExp' e s = let ((s', SNil), e') = goExp e (s, SNil) in (s', e')
 
-goExp :: OpenExp env aenv () alab args tenv t -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), OpenExp env aenv () alab args tenv t)
+goExp :: OpenExp env aenv () alab args tenv taenv t -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), OpenExp env aenv () alab args tenv taenv t)
 goExp = \case
     -- Let rotation
     Let lhs1 (Let lhs2 rhs2 bd2) bd1
@@ -182,7 +182,7 @@ goExp = \case
               (TIRight ti', (s', Pair _ _ e2)) -> (s', elimEmptyTI lab ti' e2)
               (_, (s', e')) -> (s', Get lab ti e')
       where
-        elimEmptyTI :: EDLabelN lab t' -> TupleIdx t t' -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv lab alab args tenv t'
+        elimEmptyTI :: EDLabelN lab t' -> TupleIdx t t' -> OpenExp env aenv lab alab args tenv taenv t -> OpenExp env aenv lab alab args tenv taenv t'
         elimEmptyTI _ TIHere e' = e'
         elimEmptyTI ty' ti' e' = Get ty' ti' e'
 
@@ -208,8 +208,8 @@ goExp = \case
     Pair lab e1 e2 -> Pair lab !$! goExp e1 !**! goExp e2
     Nil lab -> returnS (Nil lab)
     Cond lab e1 e2 e3 -> Cond lab !$! goExp e1 !**! goExp e2 !**! goExp e3
-    Shape lab ref -> Shape lab !$! goVarOrLab ref
-    Index lab ref execLab e -> Index lab !$! goVarOrLab ref !**! returnS execLab !**! goExp e
+    Shape lab ref -> Shape lab !$! goArrayRef ref
+    Index lab ref execLab e -> Index lab !$! goArrayRef ref !**! returnS execLab !**! goExp e
     ShapeSize lab sht e -> ShapeSize lab sht !$! goExp e
     Undef ty -> returnS $ Undef ty  -- TODO: undef poisons, and can be propagated; however we currently don't generate code where that would help.
     Let lhs rhs e ->
@@ -223,22 +223,23 @@ goExp = \case
     Var lab var referLab -> \s -> (second (statAddV var (Finite 1)) s, Var lab var referLab)
     FreeVar lab var -> returnS $ FreeVar lab var
   where
-    isNumConstant :: (forall a. Num a => a) -> OpenExp env aenv lab alab args tenv t -> Bool
+    isNumConstant :: (forall a. Num a => a) -> OpenExp env aenv lab alab args tenv taenv t -> Bool
     isNumConstant cnst (Const (DLabel { labelType = ty }) val)
       | Const _ val' <- zeroForType' cnst ty
       , Just Refl <- A.matchOpenExp (A.Const ty val) (A.Const ty val')
       = True
     isNumConstant _ _ = False
 
-goVarOrLab :: Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)) -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)))
-goVarOrLab (Left var) (sa, se) = ((statAddV var AccInExp sa, se), Left var)
-goVarOrLab (Right lab) s = (s, Right lab)
+goArrayRef :: ArrayRef aenv taenv alab t -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), ArrayRef aenv taenv alab t)
+goArrayRef (ARVar var) (sa, se) = ((statAddV var AccInExp sa, se), ARVar var)
+goArrayRef (ARFree var) s = (s, ARFree var)
+goArrayRef (ARLab lab) s = (s, ARLab lab)
 
-simplifyFun :: OpenFun env aenv () alab tenv t -> Stats aenv -> (Stats aenv, OpenFun env aenv () alab tenv t)
+simplifyFun :: OpenFun env aenv () alab tenv taenv t -> Stats aenv -> (Stats aenv, OpenFun env aenv () alab tenv taenv t)
 simplifyFun (Lam lhs fun) = Lam lhs !$! simplifyFun fun
 simplifyFun (Body ex) = Body !$! goExp' ex
 
-simplifyLam1 :: ExpLambda1 aenv () alab tenv sh t1 t2 -> Stats aenv -> (Stats aenv, ExpLambda1 aenv () alab tenv sh t1 t2)
+simplifyLam1 :: ExpLambda1 aenv () alab tenv taenv sh t1 t2 -> Stats aenv -> (Stats aenv, ExpLambda1 aenv () alab tenv taenv sh t1 t2)
 simplifyLam1 (ELSplit lam lab) = returnS (ELSplit lam lab)
 simplifyLam1 (ELPlain fun) = \s -> ELPlain <$> simplifyFun fun s
 
@@ -247,7 +248,7 @@ duplicableAcc Avar{} = True
 duplicableAcc (Replicate _ _ _ a) = duplicableAcc a
 duplicableAcc _ = False
 
-duplicableExp :: OpenExp env aenv lab alab args tenv t -> Bool
+duplicableExp :: OpenExp env aenv lab alab args tenv taenv t -> Bool
 duplicableExp (Var _ _ _) = True
 duplicableExp (Const _ _) = True
 duplicableExp (PrimConst _ _) = True  -- TODO: depending on the backend this might not be true?
@@ -294,7 +295,7 @@ inlineA f = \case
     Avar _ var _ -> unInlinerA f var
     AfreeVar lab var -> AfreeVar lab var
 
-inlineAE :: InlinerA aenv aenv' lab alab aargs taenv -> OpenExp env aenv lab alab args tenv t -> OpenExp env aenv' lab alab args tenv t
+inlineAE :: InlinerA aenv aenv' lab alab aargs taenv -> OpenExp env aenv lab alab args tenv taenv t -> OpenExp env aenv' lab alab args tenv taenv t
 inlineAE f = \case
     Const lab x -> Const lab x
     PrimApp lab op e -> PrimApp lab op (inlineAE f e)
@@ -302,8 +303,8 @@ inlineAE f = \case
     Pair lab e1 e2 -> Pair lab (inlineAE f e1) (inlineAE f e2)
     Nil lab -> Nil lab
     Cond lab e1 e2 e3 -> Cond lab (inlineAE f e1) (inlineAE f e2) (inlineAE f e3)
-    Shape lab ref -> Shape lab (inlineAE_VarOrLab f ref)
-    Index lab ref execLab e -> Index lab (inlineAE_VarOrLab f ref) execLab (inlineAE f e)
+    Shape lab ref -> Shape lab (inlineAE_ArrayRef f ref)
+    Index lab ref execLab e -> Index lab (inlineAE_ArrayRef f ref) execLab (inlineAE f e)
     ShapeSize lab sht e -> ShapeSize lab sht (inlineAE f e)
     Get lab ti e -> Get lab ti (inlineAE f e)
     Undef lab -> Undef lab
@@ -312,35 +313,36 @@ inlineAE f = \case
     Var lab var referLab -> Var lab var referLab
     FreeVar lab var -> FreeVar lab var
   where
-    inlineAE_VarOrLab :: InlinerA aenv aenv' lab alab args taenv -> Either (A.ArrayVar aenv t) (AAnyPartLabelN alab (Array sh e)) -> Either (A.ArrayVar aenv' t) (AAnyPartLabelN alab (Array sh e))
-    inlineAE_VarOrLab f' (Left var)
-      | Avar _ var' _ <- unInlinerA f' var = Left var'
+    inlineAE_ArrayRef :: InlinerA aenv aenv' lab alab args taenv -> ArrayRef aenv taenv alab t -> ArrayRef aenv' taenv alab t
+    inlineAE_ArrayRef f' (ARVar var)
+      | Avar _ var' _ <- unInlinerA f' var = ARVar var'
       | otherwise = error ("inlineAE: Non-array-variable inlined in expression: " ++
                               showsAcc (ShowEnv (const "L?") (const "L?") 0 () []) 0 (unInlinerA f' var) "")
-    inlineAE_VarOrLab _ (Right lab) = Right lab
+    inlineAE_ArrayRef _ (ARFree var) = ARFree var
+    inlineAE_ArrayRef _ (ARLab lab) = ARLab lab
 
-inlineAEF :: InlinerA aenv aenv' lab alab args taenv -> OpenFun env aenv lab alab tenv t -> OpenFun env aenv' lab alab tenv t
+inlineAEF :: InlinerA aenv aenv' lab alab args taenv -> OpenFun env aenv lab alab tenv taenv t -> OpenFun env aenv' lab alab tenv taenv t
 inlineAEF f (Lam lhs fun) = Lam lhs (inlineAEF f fun)
 inlineAEF f (Body e) = Body (inlineAE f e)
 
-inlineALam :: InlinerA aenv aenv' lab alab args taenv -> ExpLambda1 aenv lab alab tenv sh t t' -> ExpLambda1 aenv' lab alab tenv sh t  t'
+inlineALam :: InlinerA aenv aenv' lab alab args taenv -> ExpLambda1 aenv lab alab tenv taenv sh t t' -> ExpLambda1 aenv' lab alab tenv taenv sh t  t'
 inlineALam f = fmapPlain (inlineAEF f)
 
-data InlinerE env env' aenv lab alab args tenv =
-    InlinerE { unInlinerE :: forall t. A.ExpVar env t -> OpenExp env' aenv lab alab args tenv t }
+data InlinerE env env' aenv lab alab args tenv taenv =
+    InlinerE { unInlinerE :: forall t. A.ExpVar env t -> OpenExp env' aenv lab alab args tenv taenv t }
 
-sinkInlinerESucc :: InlinerE env env' aenv () alab args tenv -> InlinerE (env, a) (env', a) aenv () alab args tenv
+sinkInlinerESucc :: InlinerE env env' aenv () alab args tenv taenv -> InlinerE (env, a) (env', a) aenv () alab args tenv taenv
 sinkInlinerESucc (InlinerE f) =
     InlinerE (\case A.Var ty ZeroIdx -> smartVar (A.Var ty ZeroIdx)
                     A.Var ty (SuccIdx idx) -> sinkExp (weakenSucc' weakenId) (f (A.Var ty idx)))
 
-sinkInlinerELHS :: A.ELeftHandSide t env env2 -> A.ELeftHandSide t env' env2' -> InlinerE env env' aenv () alab args tenv -> InlinerE env2 env2' aenv () alab args tenv
+sinkInlinerELHS :: A.ELeftHandSide t env env2 -> A.ELeftHandSide t env' env2' -> InlinerE env env' aenv () alab args tenv taenv -> InlinerE env2 env2' aenv () alab args tenv taenv
 sinkInlinerELHS (LeftHandSideWildcard _) (LeftHandSideWildcard _) = id
 sinkInlinerELHS (LeftHandSideSingle _) (LeftHandSideSingle _) = sinkInlinerESucc
 sinkInlinerELHS (LeftHandSidePair lhs1 lhs2) (LeftHandSidePair lhs1' lhs2') = sinkInlinerELHS lhs2 lhs2' . sinkInlinerELHS lhs1 lhs1'
 sinkInlinerELHS _ _ = error "sinkInlinerELHS: Unequal LHS's"
 
-inlineE :: InlinerE env env' aenv () alab args tenv -> OpenExp env aenv () alab args tenv t -> OpenExp env' aenv () alab args tenv t
+inlineE :: InlinerE env env' aenv () alab args tenv taenv -> OpenExp env aenv () alab args tenv taenv t -> OpenExp env' aenv () alab args tenv taenv t
 inlineE f = \case
     Const lab x -> Const lab x
     PrimApp lab op e -> PrimApp lab op (inlineE f e)
@@ -439,7 +441,7 @@ reprojectA rj@(RjPair resty rj1 rj2) acc = case acc of
     Aget _ tidx a -> reprojectA (addTidxToReproject (atypeOf a) tidx rj) a
     Alet lhs a1 a2 -> Alet lhs a1 (reprojectA rj a2)
 
-reprojectE :: Reprojection ScalarType t t' -> OpenExp env aenv () alab args tenv t -> OpenExp env aenv () alab args tenv t'
+reprojectE :: Reprojection ScalarType t t' -> OpenExp env aenv () alab args tenv taenv t -> OpenExp env aenv () alab args tenv taenv t'
 reprojectE RjNil _ = Nil (nilLabel TupRunit)
 reprojectE (RjKeep _) a = a
 reprojectE rj@(RjFst resty rj1) expr = case expr of

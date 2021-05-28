@@ -90,13 +90,13 @@ tuple suffix layouts@(l:ls)
   | Just strs <- mapM fromSingleLine layouts = string ("(" ++ intercalate ", " strs ++ ")" ++ suffix)
   | otherwise = insertAtEnd (")" ++ suffix) $ lblock (lprefix "(" l : map (lprefix ",") ls)
 
-instance (Show lab, Show alab) => Pretty (OpenExp env aenv lab alab args tenv t) where
+instance (Show lab, Show alab) => Pretty (OpenExp env aenv lab alab args tenv taenv t) where
     buildLayout = layoutExp (ShowEnv show show 0 [] []) 0
 
 instance (Show lab, Show alab) => Pretty (OpenAcc aenv lab alab args taenv t) where
     buildLayout = layoutAcc (ShowEnv show show 0 () []) 0
 
-layoutExp :: EShowEnv lab alab -> Int -> OpenExp env aenv lab alab args tenv t -> Layout
+layoutExp :: EShowEnv lab alab -> Int -> OpenExp env aenv lab alab args tenv taenv t -> Layout
 layoutExp se _ (Const lab x) =
     string (showScalar (labelType lab) x ++ showLabelSuffix' se lab)
 layoutExp se d (PrimApp lab f (Pair _ e1 e2))
@@ -122,25 +122,13 @@ layoutExp se d (Cond lab c t e) =
             (lseq' [layoutExp se 11 c
                    ,layoutExp se 11 t
                    ,layoutExp se 11 e])
-layoutExp se d (Shape lab (Left (A.Var _ idx))) =
+layoutExp se d (Shape lab ref) =
     parenthesise (d > 10) $
         lprefix ("shape" ++ showLabelSuffix' se lab ++ " ")
-            (case drop (idxToInt idx) (seAenv se) of
-                descr : _ -> string descr
-                [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se))))
-layoutExp se d (Shape lab (Right (AnyPartLabel partl))) =
-    parenthesise (d > 10) $
-        string $ "shape" ++ showLabelSuffix' se lab ++ " (L" ++
-                 showPartLabelSuffix (seAlabf se) partl "" ++ " :: " ++ show (partLabelSmallType partl) ++ ")"
+            (string (showsArrayRef se ref ""))
 layoutExp se d (Index lab subj execLab e) =
     parenthesise (d > 10) $ lseq'
-        [case subj of
-           Left (A.Var _ idx) ->
-              case drop (idxToInt idx) (seAenv se) of
-                  descr : _ -> string descr
-                  [] -> string ("tA_UP" ++ show (1 + idxToInt idx - length (seAenv se)))
-           Right (AnyPartLabel partl) ->
-              string ('L' : showPartLabelSuffix (seAlabf se) partl "" ++ " :: " ++ show (partLabelSmallType partl))
+        [string (showsArrayRef se subj "")
         ,string ("!" ++ showLabelSuffix' se lab ++
                     (case showLabelSuffix' se execLab of
                        "" -> ""
@@ -287,7 +275,7 @@ layoutAcc se d (Aarg lab _ tidx) = parenthesise (d > 0) $
     string ((case tiPrefixAcc tidx of "" -> "A" ; pr -> "(" ++ pr ++ " A)")
             ++ ashowLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
 
-layoutFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab tenv t -> Layout
+layoutFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab tenv taenv t -> Layout
 layoutFun se d (Body expr) = layoutExp se d expr
 layoutFun se d (Lam lhs fun) =
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
@@ -296,7 +284,7 @@ layoutFun se d (Lam lhs fun) =
         LMaybeHanging (string ("\\" ++ descr ++ " ->"))
                       (layoutFun (se { seSeed = seed', seEnv = env' }) 0 fun)
 
-layoutLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv sh t1 t2 -> Layout
+layoutLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv taenv sh t1 t2 -> Layout
 layoutLambda se d (ELPlain fun) = layoutFun se d fun
 layoutLambda _ _ ELSplit{} = string "{splitlambda}"
 

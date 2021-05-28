@@ -26,26 +26,26 @@ import Data.Array.Accelerate.Trafo.Var
 
 
 type CombinerExp m top topenv lab alab =
-  forall s env aenv args tenv.
+  forall s env aenv args tenv taenv.
        ScalarType s
     -> TupleIdx top s
     -> topenv :> env
-    -> OpenExp env aenv lab alab args tenv s
-    -> OpenExp env aenv lab alab args tenv s
-    -> m (OpenExp env aenv lab alab args tenv s)
+    -> OpenExp env aenv lab alab args tenv taenv s
+    -> OpenExp env aenv lab alab args tenv taenv s
+    -> m (OpenExp env aenv lab alab args tenv taenv s)
 
 type CombinerExp' top topenv lab alab =
-  forall s env aenv args tenv.
+  forall s env aenv args tenv taenv.
        ScalarType s
     -> TupleIdx top s
     -> topenv :> env
-    -> OpenExp env aenv lab alab args tenv s
-    -> OpenExp env aenv lab alab args tenv s
-    -> OpenExp env aenv lab alab args tenv s
+    -> OpenExp env aenv lab alab args tenv taenv s
+    -> OpenExp env aenv lab alab args tenv taenv s
+    -> OpenExp env aenv lab alab args tenv taenv s
 
 type IgnorerExp lab alab =
-  forall s env aenv args tenv.
-    ScalarType s -> OpenExp env aenv lab alab args tenv s
+  forall s env aenv args tenv taenv.
+    ScalarType s -> OpenExp env aenv lab alab args tenv taenv s
                  -> Bool
 
 type CombinerAcc m top topaenv lab alab =
@@ -80,10 +80,10 @@ class ExprLike s f | f -> s where
   sink :: env :> env' -> f env t -> f env' t
 
 -- This type only exists to move the 'env' type variable to the end.
-newtype OpenExpEnv aenv lab alab args tenv env t =
-  OpenExpEnv { unExpEnv :: OpenExp env aenv lab alab args tenv t }
+newtype OpenExpEnv aenv lab alab args tenv taenv env t =
+  OpenExpEnv { unExpEnv :: OpenExp env aenv lab alab args tenv taenv t }
 
-instance ExprLike ScalarType (OpenExpEnv aenv () alab args tenv) where
+instance ExprLike ScalarType (OpenExpEnv aenv () alab args tenv taenv) where
   nil = OpenExpEnv (Nil magicLabel)
   pair (OpenExpEnv e1) (OpenExpEnv e2) = OpenExpEnv (smartPair e1 e2)
   var v = OpenExpEnv (smartVar v)
@@ -154,9 +154,9 @@ tupleZipExp :: Applicative m
             => TypeR t
             -> CombinerExp m t env () alab
             -> IgnorerExp () alab
-            -> OpenExp env aenv () alab args tenv t
-            -> OpenExp env aenv () alab args tenv t
-            -> m (OpenExp env aenv () alab args tenv t)
+            -> OpenExp env aenv () alab args tenv taenv t
+            -> OpenExp env aenv () alab args tenv taenv t
+            -> m (OpenExp env aenv () alab args tenv taenv t)
 tupleZipExp ty combine ignore e1 e2 =
   unExpEnv <$> tupleZipGen ty TIHere weakenId
                    (\t tidx w (OpenExpEnv x1) (OpenExpEnv x2) -> OpenExpEnv <$> combine t tidx w x1 x2)
@@ -167,9 +167,9 @@ tupleZipExp ty combine ignore e1 e2 =
 tupleZipExp' :: TypeR t
              -> CombinerExp' t env () alab
              -> IgnorerExp () alab
-             -> OpenExp env aenv () alab args tenv t
-             -> OpenExp env aenv () alab args tenv t
-             -> OpenExp env aenv () alab args tenv t
+             -> OpenExp env aenv () alab args tenv taenv t
+             -> OpenExp env aenv () alab args tenv taenv t
+             -> OpenExp env aenv () alab args tenv taenv t
 tupleZipExp' ty combine' ignore e1 e2 =
   runIdentity $ tupleZipExp ty (\sty tidx w sub1 sub2 -> pure (combine' sty tidx w sub1 sub2)) ignore e1 e2
 

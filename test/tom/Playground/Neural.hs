@@ -28,7 +28,7 @@ main = do
 -- to Accelerate surface syntax).
 inputProgram :: Acc (Matrix Float)
 inputProgram =
-  gradientA (\a0 ->
+  agradient (\a0 ->
      fold1 (+)
        (let a1 = map (\x -> x * x)
                    (zipWith (-)

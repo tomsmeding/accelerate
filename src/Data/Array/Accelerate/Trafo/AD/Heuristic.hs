@@ -6,11 +6,11 @@ import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 
 
-functionSize :: OpenFun env aenv lab alab tenv t -> Int
+functionSize :: OpenFun env aenv lab alab tenv taenv t -> Int
 functionSize (Lam _ fun) = functionSize fun
 functionSize (Body expr) = exprSize expr
 
-exprSize :: OpenExp env aenv lab alab args tenv t -> Int
+exprSize :: OpenExp env aenv lab alab args tenv taenv t -> Int
 exprSize (Const _ _) = 1
 exprSize (PrimApp _ _ arg) = 1 + exprSize arg
 exprSize (PrimConst _ _) = 1

@@ -8,14 +8,10 @@ import System.IO.Unsafe (unsafePerformIO)
 
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.AST.Environment
-import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Pretty.NoTrafo ()
 import Data.Array.Accelerate.Representation.Array
-import Data.Array.Accelerate.Type
-import Data.Array.Accelerate.Representation.Shape
-import Data.Array.Accelerate.Representation.Type
 import qualified Data.Array.Accelerate.Trafo.AD.Acc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADExp as AD
@@ -25,9 +21,8 @@ import qualified Data.Array.Accelerate.Trafo.AD.Config as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Graph as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Simplify as AD
-import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Translate as AD
-import Data.Array.Accelerate.Trafo.Substitution (weakenE, rebuildLHS)
+import Data.Array.Accelerate.Trafo.Substitution (weaken, weakenE)
 import Data.Array.Accelerate.Trafo.Var
 
 
@@ -69,7 +64,9 @@ convertExp (Evjp _ (Lam lhs (Body body)) (convertExp -> arg) (convertExp -> adj)
   -- First declare variables for the adjoint...
   | DeclareVars adjlhs _ adjvarsgen <- declareVars (expType adj)
   -- ... and we construct the tuple of FreeVar nodes that will be bound to this LHS.
-  , let adj' = AD.untupleExps $ AD.fmapTupR (\var@(Var ty _) -> AD.FreeVar (AD.nilLabel ty) var) (adjvarsgen weakenId)
+  , let adj' = AD.RelocatableExp $ AD.untupleExps $
+                 AD.fmapTupR (\var@(Var ty _) -> AD.FreeVar (AD.nilLabel ty) var)
+                             (adjvarsgen weakenId)
   -- Then we translate the original function, after shifting it under the new adjoint let binding;
   -- the result is suspended under adjlhs and lhs1.
   , AD.Lam lhs1 (AD.Body transBody) <- AD.translateFun (weakenE (weakenWithLHS adjlhs) $ Lam lhs (Body body))
@@ -79,14 +76,14 @@ convertExp (Evjp _ (Lam lhs (Body body)) (convertExp -> arg) (convertExp -> adj)
   -- adjlhs and lhs2.
   , AD.ReverseADResE lhs2 body' <- AD.reverseAD lhs1 (simplifiedBody `withAlabType` ()) adj'
   -- Finally we translate back to the main AST, suspending under adjlhs and lhs3.
-  , AD.UntranslateResultE lhs3 body'' <- AD.untranslateLHSboundExp lhs2 (AD.simplifyExp body') weakenId
+  , AD.UntranslateResultE lhs3 body'' <- AD.untranslateLHSboundExp lhs2 (AD.simplifyExp body') weakenId weakenId
   -- Thus we construct the result.
   = Let adjlhs adj $ Let lhs3 (weakenE (weakenWithLHS adjlhs) arg) body''
   where
-    withAlabType :: AD.OpenExp env aenv lab alab args tenv t -> alab -> AD.OpenExp env aenv lab alab args tenv t
+    withAlabType :: AD.OpenExp env aenv lab alab args tenv taenv t -> alab -> AD.OpenExp env aenv lab alab args tenv taenv t
     withAlabType = const
-convertExp e =
-  internalError ("convertExp: Cannot convert Exp node <" ++ showExpOp e ++ ">")
+convertExp (Evjp _ _ _ _) =
+  internalError ("convertExp: Invalid GADTs in Evjp")
 
 convertAccEntry :: Acc arrs -> Acc arrs
 convertAccEntry a =
@@ -131,24 +128,29 @@ convertPAcc (Transform ty dim ixf vf a) =
 convertPAcc (Stencil rep ty f bnd a) = Stencil rep ty (convertFun f) (convertBoundary bnd) (convertAcc a)
 convertPAcc (Stencil2 r1 r2 ty f b1 a1 b2 a2) =
     Stencil2 r1 r2 ty (convertFun f) (convertBoundary b1) (convertAcc a1) (convertBoundary b2) (convertAcc a2)
-convertPAcc (GradientA _ sty (Alam lhs (Abody body)) arg)
-  | ArrayR ShapeRz (TupRsingle (SingleScalarType (NumSingleType (FloatingNumType TypeFloat)))) <- sty
-  , AD.Alam _ (AD.Abody transBody) <- AD.translateAfun (Alam lhs (Abody body))
-  , Exists lhs1 <- rebuildLHS lhs =
-      case AD.aCheckClosedInLHS lhs1 transBody of
-          Just transBody'
-            | let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyAcc transBody' else transBody'
-            , () <- case AD.getConfigVar AD.Graph of
-                      "" -> ()
-                      fname -> unsafePerformIO (AD.writeGraphToFile fname lhs1 simplifiedBody)
-            , AD.ReverseADResA lhs2 body' <- AD.reverseADA lhs1 simplifiedBody
-            , AD.UntranslateResultA lhs3 body'' <- AD.untranslateLHSboundAcc lhs2 (AD.simplifyAcc body') weakenId ->
-                Alet lhs3 arg body''
-          Nothing ->
-              error "Body of gradientA not a closed expression"
-  | otherwise =
-      error $ "gradientA expression must produce (Array Z Float), other types currently unsupported: " ++ show sty
-convertPAcc (GradientA _ _ _ _) = error "GradientA is being worked on!"
+convertPAcc (Avjp _ (Alam lhs (Abody body)) (convertAcc -> arg) (convertAcc -> adj))
+  -- First declare variables for the adjoint...
+  | DeclareVars adjlhs _ adjvarsgen <- declareVars (arraysR adj)
+  -- ... and we construct the tuple of FreeVar nodes that will be bound to this LHS.
+  , let adj' = adjvarsgen weakenId
+  -- Then we translate the original function, after shifting it under the new adjoint let binding;
+  -- the result is suspended under adjlhs and lhs1.
+  , AD.Alam lhs1 (AD.Abody transBody) <- AD.translateAfun (weaken (weakenWithLHS adjlhs) $ Alam lhs (Abody body))
+  -- Possibly we simplify beforehand, depending on config.
+  , let simplifiedBody = if AD.getConfigVar AD.PreOpt then AD.simplifyAcc transBody else transBody
+  -- Possibly we write a graph, depending on config.
+  , () <- case AD.getConfigVar AD.Graph of
+            "" -> ()
+            fname -> unsafePerformIO (AD.writeGraphToFile fname lhs1 simplifiedBody)
+  -- Then we do the actual differentiation on the simplified body; the result is suspended under
+  -- adjlhs and lhs2.
+  , AD.ReverseADResA lhs2 body' <- AD.reverseADA lhs1 simplifiedBody adj'
+  -- Finally we translate back to the main AST, suspending under adjlhs and lhs3.
+  , AD.UntranslateResultA lhs3 body'' <- AD.untranslateLHSboundAcc lhs2 (AD.simplifyAcc body') weakenId
+  -- Thus we construct the result.
+  = Alet adjlhs adj $ OpenAcc $ Alet lhs3 (weaken (weakenWithLHS adjlhs) arg) body''
+convertPAcc (Avjp _ _ _ _) =
+  internalError ("convertPAcc: Invalid GADTs in Avjp")
 
 convertFun :: OpenFun env aenv t -> OpenFun env aenv t
 convertFun (Lam lhs f) = Lam lhs (convertFun f)

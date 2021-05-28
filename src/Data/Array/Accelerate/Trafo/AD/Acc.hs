@@ -3,6 +3,7 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.AD.Acc (
     module Data.Array.Accelerate.Trafo.AD.Acc,
@@ -30,19 +31,19 @@ import Data.Array.Accelerate.Trafo.AD.Orphans ()
 -- An expression lambda is either a split AD'd function (ELSplit), which
 -- contains the split-lambda information as well as the label at which the
 -- expression temporaries are stored; or a plain expression function (ELPlain).
-data ExpLambda1 aenv lab alab tenv sh t1 t2
-  = forall tmp idxadj. ELSplit (SplitLambdaAD t1 t2 lab alab tenv tmp idxadj) (ADLabelNS alab (Array sh tmp))
-  |                    ELPlain (Fun aenv lab alab tenv (t1 -> t2))
+data ExpLambda1 aenv lab alab tenv taenv sh t1 t2
+  = forall tmp idxadj. ELSplit (SplitLambdaAD t1 t2 lab alab tenv taenv tmp idxadj) (ADLabelNS alab (Array sh tmp))
+  |                    ELPlain (Fun aenv lab alab tenv taenv (t1 -> t2))
 
-fmapPlain :: (Fun aenv lab alab tenv (t1 -> t2) -> Fun aenv' lab alab tenv (t1 -> t2))
-          -> ExpLambda1 aenv lab alab tenv sh t1 t2
-          -> ExpLambda1 aenv' lab alab tenv sh t1 t2
+fmapPlain :: (Fun aenv lab alab tenv taenv (t1 -> t2) -> Fun aenv' lab alab tenv taenv (t1 -> t2))
+          -> ExpLambda1 aenv lab alab tenv taenv sh t1 t2
+          -> ExpLambda1 aenv' lab alab tenv taenv sh t1 t2
 fmapPlain f e = runIdentity (traversePlain (Identity . f) e)
 
 traversePlain :: Applicative f
-              => (Fun aenv lab alab tenv (t1 -> t2) -> f (Fun aenv' lab alab tenv (t1 -> t2)))
-              -> ExpLambda1 aenv lab alab tenv sh t1 t2
-              -> f (ExpLambda1 aenv' lab alab tenv sh t1 t2)
+              => (Fun aenv lab alab tenv taenv (t1 -> t2) -> f (Fun aenv' lab alab tenv taenv (t1 -> t2)))
+              -> ExpLambda1 aenv lab alab tenv taenv sh t1 t2
+              -> f (ExpLambda1 aenv' lab alab tenv taenv sh t1 t2)
 traversePlain _ (ELSplit lam lab) = pure (ELSplit lam lab)
 traversePlain f (ELPlain fun) = ELPlain <$> f fun
 
@@ -60,25 +61,25 @@ data OpenAcc aenv lab alab args taenv t where
             -> OpenAcc aenv lab alab args taenv ()
 
     Acond   :: ADLabelN alab a
-            -> Exp aenv lab alab () () A.PrimBool
+            -> Exp aenv lab alab () () taenv A.PrimBool
             -> OpenAcc aenv lab alab args taenv a
             -> OpenAcc aenv lab alab args taenv a
             -> OpenAcc aenv lab alab args taenv a
 
     Map     :: ADLabelNS alab (Array sh t2)
-            -> ExpLambda1 aenv lab alab () sh t1 t2
+            -> ExpLambda1 aenv lab alab () taenv sh t1 t2
             -> OpenAcc aenv lab alab args taenv (Array sh t1)
             -> OpenAcc aenv lab alab args taenv (Array sh t2)
 
     ZipWith :: ADLabelNS alab (Array sh t3)
-            -> ExpLambda1 aenv lab alab () sh (t1, t2) t3
+            -> ExpLambda1 aenv lab alab () taenv sh (t1, t2) t3
             -> OpenAcc aenv lab alab args taenv (Array sh t1)
             -> OpenAcc aenv lab alab args taenv (Array sh t2)
             -> OpenAcc aenv lab alab args taenv (Array sh t3)
 
     Fold    :: ADLabelNS alab (Array sh e)
-            -> Fun aenv lab alab () ((e, e) -> e)
-            -> Maybe (Exp aenv lab alab () () e)
+            -> Fun aenv lab alab () taenv ((e, e) -> e)
+            -> Maybe (Exp aenv lab alab () () taenv e)
             -> OpenAcc aenv lab alab args taenv (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args taenv (Array sh e)
 
@@ -88,33 +89,33 @@ data OpenAcc aenv lab alab args taenv t where
 
     Scan    :: ADLabelNS alab (Array (sh, Int) e)
             -> A.Direction
-            -> Fun aenv lab alab () ((e, e) -> e)
-            -> Maybe (Exp aenv lab alab () () e)
+            -> Fun aenv lab alab () taenv ((e, e) -> e)
+            -> Maybe (Exp aenv lab alab () () taenv e)
             -> OpenAcc aenv lab alab args taenv (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args taenv (Array (sh, Int) e)
 
     Scan'   :: ADLabelN alab (Array (sh, Int) e, Array sh e)
             -> A.Direction
-            -> Fun aenv lab alab () ((e, e) -> e)
-            -> Exp aenv lab alab () () e
+            -> Fun aenv lab alab () taenv ((e, e) -> e)
+            -> Exp aenv lab alab () () taenv e
             -> OpenAcc aenv lab alab args taenv (Array (sh, Int) e)
             -> OpenAcc aenv lab alab args taenv (Array (sh, Int) e, Array sh e)
 
     Generate :: ADLabelNS alab (Array sh e)
-             -> Exp aenv lab alab () () sh
-             -> ExpLambda1 aenv lab alab () sh sh e
+             -> Exp aenv lab alab () () taenv sh
+             -> ExpLambda1 aenv lab alab () taenv sh sh e
              -> OpenAcc aenv lab alab args taenv (Array sh e)
 
     Replicate :: ADLabelNS alab (Array sh e)
               -> SliceIndex slix sl co sh
-              -> Exp aenv lab alab () () slix
+              -> Exp aenv lab alab () () taenv slix
               -> OpenAcc aenv lab alab args taenv (Array sl e)
               -> OpenAcc aenv lab alab args taenv (Array sh e)
 
     Slice   :: ADLabelNS alab (Array sl e)
             -> SliceIndex slix sl co sh
             -> OpenAcc aenv lab alab args taenv (Array sh e)
-            -> Exp aenv lab alab () () slix
+            -> Exp aenv lab alab () () taenv slix
             -> OpenAcc aenv lab alab args taenv (Array sl e)
 
     -- Has no equivalent in the real AST. Is converted using backpermute, reshape, fold.
@@ -122,18 +123,18 @@ data OpenAcc aenv lab alab args taenv t where
     -- Like 'add' is the dual of 'dup', Reduce is the dual of Replicate.
     Reduce  :: ADLabelNS alab (Array redsh e)
             -> ReduceSpec slix redsh fullsh
-            -> Fun aenv lab alab () (e -> e -> e)
+            -> Fun aenv lab alab () taenv (e -> e -> e)
             -> OpenAcc aenv lab alab args taenv (Array fullsh e)
             -> OpenAcc aenv lab alab args taenv (Array redsh e)
 
     Reshape :: ADLabelNS alab (Array sh e)
-            -> Exp aenv lab alab () () sh
+            -> Exp aenv lab alab () () taenv sh
             -> OpenAcc aenv lab alab args taenv (Array sh' e)
             -> OpenAcc aenv lab alab args taenv (Array sh e)
 
     Backpermute :: ADLabelNS alab (Array sh' e)
-                -> Exp aenv lab alab () () sh'                    -- dimensions of the result
-                -> Fun aenv lab alab () (sh' -> sh)               -- permutation function
+                -> Exp aenv lab alab () () taenv sh'              -- dimensions of the result
+                -> Fun aenv lab alab () taenv (sh' -> sh)         -- permutation function
                 -> OpenAcc aenv lab alab args taenv (Array sh e)  -- source array
                 -> OpenAcc aenv lab alab args taenv (Array sh' e)
 
@@ -141,10 +142,10 @@ data OpenAcc aenv lab alab args taenv t where
     -- don't currently support taking the derivative of a Permute: we only
     -- generate it as the derivative of a Backpermute and of array indexing.
     Permute :: ADLabelNS alab (Array sh' e)
-            -> Fun aenv lab alab () (e -> e -> e)              -- combination function
-            -> OpenAcc aenv lab alab args taenv (Array sh' e)  -- default values
-            -> Fun aenv lab alab () (sh -> A.PrimMaybe sh')    -- permutation function
-            -> OpenAcc aenv lab alab args taenv (Array sh e)   -- source array
+            -> Fun aenv lab alab () taenv (e -> e -> e)            -- combination function
+            -> OpenAcc aenv lab alab args taenv (Array sh' e)      -- default values
+            -> Fun aenv lab alab () taenv (sh -> A.PrimMaybe sh')  -- permutation function
+            -> OpenAcc aenv lab alab args taenv (Array sh e)       -- source array
             -> OpenAcc aenv lab alab args taenv (Array sh' e)
 
     -- Use this VERY sparingly. It has no equivalent in the real AST, so must
@@ -326,7 +327,7 @@ showsAcc se d (Aarg lab _ tidx) = showParen (d > 0) $
 tiPrefixAcc :: TupleIdx t t' -> String
 tiPrefixAcc = tiPrefix "afst" "asnd"
 
-showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv sh t1 t2 -> ShowS
+showsLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv taenv sh t1 t2 -> ShowS
 showsLambda se d (ELPlain fun) = showsFun se d fun
 showsLambda _ _ ELSplit{} = showString "{splitlambda}"
 
@@ -401,10 +402,13 @@ untupleAccs (TupRpair t1 t2) = smartApair (untupleAccs t1) (untupleAccs t2)
 smartAvar :: A.ArrayVar aenv (Array sh t) -> OpenAcc aenv lab () args taenv (Array sh t)
 smartAvar var@(A.Var ty _) = Avar (nilLabel ty) var (PartLabel (nilLabel (TupRsingle ty)) TIHere)
 
+smartAfreeVar :: A.ArrayVar taenv t -> OpenAcc aenv lab () args taenv t
+smartAfreeVar var@(A.Var ty@ArrayR{} _) = AfreeVar (nilLabel ty) var
+
 smartApair :: OpenAcc aenv lab () args taenv a -> OpenAcc aenv lab () args taenv b -> OpenAcc aenv lab () args taenv (a, b)
 smartApair a b = Apair (nilLabel (TupRpair (atypeOf a) (atypeOf b))) a b
 
-smartZipWith :: Fun aenv lab () () ((a, b) -> c) -> OpenAcc aenv lab () args taenv (Array sh a) -> OpenAcc aenv lab () args taenv (Array sh b) -> OpenAcc aenv lab () args taenv (Array sh c)
+smartZipWith :: Fun aenv lab () () taenv ((a, b) -> c) -> OpenAcc aenv lab () args taenv (Array sh a) -> OpenAcc aenv lab () args taenv (Array sh b) -> OpenAcc aenv lab () args taenv (Array sh c)
 smartZipWith fun@(Lam _ (Body body)) a@(atypeOf1 -> ArrayR sht _) b = ZipWith (nilLabel (ArrayR sht (etypeOf body))) (ELPlain fun) a b
 smartZipWith _ _ _ = error "smartZipWith: impossible GADTs"
 
