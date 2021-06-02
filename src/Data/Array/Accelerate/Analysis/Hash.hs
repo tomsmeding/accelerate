@@ -194,6 +194,7 @@ encodePreOpenAcc options encodeAcc pacc =
     Stencil s _ f b a               -> intHost $(hashQ "Stencil")     <> travF f  <> encodeBoundary (stencilEltR s) b   <> travA a
     Stencil2 s1 s2 _ f b1 a1 b2 a2  -> intHost $(hashQ "Stencil2")    <> travF f  <> encodeBoundary (stencilEltR s1) b1 <> travA a1 <> encodeBoundary (stencilEltR s2) b2 <> travA a2
     Avjp _ f a b                    -> intHost $(hashQ "Avjp")        <> travAF f <> travA a  <> travA b
+    AcustomDeriv _ f g a            -> intHost $(hashQ "AcustomDeriv") <> travAF f <> travAF g <> travA a
 
 {--
 {-# INLINEABLE encodePreOpenSeq #-}
@@ -339,6 +340,7 @@ encodeOpenExp exp =
     Foreign _ _ f e             -> intHost $(hashQ "Foreign")     <> travF f  <> travE e
     Coerce _ tp e               -> intHost $(hashQ "Coerce")      <> encodeScalarType tp <> travE e
     Evjp tp f e a               -> intHost $(hashQ "Evjp")        <> encodeTypeR tp <> travF f <> travE e <> travE a
+    EcustomDeriv _ f g a        -> intHost $(hashQ "EcustomDeriv") <> travF f <> travF g  <> travE a
 
 encodeArrayVar :: ArrayVar aenv a -> Builder
 encodeArrayVar (Var repr v) = encodeArrayType repr <> encodeIdx v

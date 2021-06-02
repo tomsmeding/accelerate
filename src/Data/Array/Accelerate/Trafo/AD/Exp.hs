@@ -98,6 +98,15 @@ data OpenExp env aenv lab alab args tenv taenv t where
     Undef     :: EDLabelNS lab t
               -> OpenExp env aenv lab alab args tenv taenv t
 
+    Ecustom   :: EDLabelN lab t
+              -> EDLabelN lab a  -- phantom label for argument of first lambda
+              -> OpenFun env aenv lab alab args tenv taenv (a -> t)
+              -> EDLabelN lab a  -- phantom label for first argument of second lambda
+              -> EDLabelN lab t  -- phantom label for second argument of second lambda
+              -> OpenFun env aenv lab alab args tenv taenv (a -> t -> a)
+              -> OpenExp env aenv lab alab args tenv taenv a
+              -> OpenExp env aenv lab alab args tenv taenv t
+
     Let       :: ELeftHandSide bnd_t env env'
               -> OpenExp env aenv lab alab args tenv taenv bnd_t
               -> OpenExp env' aenv lab alab args tenv taenv a
@@ -120,9 +129,9 @@ data OpenExp env aenv lab alab args tenv taenv t where
 type Exp = OpenExp ()
 
 -- Expression-level function
-data OpenFun env aenv lab alab tenv taenv t where
-    Body :: OpenExp env aenv lab alab () tenv taenv t -> OpenFun env aenv lab alab tenv taenv t
-    Lam :: ELeftHandSide a env env' -> OpenFun env' aenv lab alab tenv taenv t -> OpenFun env aenv lab alab tenv taenv (a -> t)
+data OpenFun env aenv lab alab args tenv taenv t where
+    Body :: OpenExp env aenv lab alab args tenv taenv t -> OpenFun env aenv lab alab args tenv taenv t
+    Lam :: ELeftHandSide a env env' -> OpenFun env' aenv lab alab args tenv taenv t -> OpenFun env aenv lab alab args tenv taenv (a -> t)
 
 type Fun = OpenFun ()
 
@@ -184,6 +193,12 @@ showsExp se d (Get lab ti e) =
         showString (tiPrefixExp ti) . eshowLabelSuffix se lab . showString " " .
         showsExp se (case ti of TIHere -> 10 ; _ -> 11) e
 showsExp se _ (Undef lab) = showString "undef" . eshowLabelSuffix se lab
+showsExp se d (Ecustom lab l1 f l2 l3 g a) =
+    showParen (d > 10) $
+        showString "ecustom" . eshowLabelSuffix se lab . showString " " .
+            showsFun se 11 f . eshowLabelSuffix se l1 . showString " " .
+            showsFun se 11 g . eshowLabelSuffix se l2 . eshowLabelSuffix se l3 . showString " " .
+            showsExp se 11 a
 showsExp se d (Let lhs rhs body) = showParen (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
         env' = descrs ++ seEnv se
@@ -229,7 +244,7 @@ compactTupleIdx TIHere = ""
 compactTupleIdx (TILeft ti) = 'f' : compactTupleIdx ti
 compactTupleIdx (TIRight ti) = 's' : compactTupleIdx ti
 
-showsFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab tenv taenv t -> ShowS
+showsFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab args tenv taenv t -> ShowS
 showsFun se d (Body expr) = showsExp se d expr
 showsFun se d (Lam lhs fun) =
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
@@ -269,7 +284,7 @@ instance (Show lab, Show alab) => Show (OpenExp env aenv lab alab args tenv taen
 instance (Show lab, Show alab) => GShow (OpenExp env aenv lab alab args tenv taenv) where
     gshowsPrec = showsPrec
 
-instance (Show lab, Show alab) => Show (OpenFun env aenv lab alab tenv taenv t) where
+instance (Show lab, Show alab) => Show (OpenFun env aenv lab alab args tenv taenv t) where
     showsPrec = showsFun (ShowEnv show show 0 [] [])
 
 -- Auxiliary functions
@@ -287,6 +302,7 @@ elabelOf (Index lab _ _ _) = lab
 elabelOf (ShapeSize lab _ _) = tupleLabel lab
 elabelOf (Get lab _ _) = lab
 elabelOf (Undef lab) = tupleLabel lab
+elabelOf (Ecustom lab _ _ _ _ _ _) = lab
 elabelOf (Let _ _ body) = elabelOf body
 elabelOf (Var lab _ _) = tupleLabel lab
 elabelOf (FreeVar lab _) = tupleLabel lab
@@ -388,13 +404,14 @@ generaliseLabA (Index _ (ARLab _) _ _) = error "generaliseLabA: Index with label
 generaliseLabA (ShapeSize lab sht e) = ShapeSize lab sht (generaliseLabA e)
 generaliseLabA (Get lab path ex) = Get lab path (generaliseLabA ex)
 generaliseLabA (Undef lab) = Undef lab
+generaliseLabA (Ecustom lab l1 f l2 l3 g a) = Ecustom lab l1 (generaliseLabFunA f) l2 l3 (generaliseLabFunA g) (generaliseLabA a)
 generaliseLabA (Let lhs rhs ex) = Let lhs (generaliseLabA rhs) (generaliseLabA ex)
 generaliseLabA (Var lab v referLab) = Var lab v referLab
 generaliseLabA (FreeVar lab v) = FreeVar lab v
 generaliseLabA (Arg lab argsty tidx) = Arg lab argsty tidx
 
 -- Checks the expression does not contain labelised array variable references
-generaliseLabFunA :: OpenFun env aenv lab alab tenv taenv t -> OpenFun env aenv lab alab' tenv taenv t
+generaliseLabFunA :: OpenFun env aenv lab alab args tenv taenv t -> OpenFun env aenv lab alab' args tenv taenv t
 generaliseLabFunA (Lam lhs fun) = Lam lhs (generaliseLabFunA fun)
 generaliseLabFunA (Body ex) = Body (generaliseLabA ex)
 
@@ -415,32 +432,16 @@ generaliseAenv (Index lab (ARLab referLab) execLab e) = Index lab (ARLab referLa
 generaliseAenv (ShapeSize lab sht e) = ShapeSize lab sht (generaliseAenv e)
 generaliseAenv (Get lab path ex) = Get lab path (generaliseAenv ex)
 generaliseAenv (Undef lab) = Undef lab
+generaliseAenv (Ecustom lab l1 f l2 l3 g a) = Ecustom lab l1 (generaliseAenvFun f) l2 l3 (generaliseAenvFun g) (generaliseAenv a)
 generaliseAenv (Let lhs rhs ex) = Let lhs (generaliseAenv rhs) (generaliseAenv ex)
 generaliseAenv (Var lab v referLab) = Var lab v referLab
 generaliseAenv (FreeVar lab v) = FreeVar lab v
 generaliseAenv (Arg lab argsty tidx) = Arg lab argsty tidx
 
 -- Checks the expression does not contain array variables
-generaliseAenvFun :: OpenFun env aenv lab alab tenv taenv t -> OpenFun env aenv' lab alab tenv taenv t
+generaliseAenvFun :: OpenFun env aenv lab alab args tenv taenv t -> OpenFun env aenv' lab alab args tenv taenv t
 generaliseAenvFun (Lam lhs fun) = Lam lhs (generaliseAenvFun fun)
 generaliseAenvFun (Body ex) = Body (generaliseAenv ex)
-
-elabelsOf :: OpenExp env aenv lab alab args tenv taenv t -> [Some (EDLabelN lab)]
-elabelsOf (Const lab _) = [Some (tupleLabel lab)]
-elabelsOf (PrimApp lab _ ex) = Some lab : elabelsOf ex
-elabelsOf (PrimConst lab _) = [Some (tupleLabel lab)]
-elabelsOf (Pair _ e1 e2) = elabelsOf e1 ++ elabelsOf e2
-elabelsOf (Nil lab) = [Some lab]
-elabelsOf (Cond lab e1 e2 e3) = Some lab : elabelsOf e1 ++ elabelsOf e2 ++ elabelsOf e3
-elabelsOf (Shape lab _) = [Some lab]
-elabelsOf (Index lab _ execLab e) = Some lab : Some (tupleLabel execLab) : elabelsOf e
-elabelsOf (ShapeSize lab _ e) = Some (tupleLabel lab) : elabelsOf e
-elabelsOf (Get lab _ ex) = Some lab : elabelsOf ex
-elabelsOf (Undef lab) = [Some (tupleLabel lab)]
-elabelsOf (Let _ rhs ex) = elabelsOf rhs ++ elabelsOf ex
-elabelsOf (Var lab _ _) = [Some (tupleLabel lab)]
-elabelsOf (FreeVar lab _) = [Some (tupleLabel lab)]
-elabelsOf (Arg lab _ _) = [Some (tupleLabel lab)]
 
 -- TODO: These IndexInstantiators need some documentation
 newtype IndexInstantiator idxadj sh t =
@@ -459,8 +460,8 @@ instance Semigroup (IndexInstantiators idxadj arr) where
 
 data SplitLambdaAD t t' lab alab tenv taenv tmp idxadj =
     forall fv.
-        SplitLambdaAD (forall aenv alab'. A.ArrayVars aenv fv -> Fun aenv lab alab' tenv taenv (t -> (t', tmp)))
-                      (forall aenv alab'. A.ArrayVars aenv fv -> Fun aenv lab alab' tenv taenv ((t', tmp) -> (t, idxadj)))
+        SplitLambdaAD (forall aenv alab'. A.ArrayVars aenv fv -> Fun aenv lab alab' () tenv taenv (t -> (t', tmp)))
+                      (forall aenv alab'. A.ArrayVars aenv fv -> Fun aenv lab alab' () tenv taenv ((t', tmp) -> (t, idxadj)))
                       (TupR (AAnyPartLabelN alab) fv)
                       (TypeR tmp)
                       (TypeR idxadj)
@@ -487,6 +488,7 @@ sinkExp k (Index lab var execLab idx) = Index lab var execLab (sinkExp k idx)
 sinkExp k (ShapeSize lab sht e) = ShapeSize lab sht (sinkExp k e)
 sinkExp k (Get lab ti e) = Get lab ti (sinkExp k e)
 sinkExp _ (Undef lab) = Undef lab
+sinkExp k (Ecustom lab l1 f l2 l3 g a) = Ecustom lab l1 (sinkFun k f) l2 l3 (sinkFun k g) (sinkExp k a)
 sinkExp k (Let lhs rhs e)
   | Exists lhs' <- A.rebuildLHS lhs =
       Let lhs' (sinkExp k rhs) (sinkExp (A.sinkWithLHS lhs lhs' k) e)
@@ -494,7 +496,7 @@ sinkExp k (Var lab (A.Var sty idx) referLab) = Var lab (A.Var sty (k A.>:> idx))
 sinkExp _ (FreeVar lab var) = FreeVar lab var
 sinkExp _ (Arg lab argsty tidx) = Arg lab argsty tidx
 
-sinkFun :: env A.:> env' -> OpenFun env aenv lab alab tenv taenv t -> OpenFun env' aenv lab alab tenv taenv t
+sinkFun :: env A.:> env' -> OpenFun env aenv lab alab args tenv taenv t -> OpenFun env' aenv lab alab args tenv taenv t
 sinkFun w (Body ex) = Body (sinkExp w ex)
 sinkFun w (Lam lhs fun)
   | Exists lhs' <- A.rebuildLHS lhs
@@ -536,12 +538,13 @@ expALabels (Index _ ref _ e) =
 expALabels (ShapeSize _ _ e) = expALabels e
 expALabels (Get _ _ e) = expALabels e
 expALabels (Undef _) = []
+expALabels (Ecustom _ _ f _ _ g a) = expFunALabels f ++ expFunALabels g ++ expALabels a
 expALabels (Let _ rhs e) = expALabels rhs ++ expALabels e
 expALabels (Var _ _ _) = []
 expALabels (FreeVar _ _) = []
 expALabels (Arg _ _ _) = []
 
-expFunALabels :: OpenFun env aenv lab alab tenv taenv t -> [Some (AAnyPartLabelN alab)]
+expFunALabels :: OpenFun env aenv lab alab args tenv taenv t -> [Some (AAnyPartLabelN alab)]
 expFunALabels (Lam _ fun) = expFunALabels fun
 expFunALabels (Body ex) = expALabels ex
 
@@ -557,6 +560,7 @@ expHasIndex (Index _ _ _ _) = True
 expHasIndex (ShapeSize _ _ e) = expHasIndex e
 expHasIndex (Get _ _ e) = expHasIndex e
 expHasIndex (Undef _) = False
+expHasIndex (Ecustom _ _ _ _ _ _ a) = expHasIndex a  -- TODO: Is it correct that this ignores the functions?
 expHasIndex (Let _ rhs e) = expHasIndex rhs || expHasIndex e
 expHasIndex (Var _ _ _) = False
 expHasIndex (FreeVar _ _) = False
@@ -567,7 +571,7 @@ mkNothing :: forall env aenv alab args tenv taenv t. TypeR t -> OpenExp env aenv
 mkNothing ty
   | [tag] <- [tag | ("Nothing", tag) <- A.tags @(Maybe t)] =
       smartPair (Const scalarLabel tag) (smartPair (Nil magicLabel) (untupleExps (fmapTupR (Undef . nilLabel) ty)))
-  | otherwise = error "Maybe does not have a Just constructor?"
+  | otherwise = error "Maybe does not have a Nothing constructor?"
 
 mkJust :: forall env aenv alab args tenv taenv t. OpenExp env aenv () alab args tenv taenv t -> OpenExp env aenv () alab args tenv taenv (A.PrimMaybe t)
 mkJust ex

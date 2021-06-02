@@ -9,7 +9,7 @@
 {-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.ADAcc (
   reverseADA, ReverseADResA(..),
-  generaliseArgs,
+  generaliseArgs, enlabelAccToplevel, argumentTuple,
 ) where
 
 import Data.Function ((&))
@@ -26,7 +26,7 @@ import Data.Array.Accelerate.AST (ALeftHandSide)
 import qualified Data.Array.Accelerate.AST.Environment as A
 import Data.Array.Accelerate.AST.LeftHandSide
 import qualified Data.Array.Accelerate.AST.Var as A
-import Data.Array.Accelerate.Error (HasCallStack)
+import Data.Array.Accelerate.Error (HasCallStack, internalError)
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Representation.Array
 import Data.Array.Accelerate.Representation.Shape (ShapeR(..), shapeType)
@@ -80,16 +80,76 @@ generaliseArgs (Scan' lab dir f e0 a) = Scan' lab dir f e0 (generaliseArgs a)
 generaliseArgs (Backpermute lab dim f e) = Backpermute lab dim f (generaliseArgs e)
 generaliseArgs (Replicate lab sht she e) = Replicate lab sht she (generaliseArgs e)
 generaliseArgs (Slice lab sht e she) = Slice lab sht (generaliseArgs e) she
-generaliseArgs (Reduce sht she f e) = Reduce sht she f (generaliseArgs e)
+generaliseArgs (Reduce lab sht f e) = Reduce lab sht f (generaliseArgs e)
 generaliseArgs (Reshape lab she e) = Reshape lab she (generaliseArgs e)
 generaliseArgs (Sum lab a) = Sum lab (generaliseArgs a)
 generaliseArgs (Generate lab she f) = Generate lab she f
 generaliseArgs (Permute lab cf e1 pf e2) = Permute lab cf (generaliseArgs e1) pf (generaliseArgs e2)
 generaliseArgs (Aget lab path ex) = Aget lab path (generaliseArgs ex)
+generaliseArgs (Acustom lab l1 f l2 l3 g e) = Acustom lab l1 (generaliseArgsF f) l2 l3 (generaliseArgsF g) (generaliseArgs e)
 generaliseArgs (Alet lhs rhs ex) = Alet lhs (generaliseArgs rhs) (generaliseArgs ex)
 generaliseArgs (Avar lab v referLab) = Avar lab v referLab
 generaliseArgs (AfreeVar lab var) = AfreeVar lab var
 generaliseArgs (Aarg _ _ _) = error "generaliseArgs: Arg found"
+
+-- Assumes the expression does not contain Arg
+generaliseArgsF :: OpenAfun aenv lab alab args taenv t -> OpenAfun aenv lab alab args' taenv t
+generaliseArgsF (Alam lhs fun) = Alam lhs (generaliseArgsF fun)
+generaliseArgsF (Abody expr) = Abody (generaliseArgs expr)
+
+-- Considers internal variable references to be _primal_ variable references.
+-- This function is suitable mostly only for Acustom.
+-- Note: This function requires that the argument is labelised, but _not_ split using splitLambdaAD.
+inlineLabelsPrimal :: AContext Int aenv
+                   -> OpenAcc aenv' lab Int args taenv t
+                   -> IdGen (OpenAcc aenv lab () args taenv t)
+inlineLabelsPrimal ctx = \case
+    Aconst lab x -> return $ Aconst (nil lab) x
+    Apair lab e1 e2 -> Apair (nil lab) <$> inlineLabelsPrimal ctx e1 <*> inlineLabelsPrimal ctx e2
+    Anil lab -> return $ Anil (nil lab)
+    Acond lab e1 e2 e3 -> Acond (nil lab) (resolveAlabs ctx e1) <$> inlineLabelsPrimal ctx e2 <*> inlineLabelsPrimal ctx e3
+    Map lab (ELPlain f) e -> Map (nil lab) (ELPlain (resolveAlabsFun ctx f)) <$> inlineLabelsPrimal ctx e
+    Map _ ELSplit{} _ -> error "Unexpected ELSplit in inlineLabelsPrimal"
+    ZipWith lab (ELPlain f) e1 e2 -> ZipWith (nil lab) (ELPlain (resolveAlabsFun ctx f)) <$> inlineLabelsPrimal ctx e1 <*> inlineLabelsPrimal ctx e2
+    ZipWith _ ELSplit{} _ _ -> error "Unexpected ELSplit in inlineLabelsPrimal"
+    Fold lab f me0 a -> Fold (nil lab) (resolveAlabsFun ctx f) (resolveAlabs ctx <$> me0) <$> inlineLabelsPrimal ctx a
+    Scan lab dir f me0 a -> Scan (nil lab) dir (resolveAlabsFun ctx f) (resolveAlabs ctx <$> me0) <$> inlineLabelsPrimal ctx a
+    Scan' lab dir f e0 a -> Scan' (nil lab) dir (resolveAlabsFun ctx f) (resolveAlabs ctx e0) <$> inlineLabelsPrimal ctx a
+    Backpermute lab dim f e -> Backpermute (nil lab) (resolveAlabs ctx dim) (resolveAlabsFun ctx f) <$> inlineLabelsPrimal ctx e
+    Replicate lab sht she e -> Replicate (nil lab) sht (resolveAlabs ctx she) <$> inlineLabelsPrimal ctx e
+    Slice lab sht e she -> Slice (nil lab) sht <$> inlineLabelsPrimal ctx e <*> pure (resolveAlabs ctx she)
+    Reduce lab sht f e -> Reduce (nil lab) sht (resolveAlabsFun ctx f) <$> inlineLabelsPrimal ctx e
+    Reshape lab she e -> Reshape (nil lab) (resolveAlabs ctx she) <$> inlineLabelsPrimal ctx e
+    Sum lab a -> Sum (nil lab) <$> inlineLabelsPrimal ctx a
+    Generate lab she (ELPlain f) -> return $ Generate (nil lab) (resolveAlabs ctx she) (ELPlain (resolveAlabsFun ctx f))
+    Generate _ _ ELSplit{} -> error "Unexpected ELSplit in inlineLabelsPrimal"
+    Permute lab cf e1 pf e2 -> Permute (nil lab) (resolveAlabsFun ctx cf) <$> inlineLabelsPrimal ctx e1 <*> pure (resolveAlabsFun ctx pf) <*> inlineLabelsPrimal ctx e2
+    Aget lab path ex -> Aget (nil lab) path <$> inlineLabelsPrimal ctx ex
+    Acustom lab l1 f l2 l3 g e -> (\f' g' e' -> Acustom (nil lab) (nil l1) f' (nil l2) (nil l3) g' e') <$> inlineLabelsPrimalF ctx (FLLab l1 FLEnd) f <*> inlineLabelsPrimalF ctx (FLLab l2 (FLLab l3 FLEnd)) g <*> inlineLabelsPrimal ctx e
+    Alet _ rhs ex -> do
+        (Exists lhs', envlabs) <- genSingleIds (atypeOf rhs)
+        Alet lhs' <$> inlineLabelsPrimal ctx rhs <*> inlineLabelsPrimal (ctxPush lhs' (fmapLabel P (alabelOf rhs)) envlabs ctx) ex
+    Avar _ _ (PartLabel referLab tidx) ->
+        return $ avars (resolveEnvLabs ctx (pickTupR tidx (findPrimalBMap ctx referLab)))
+    AfreeVar lab var -> return $ AfreeVar (nil lab) var
+    Aarg lab argsty tidx -> return $ Aarg (nil lab) argsty tidx
+  where
+    nil :: DLabel lty s lab t -> DLabel lty s () t
+    nil lab = lab { labelLabel = () }
+
+-- Considers internal variable references to be _primal_ variable references.
+-- This function is suitable mostly only for Ecustom.
+-- Note: This function requires that the argument is labelised, but _not_ split using splitLambdaAD.
+inlineLabelsPrimalF :: AContext Int aenv
+                    -> FunctionLabels NodeLabel ArraysR Int t
+                    -> OpenAfun aenv' lab Int args taenv t
+                    -> IdGen (OpenAfun aenv lab () args taenv t)
+inlineLabelsPrimalF ctx (FLLab lab labs) (Alam lhs fun) = do
+    (Exists lhs', envlabs) <- genSingleIds (lhsToTupR lhs)
+    Alam lhs' <$> inlineLabelsPrimalF (ctxPush lhs' (fmapLabel P lab) envlabs ctx) labs fun
+inlineLabelsPrimalF ctx FLEnd (Abody expr) = Abody <$> inlineLabelsPrimal ctx expr
+inlineLabelsPrimalF _ FLEnd Alam{} = internalError "Not enough labels given to inlineLabelsPrimalF"
+inlineLabelsPrimalF _ FLLab{} Abody{} = internalError "Too many labels given to inlineLabelsPrimalF?"
 
 data ReverseADResA alab tenv taenv t =
     forall aenv.
@@ -103,7 +163,7 @@ reverseADA :: ALeftHandSide t () aenv
 reverseADA paramlhs expr adjfreevars = evalIdGen $ do
     let paramty = lhsToTupR paramlhs
     (argsRHSlabel, expr') <-
-        enlabelAccToplevel paramlhs (argumentTuple paramty) (generaliseArgs expr)
+        enlabelAccToplevel True paramlhs (argumentTuple paramty) (generaliseArgs expr)
 
     traceM ("acc labeled:\n" ++ prettyPrint expr' ++ "\n")
 
@@ -111,10 +171,10 @@ reverseADA paramlhs expr adjfreevars = evalIdGen $ do
         primal (Context LEmpty mempty) expr'
 
     let cmap0 = DMap.singleton (Local (alabelOf expr'))
-                               (AdjList (\_ -> [untupleAccs (fmapTupR smartAfreeVar adjfreevars)]))
+                               (AdjList (\_ -> return [untupleAccs (fmapTupR smartAfreeVar adjfreevars)]))
     DualResult (ABuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx cmap0 expr'
     let argpvars = resolveEnvLabs dualCtx (findPrimalBMap dualCtx argsRHSlabel)
-        (gradient, _) = collectAdjointCMap dualCMap (Argument paramty) argpvars dualCtx
+    (gradient, _) <- collectAdjointCMap dualCMap (Argument paramty) argpvars dualCtx
 
     return $ ReverseADResA
         paramlhs
@@ -156,6 +216,7 @@ realiseArgs paramlhs = \expr -> go A.weakenId (A.weakenWithLHS paramlhs) expr
         Reduce lab slt f e -> Reduce lab slt (sinkFunAenv varWeaken f) (go argWeaken varWeaken e)
         Reshape lab she e -> Reshape lab (sinkExpAenv varWeaken she) (go argWeaken varWeaken e)
         Aget lab tidx ex -> Aget lab tidx (go argWeaken varWeaken ex)
+        Acustom lab l1 f l2 l3 g e -> Acustom lab l1 (goF argWeaken varWeaken f) l2 l3 (goF argWeaken varWeaken g) (go argWeaken varWeaken e)
         Alet lhs rhs ex
           | Exists lhs' <- rebuildLHS lhs ->
               Alet lhs' (go argWeaken varWeaken rhs)
@@ -172,42 +233,57 @@ realiseArgs paramlhs = \expr -> go A.weakenId (A.weakenWithLHS paramlhs) expr
               -- an arbitrary valid value of the type.
               Nothing -> emptiesForType (TupRsingle (labelType lab))
 
+    goF :: argsenv A.:> aenv' -> aenv A.:> aenv' -> OpenAfun aenv () () args taenv t -> OpenAfun aenv' () () () taenv t
+    goF argWeaken varWeaken (Alam lhs fun)
+      | Exists lhs' <- rebuildLHS lhs
+      = Alam lhs' (goF (A.weakenWithLHS lhs' A..> argWeaken) (A.sinkWithLHS lhs lhs' varWeaken) fun)
+    goF argWeaken varWeaken (Abody acc) = Abody (go argWeaken varWeaken acc)
+
 -- Enlabels a program of the form 'Alet lhs rhs body', where 'rhs' has type
 -- 'args' and the Alet has been broken out into its three components. In
 -- addition to the full program, returns the label of the enlabeled rhs.
-enlabelAccToplevel :: ALeftHandSide args () aenv
+-- Bool argument: whether to splitLambdaAD on expression lambdas.
+enlabelAccToplevel :: Bool
+                   -> ALeftHandSide args () aenv
                    -> OpenAcc () () () args taenv args
                    -> OpenAcc aenv () () args taenv t
                    -> IdGen (ADLabelN Int args, OpenAcc () () Int args taenv t)
-enlabelAccToplevel lhs argsRHS body = do
-    argsRHS' <- enlabelAcc TEmpty argsRHS
+enlabelAccToplevel spl lhs argsRHS body = do
+    argsRHS' <- enlabelAcc spl TEmpty argsRHS
     let lab = alabelOf argsRHS'
-    body' <- enlabelAcc (lpushLHS_parts TEmpty lab TIHere lhs) body
+    body' <- enlabelAcc spl (lpushLHS_parts TEmpty lab TIHere lhs) body
     return (lab, Alet lhs argsRHS' body')
 
-enlabelAcc :: TagVal (AAnyPartLabelN Int) aenv -> OpenAcc aenv () () args taenv t -> IdGen (OpenAcc aenv () Int args taenv t)
-enlabelAcc aenv prog = case prog of
+-- Bool argument: whether to splitLambdaAD on expression lambdas. The actual case on the Bool argument is in the splitLambda helper function.
+enlabelAcc :: Bool -> TagVal (AAnyPartLabelN Int) aenv -> OpenAcc aenv () () args taenv t -> IdGen (OpenAcc aenv () Int args taenv t)
+enlabelAcc spl aenv prog = case prog of
     Aconst lab x -> Aconst <$> genLabNS lab <*> return x
-    Apair lab a1 a2 -> Apair <$> genLabN lab <*> enlabelAcc aenv a1 <*> enlabelAcc aenv a2
+    Apair lab a1 a2 -> Apair <$> genLabN lab <*> enlabelAcc spl aenv a1 <*> enlabelAcc spl aenv a2
     Anil lab -> Anil <$> genLabN lab
-    Acond lab ex a1 a2 -> Acond <$> genLabN lab <*> return (snd (labeliseExpA aenv ex)) <*> enlabelAcc aenv a1 <*> enlabelAcc aenv a2
-    Map lab (ELPlain fun) a1 -> Map <$> genLabNS lab <*> splitLambda (atypeOf1 prog) aenv fun <*> enlabelAcc aenv a1
-    ZipWith lab (ELPlain fun) a1 a2 -> ZipWith <$> genLabNS lab <*> splitLambda (atypeOf1 prog) aenv fun <*> enlabelAcc aenv a1 <*> enlabelAcc aenv a2
-    Fold lab fun mex a1 -> Fold <$> genLabNS lab <*> return (snd (labeliseFunA aenv fun)) <*> return (snd . labeliseExpA aenv <$> mex) <*> enlabelAcc aenv a1
-    Sum lab a1 -> Sum <$> genLabNS lab <*> enlabelAcc aenv a1
-    Scan lab dir fun mex a1 -> Scan <$> genLabNS lab <*> return dir <*> return (snd (labeliseFunA aenv fun)) <*> return (snd . labeliseExpA aenv <$> mex) <*> enlabelAcc aenv a1
-    Scan' lab dir fun mex a1 -> Scan' <$> genLabN lab <*> return dir <*> return (snd (labeliseFunA aenv fun)) <*> return (snd (labeliseExpA aenv mex)) <*> enlabelAcc aenv a1
+    Acond lab ex a1 a2 -> Acond <$> genLabN lab <*> return (snd (labeliseExpA aenv ex)) <*> enlabelAcc spl aenv a1 <*> enlabelAcc spl aenv a2
+    Map lab (ELPlain fun) a1 -> Map <$> genLabNS lab <*> splitLambda (atypeOf1 prog) aenv fun <*> enlabelAcc spl aenv a1
+    ZipWith lab (ELPlain fun) a1 a2 -> ZipWith <$> genLabNS lab <*> splitLambda (atypeOf1 prog) aenv fun <*> enlabelAcc spl aenv a1 <*> enlabelAcc spl aenv a2
+    Fold lab fun mex a1 -> Fold <$> genLabNS lab <*> return (snd (labeliseFunA aenv fun)) <*> return (snd . labeliseExpA aenv <$> mex) <*> enlabelAcc spl aenv a1
+    Sum lab a1 -> Sum <$> genLabNS lab <*> enlabelAcc spl aenv a1
+    Scan lab dir fun mex a1 -> Scan <$> genLabNS lab <*> return dir <*> return (snd (labeliseFunA aenv fun)) <*> return (snd . labeliseExpA aenv <$> mex) <*> enlabelAcc spl aenv a1
+    Scan' lab dir fun mex a1 -> Scan' <$> genLabN lab <*> return dir <*> return (snd (labeliseFunA aenv fun)) <*> return (snd (labeliseExpA aenv mex)) <*> enlabelAcc spl aenv a1
     Generate lab ex (ELPlain fun) -> Generate <$> genLabNS lab <*> return (snd (labeliseExpA aenv ex)) <*> splitLambda (atypeOf1 prog) aenv fun
-    Replicate lab slix ex a1 -> Replicate <$> genLabNS lab <*> return slix <*> return (snd (labeliseExpA aenv ex)) <*> enlabelAcc aenv a1
-    Slice lab slix a1 ex -> Slice <$> genLabNS lab <*> return slix <*> enlabelAcc aenv a1 <*> return (snd (labeliseExpA aenv ex))
-    Reduce lab slix fun a1 -> Reduce <$> genLabNS lab <*> return slix <*> return (snd (labeliseFunA aenv fun)) <*> enlabelAcc aenv a1
-    Reshape lab ex a1 -> Reshape <$> genLabNS lab <*> return (snd (labeliseExpA aenv ex)) <*> enlabelAcc aenv a1
-    Backpermute lab ex fun a1 -> Backpermute <$> genLabNS lab <*> return (snd (labeliseExpA aenv ex)) <*> return (snd (labeliseFunA aenv fun)) <*> enlabelAcc aenv a1
-    Permute lab fun1 a1 fun2 a2 -> Permute <$> genLabNS lab <*> return (snd (labeliseFunA aenv fun1)) <*> enlabelAcc aenv a1 <*> return (snd (labeliseFunA aenv fun2)) <*> enlabelAcc aenv a2
-    Aget lab tidx a1 -> Aget <$> genLabN lab <*> return tidx <*> enlabelAcc aenv a1
+    Replicate lab slix ex a1 -> Replicate <$> genLabNS lab <*> return slix <*> return (snd (labeliseExpA aenv ex)) <*> enlabelAcc spl aenv a1
+    Slice lab slix a1 ex -> Slice <$> genLabNS lab <*> return slix <*> enlabelAcc spl aenv a1 <*> return (snd (labeliseExpA aenv ex))
+    Reduce lab slix fun a1 -> Reduce <$> genLabNS lab <*> return slix <*> return (snd (labeliseFunA aenv fun)) <*> enlabelAcc spl aenv a1
+    Reshape lab ex a1 -> Reshape <$> genLabNS lab <*> return (snd (labeliseExpA aenv ex)) <*> enlabelAcc spl aenv a1
+    Backpermute lab ex fun a1 -> Backpermute <$> genLabNS lab <*> return (snd (labeliseExpA aenv ex)) <*> return (snd (labeliseFunA aenv fun)) <*> enlabelAcc spl aenv a1
+    Permute lab fun1 a1 fun2 a2 -> Permute <$> genLabNS lab <*> return (snd (labeliseFunA aenv fun1)) <*> enlabelAcc spl aenv a1 <*> return (snd (labeliseFunA aenv fun2)) <*> enlabelAcc spl aenv a2
+    Aget lab tidx a1 -> Aget <$> genLabN lab <*> return tidx <*> enlabelAcc spl aenv a1
+    Acustom lab l1 f l2 l3 g e -> do
+        l1' <- genLabN l1
+        l2' <- genLabN l2
+        l3' <- genLabN l3
+        Acustom <$> genLabN lab <*> pure l1' <*> enlabelAfun False (FLLab l1' FLEnd) aenv f
+                <*> pure l2' <*> pure l3' <*> enlabelAfun False (FLLab l2' (FLLab l3' FLEnd)) aenv g <*> enlabelAcc spl aenv e
     Alet lhs rhs a1 -> do
-        rhs' <- enlabelAcc aenv rhs
-        Alet lhs <$> return rhs' <*> enlabelAcc (lpushLHS_parts aenv (alabelOf rhs') TIHere lhs) a1
+        rhs' <- enlabelAcc spl aenv rhs
+        Alet lhs <$> return rhs' <*> enlabelAcc spl (lpushLHS_parts aenv (alabelOf rhs') TIHere lhs) a1
     Avar lab var@(A.Var _ idx) _
       | AnyPartLabel pl <- prjT idx aenv ->
           Avar <$> genLabNS lab <*> return var <*> return pl
@@ -223,10 +299,24 @@ enlabelAcc aenv prog = case prog of
     genLabNS :: ADLabelNS () t -> IdGen (ADLabelNS Int t)
     genLabNS = genIdNodeSingle . labelType
 
-    splitLambda :: ArrayR (Array sh e) -> TagVal (AAnyPartLabelN Int) aenv -> Fun aenv () () tenv taenv (t1 -> t2) -> IdGen (ExpLambda1 aenv () Int tenv taenv sh t1 t2)
+    -- Note: Here we check whether we should split expression functions or not.
+    splitLambda :: ArrayR (Array sh e) -> TagVal (AAnyPartLabelN Int) aenv -> Fun aenv () () () tenv taenv (t1 -> t2) -> IdGen (ExpLambda1 aenv () Int tenv taenv sh t1 t2)
     splitLambda (ArrayR sht _) aenv' fun
-      | SomeSplitLambdaAD split@(SplitLambdaAD _ _ _ tmpty _ _) <- splitLambdaAD (snd (labeliseFunA aenv' fun))
-      = ELSplit split <$> genIdNodeSingle (ArrayR sht tmpty)
+      | spl = case splitLambdaAD (snd (labeliseFunA aenv' fun)) of
+                SomeSplitLambdaAD split@(SplitLambdaAD _ _ _ tmpty _ _) ->
+                    ELSplit split <$> genIdNodeSingle (ArrayR sht tmpty)
+      | otherwise = return (ELPlain (snd (labeliseFunA aenv' fun)))
+
+-- Bool argument: whether to splitLambdaAD on expression lambdas
+enlabelAfun :: Bool
+            -> FunctionLabels NodeLabel ArraysR Int t
+            -> TagVal (AAnyPartLabelN Int) aenv
+            -> OpenAfun aenv () () args taenv t
+            -> IdGen (OpenAfun aenv () Int args taenv t)
+enlabelAfun spl (FLLab lab labs) env (Alam lhs fun) = Alam lhs <$> enlabelAfun spl labs (lpushLHS_parts env lab TIHere lhs) fun
+enlabelAfun spl FLEnd env (Abody expr) = Abody <$> enlabelAcc spl env expr
+enlabelAfun _ FLEnd _ Alam{} = internalError "Not enough labels given to enlabelAfun"
+enlabelAfun _ FLLab{} _ Abody{} = internalError "Too many labels given to enlabelAfun?"
 
 data ABuilder aenv alab args taenv =
     forall aenv'.
@@ -396,6 +486,13 @@ primal ctx = \case
         simplePrimal (arg :@ TLNil) ctx lab (\_ lab' (arg' :@ _) ->
             Aget lab' tidx arg')
 
+    Acustom lab lab1 (Alam _ (Abody pexpr)) _ _ _ arg ->
+        simplePrimal' (arg :@ TLNil) ctx lab (\ctx' _ (arg' :@ _) -> do
+          (Exists plhs', lab1envs) <- genSingleIds (labelType lab1)
+          Alet plhs' arg' <$> inlineLabelsPrimal (ctxPush plhs' (fmapLabel P lab1) lab1envs ctx') pexpr)
+
+    Acustom _ _ _ _ _ _ _ -> error "impossible GADTs"
+
     Alet _ rhs body -> do
         -- It's not a simplePrimal because it doesn't generate labels; in fact
         -- it's even simpler than simplePrimal.
@@ -425,7 +522,7 @@ primal ctx = \case
 primalProducerFromLambda
     :: AContext Int aenv
     -> SplitLambdaAD t1 t2 () Int () taenv tmp idxadj
-    -> (Fun aenv () () () taenv (t1 -> (t2, tmp))
+    -> (Fun aenv () () () () taenv (t1 -> (t2, tmp))
            -> OpenAcc aenv () () args taenv (Array sh (t2, tmp)))
     -> OpenAcc aenv () () args taenv (Array sh t2, Array sh tmp)
 primalProducerFromLambda ctx (SplitLambdaAD primalLambda _ fvlabs _ _ _) buildf =
@@ -451,11 +548,23 @@ simplePrimal :: (IsTupleType ArrayR s, GCompare s)
                  -> TypedList (OpenAcc aenv' () () args taenv) argts
                  -> OpenAcc aenv' () () args taenv t)
              -> IdGen (PrimalResult aenv alab args taenv t)
-simplePrimal args ctx lab buildf =
+simplePrimal args ctx lab buildf = simplePrimal' args ctx lab (\ctx' lab' args' -> return (buildf ctx' lab' args'))
+
+simplePrimal' :: (IsTupleType ArrayR s, GCompare s)
+              => TypedList (OpenAcc progaenv () Int args taenv) argts
+              -> AContext Int aenv
+              -> DLabel NodeLabel s Int t
+              -> (forall aenv'.
+                     AContext Int aenv'
+                  -> DLabel nodeLabel s () t
+                  -> TypedList (OpenAcc aenv' () () args taenv) argts
+                  -> IdGen (OpenAcc aenv' () () args taenv t))
+              -> IdGen (PrimalResult aenv alab args taenv t)
+simplePrimal' args ctx lab buildf =
     runArgs args ctx $ \(ABuilder ctx' f1) stores arglabss -> do
         (Exists lhs, envlabs) <- genSingleIds (toTupleType (labelType lab))
-        let acc' = buildf ctx' (nilLabel (labelType lab))
-                               (tlmap (avars . resolveEnvLabs ctx') arglabss)
+        acc' <- buildf ctx' (nilLabel (labelType lab))
+                            (tlmap (avars . resolveEnvLabs ctx') arglabss)
         return $ PrimalResult
             (ABuilder (ctxPush lhs (fmapLabel P (tupleLabel lab)) envlabs ctx')
                       (f1 . Alet lhs acc'))
@@ -481,14 +590,14 @@ simplePrimal args ctx lab buildf =
 -- The exact variable references in the adjoints are dependent on the Let stack, thus the
 -- environment (and the bindmap) is needed.
 newtype AdjList lab alab args taenv t =
-    AdjList (forall aenv. AContext alab aenv -> [OpenAcc aenv lab () args taenv t])
+    AdjList (forall aenv. AContext alab aenv -> IdGen [OpenAcc aenv lab () args taenv t])
 
 instance Semigroup (AdjList lab alab args taenv t) where
-    AdjList f1 <> AdjList f2 = AdjList (\ctx -> f1 ctx ++ f2 ctx)
+    AdjList f1 <> AdjList f2 = AdjList (\ctx -> (++) <$> f1 ctx <*> f2 ctx)
 
 showAdjList :: AContext alab aenv -> AdjList lab alab args taenv t -> String
 showAdjList ctx (AdjList f) =
-    let len = length (f ctx)
+    let len = length (evalIdGen (f ctx))
     in "{\\_ -> [" ++ show len ++ " item" ++ (if len == 1 then "" else "s") ++ "]}"
 
 showCMapA :: AContext alab aenv -> DMap (CMapKey ArrayR Int) (AdjList () alab args taenv) -> String
@@ -509,7 +618,7 @@ dual ctx cmap = \case
         return (DualResult (ABuilder ctx id) [] (DMap.delete (Local (tupleLabel' lab)) cmap))
 
     Apair lab arg1 arg2 -> do
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local lab) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local lab) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         (Exists lhs, envlabs) <- genSingleIds (labelType lab)
         let ctx' = ctxPush lhs (fmapLabel D lab) envlabs ctx
             cmap'' = addContrib (Local (alabelOf arg1))
@@ -533,7 +642,7 @@ dual ctx cmap = \case
         return (DualResult (ABuilder ctx id) [] (DMap.delete (Local lab) cmap))
 
     Acond lab condexp argT argE -> do
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local lab) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local lab) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         (Exists envlhs, envlabs) <- genSingleIds (labelType lab)
         let ctx' = ctxPush envlhs (fmapLabel D lab) envlabs ctx
             cmap'' = addContrib (Local (alabelOf argT))
@@ -587,8 +696,8 @@ dual ctx cmap = \case
     -- The expression determining the shape has an integral result, and can thus be
     -- ignored here. All that we do is collect the indexing contributions.
     Generate lab _ (ELSplit (SplitLambdaAD _ dualLambda fvlabs _ idxadjty idxInsts) tmplab) -> do
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
-            sht = arrayRshape (labelType lab)
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        let sht = arrayRshape (labelType lab)
             iaarrty = ArrayR sht idxadjty
             pairarrty = ArrayR sht (TupRpair (shapeType sht) idxadjty)
         envlab0 <- genSingleId (labelType lab)
@@ -616,8 +725,8 @@ dual ctx cmap = \case
     Generate _ _ ELPlain{} -> error "dual: unexpected Generate ELPlain"
 
     Map lab (ELSplit (SplitLambdaAD _ dualLambda fvlabs _ idxadjty idxInsts) tmplab) arg1 -> do
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
-            ArrayR sht argeltty = atypeOf1 arg1
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        let ArrayR sht argeltty = atypeOf1 arg1
             iaarrty = ArrayR sht idxadjty
             pairarrty = ArrayR sht (TupRpair argeltty idxadjty)
         envlab0 <- genSingleId (labelType lab)
@@ -655,8 +764,8 @@ dual ctx cmap = \case
     Map _ ELPlain{} _ -> error "dual: unexpected Map ELPlain"
 
     ZipWith lab (ELSplit (SplitLambdaAD _ dualLambda fvlabs _ idxadjty idxInsts) tmplab) arg1 arg2 -> do
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
-            ArrayR sht arg1eltty = atypeOf1 arg1
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        let ArrayR sht arg1eltty = atypeOf1 arg1
             ArrayR _ arg2eltty = atypeOf1 arg2
             iaarrty = ArrayR sht idxadjty
             pairarrty = ArrayR sht (TupRpair (TupRpair arg1eltty arg2eltty) idxadjty)
@@ -714,7 +823,7 @@ dual ctx cmap = \case
 
         ReplicateOneMore onemoreSlix onemoreExpf <- return (replicateOneMore (arrayRshape (labelType lab)))
 
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         envlab0 <- genSingleId (labelType lab)
         envlab1 <- genSingleId (atypeOf1 arg1)
         let ctx'1 = ctxPushS (fmapLabel D lab) envlab0 ctx
@@ -777,7 +886,7 @@ dual ctx cmap = \case
 
         ReplicateOneMore onemoreSlix onemoreExpf <- return (replicateOneMore (arrayRshape (labelType lab)))
 
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         envlab0 <- genSingleId (labelType lab)
         envlab1 <- genSingleId (atypeOf1 arg1)
         let ctx'1 = ctxPushS (fmapLabel D lab) envlab0 ctx
@@ -883,6 +992,25 @@ dual ctx cmap = \case
                           (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf arg1)))
                           (avars (resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab))))
 
+    Acustom lab _ _ lab2 lab3 (Alam arglhs (Alam adjlhs (Abody dacc))) arg -> do
+        simpleArrayDual' "Acustom" lab arg ctx cmap
+            (\ctx2 -> do
+                let adjoint' = avars (resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab))
+                    argPrimal = avars (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf arg)))
+                (Exists arglhs', argenvlabs) <- genSingleIds (lhsToTupR arglhs)
+                (Exists adjlhs', adjenvlabs) <- genSingleIds (lhsToTupR adjlhs)
+                -- inlineLabelsPrimal will assume that all internal variable references are primal
+                -- variable references. Hence, we need to push both the argument and the adjoint
+                -- here with _primal_ labels. This "primal" designation does not necessarily make
+                -- a lot of sense here.
+                let ctx2' = ctx2
+                            & ctxPush arglhs' (fmapLabel P lab2) argenvlabs
+                            & ctxPush adjlhs' (fmapLabel P lab3) adjenvlabs
+                Alet (LeftHandSidePair arglhs' adjlhs') (smartApair argPrimal adjoint')
+                     <$> inlineLabelsPrimal ctx2' dacc)
+
+    Acustom _ _ _ _ _ _ _ -> error "impossible GADTs"
+
     Alet _ arg1 arg2 -> do
         -- The contribution is stored in the cmap under the label of the body,
         -- so it will be communicated without work here in Let.
@@ -892,7 +1020,7 @@ dual ctx cmap = \case
         DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx2 cmap2 arg1
         traceM (unlines ["!dual Alet[let " ++ showDLabel (alabelOf arg1) ++ " in " ++ showDLabel (alabelOf arg2) ++ "]:"
                         ,"  cmap2 ! " ++ show (labelLabel (alabelOf arg1)) ++ " has " ++
-                              show (maybe 0 (\(AdjList f) -> length (f ctx2)) (DMap.lookup (Local (alabelOf arg1)) cmap2)) ++ " entries"
+                              show (maybe 0 (\(AdjList f) -> length (evalIdGen (f ctx2))) (DMap.lookup (Local (alabelOf arg1)) cmap2)) ++ " entries"
                         ,"  stores = " ++ show (stores1 ++ stores2)
                         ,"  out cmap = " ++ showCMapA ctx1 cmap1
                         ])
@@ -902,7 +1030,7 @@ dual ctx cmap = \case
             cmap1
 
     Avar lab _ (PartLabel referLab referPart) -> do
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         envlab0 <- genSingleId (labelType lab)
         let ctx' = ctxPushS (fmapLabel D lab) envlab0 ctx
             cmap'' = addContrib (Local referLab)
@@ -924,7 +1052,7 @@ dual ctx cmap = \case
         return (DualResult (ABuilder ctx id) [] (DMap.delete (Local (tupleLabel lab)) cmap))
 
     Aarg lab argsty tidx -> do
-        let (adjoint, cmap') = collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+        (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         envlab0 <- genSingleId (labelType lab)
         let ctx' = ctxPushS (fmapLabel D lab) envlab0 ctx
             cmap'' = addContrib (Argument argsty)
@@ -953,7 +1081,7 @@ dual ctx cmap = \case
     Reduce _ _ _ _ -> error "AD: Reduce currently unsupported"
     Permute _ _ _ _ _ -> error "AD: Permute currently unsupported"
   where
-    timesLam :: NumType t -> Fun aenv () alab tenv taenv ((t, t) -> t)
+    timesLam :: NumType t -> Fun aenv () alab args tenv taenv ((t, t) -> t)
     timesLam ty =
         let sty = SingleScalarType (NumSingleType ty)
         in Lam (LeftHandSidePair (LeftHandSideSingle sty) (LeftHandSideSingle sty))
@@ -1024,12 +1152,23 @@ simpleArrayDual :: (IsTupleType ArrayR s, Show (s t))
                 -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)  -- contribmap
                 -> (forall aenv'. AContext Int aenv' -> OpenAcc aenv' () () args taenv a)
                 -> IdGen (DualResult aenv Int args taenv)
-simpleArrayDual name lab arg ctx cmap contribution = do
+simpleArrayDual name lab arg ctx cmap contribution =
+    simpleArrayDual' name lab arg ctx cmap (return . contribution)
+
+simpleArrayDual' :: (IsTupleType ArrayR s, Show (s t))
+                 => String
+                 -> DLabel NodeLabel s Int t
+                 -> OpenAcc progaenv () Int args taenv a
+                 -> AContext Int aenv
+                 -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)  -- contribmap
+                 -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' () () args taenv a))
+                 -> IdGen (DualResult aenv Int args taenv)
+simpleArrayDual' name lab arg ctx cmap contribution = do
     let lab' = tupleLabel lab
-        (adjoint, cmap') = collectAdjointCMap cmap (Local lab') (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
+    (adjoint, cmap') <- collectAdjointCMap cmap (Local lab') (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
     (Exists envlhs, envlabs) <- genSingleIds (labelType lab')
     let ctx' = ctxPush envlhs (fmapLabel D lab') envlabs ctx
-        cmap'' = addContrib (Local (alabelOf arg)) contribution cmap'
+        cmap'' = addContrib' (Local (alabelOf arg)) contribution cmap'
     DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg
     traceM (unlines ["!dual " ++ name ++ "[" ++ showDLabel lab ++ "]:"
                     ,"  envlabs = " ++ showTupR showDLabel envlabs
@@ -1050,7 +1189,7 @@ data MatchLamBody env aenv lab alab tenv taenv t t' =
 
 -- This function exists only to be able to bind a 'Lam lhs (Body body)' in a non-MonadFail
 -- environment without hassle.
-matchLamBody :: HasCallStack => OpenFun env aenv lab alab tenv taenv (t -> t') -> MatchLamBody env aenv lab alab tenv taenv t t'
+matchLamBody :: HasCallStack => OpenFun env aenv lab alab () tenv taenv (t -> t') -> MatchLamBody env aenv lab alab tenv taenv t t'
 matchLamBody (Lam lhs (Body body)) = MatchLamBody lhs body
 matchLamBody _ = error "matchLamBody: function has more than one argument"
 
@@ -1065,26 +1204,32 @@ collectAdjointCMap :: DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
                    -> CMapKey ArrayR Int t
                    -> A.ArrayVars aenv t  -- primal result of the queried-for node
                    -> AContext Int aenv
-                   -> (OpenAcc aenv () () args taenv t
-                      ,DMap (CMapKey ArrayR Int) (AdjList () Int args taenv))
+                   -> IdGen (OpenAcc aenv () () args taenv t
+                            ,DMap (CMapKey ArrayR Int) (AdjList () Int args taenv))
 collectAdjointCMap contribmap key pvars ctx
-  | AdjList adjgen <- fromMaybe (AdjList (const [])) (DMap.lookup key contribmap)
-  = case adjgen ctx of
+  | AdjList adjgen <- fromMaybe (AdjList (const (return []))) (DMap.lookup key contribmap)
+  = adjgen ctx >>= \case
       [] ->
           -- if there are no contributions, the adjoint is an empty sum (i.e. zero)
           let res = arraysSum (cmapKeyType key) pvars []
-          in trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m") $
-             (res, contribmap)
+          in return $ trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m") $
+                      (res, contribmap)
       contribs ->
           let adj = arraysSum (cmapKeyType key) pvars contribs
-          in trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==>[" ++ show (length contribs) ++ "] " ++ show adj ++ "\x1B[0m") $
-             (reshapesWithZeros pvars adj, DMap.delete key contribmap)
+          in return $ trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==>[" ++ show (length contribs) ++ "] " ++ show adj ++ "\x1B[0m") $
+                      (reshapesWithZeros pvars adj, DMap.delete key contribmap)
 
 addContrib :: CMapKey ArrayR Int t
            -> (forall aenv. AContext Int aenv -> OpenAcc aenv () () args taenv t)
            -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
            -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
-addContrib key gen = DMap.insertWith (<>) key (AdjList (pure . gen))
+addContrib key gen = DMap.insertWith (<>) key (AdjList (\ctx -> return [gen ctx]))
+
+addContrib' :: CMapKey ArrayR Int t
+            -> (forall aenv. AContext Int aenv -> IdGen (OpenAcc aenv () () args taenv t))
+            -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
+            -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
+addContrib' key gen = DMap.insertWith (<>) key (AdjList (\ctx -> pure <$> gen ctx))
 
 lookupLambdaLabs :: AContext Int env  -- context
                  -> TupR (AAnyPartLabelN Int) t  -- free variable labels from SplitLambdaAD
@@ -1113,7 +1258,7 @@ indexingContributions idxadjlab idxInstMap =
        -- TODO: just merge the two list comprehensions now we semigroup them
        -- together anyway.
     in DMap.fromListWithKey (const (<>))
-         [Local backingLab :=> AdjList (\ctx ->
+         [Local backingLab :=> AdjList (\ctx -> return $
             [let pvars = resolveEnvLabs ctx (findPrimalBMap ctx backingLab)
                  TupRsingle backingPVar = pickTupR backingPart pvars
                  contrib = Permute (nilLabel backingType)
@@ -1221,7 +1366,7 @@ emptiesForType TupRunit = Anil (nilLabel TupRunit)
 emptiesForType (TupRsingle ty@(ArrayR sht _)) = generateConstantArray ty (zeroForType (shapeType sht))
 emptiesForType (TupRpair t1 t2) = smartApair (emptiesForType t1) (emptiesForType t2)
 
-expGetLam :: TupleIdx t t' -> TypeR t -> Fun aenv () alab tenv taenv (t -> t')
+expGetLam :: TupleIdx t t' -> TypeR t -> Fun aenv () alab args tenv taenv (t -> t')
 expGetLam ti ty
   | LetBoundVars lhs vars <- lhsCopy ty
   = Lam lhs (Body (evars (pickTupR ti vars)))
@@ -1237,13 +1382,13 @@ mapFst = mapGet (TILeft TIHere)
 mapSnd :: OpenAcc aenv () () tenv taenv (Array sh (a, b)) -> OpenAcc aenv () () tenv taenv (Array sh b)
 mapSnd = mapGet (TIRight TIHere)
 
-plusLam :: TypeR t -> Fun aenv () alab tenv taenv (t -> t -> t)
+plusLam :: TypeR t -> Fun aenv () alab args tenv taenv (t -> t -> t)
 plusLam ty
   | DeclareVars lhs1 _ varsgen1 <- declareVars ty
   , DeclareVars lhs2 weaken2 varsgen2 <- declareVars ty
   = Lam lhs1 . Lam lhs2 . Body $ expPlus ty (evars (varsgen1 weaken2)) (evars (varsgen2 A.weakenId))
 
-uncurryFun :: Fun aenv lab alab tenv taenv (a -> b -> c) -> Fun aenv lab alab tenv taenv ((a, b) -> c)
+uncurryFun :: Fun aenv lab alab args tenv taenv (a -> b -> c) -> Fun aenv lab alab args tenv taenv ((a, b) -> c)
 uncurryFun (Lam l1 (Lam l2 (Body e))) = Lam (LeftHandSidePair l1 l2) (Body e)
 uncurryFun _ = error "uncurryFun: impossible GADTs"
 
@@ -1298,7 +1443,7 @@ sliceCopy (ShapeRsnoc sh)
 sliceDualLambda :: SliceIndex slix sl co sh
                 -> A.Var ArrayR aenv (Array sl e)
                 -> Exp aenv () alab () tenv taenv slix
-                -> Fun aenv () alab tenv taenv (sh -> e)
+                -> Fun aenv () alab () tenv taenv (sh -> e)
 sliceDualLambda slix adjvar@(A.Var (ArrayR _ eltty) _) slexpr
   | LetBoundVars indexlhs indexvars' <- lhsCopy (shapeType (sliceDomainR slix))
   , LetBoundVars slicelhs slicevars <- lhsCopy (sliceIndexTypeR slix)
@@ -1385,8 +1530,8 @@ resolveAlabs ctx ex =
 
 resolveAlabsFun :: HasCallStack
                 => AContext Int aenv
-                -> OpenFun env aenv' lab Int tenv taenv t
-                -> OpenFun env aenv lab alab' tenv taenv t
+                -> OpenFun env aenv' lab Int args tenv taenv t
+                -> OpenFun env aenv lab alab' args tenv taenv t
 resolveAlabsFun ctx (Lam lhs fun) = Lam lhs (resolveAlabsFun ctx fun)
 resolveAlabsFun ctx (Body ex) = Body (resolveAlabs ctx ex)
 

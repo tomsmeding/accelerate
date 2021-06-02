@@ -117,6 +117,16 @@ instance (Ord lab, GCompare s) => GCompare (AnyPartLabel lty s lab) where
           GGT -> GGT
 
 
+-- This type can be used to pass labels for each of the arguments of a lambda to some function.
+-- Unfortunately, because there is no single type constructor that indicates
+-- the "end" of a function type, we can't ensure in the type system that FLEnd
+-- corresponds exactly to Body.
+-- This type is used when labelising/delabelising Ecustom and Acustom.
+data FunctionLabels lty s lab t where
+    FLEnd :: FunctionLabels lty s lab t
+    FLLab :: DLabel lty s lab a -> FunctionLabels lty s lab t -> FunctionLabels lty s lab (a -> t)
+
+
 -- Convenience function like 'scalarType', except for tuple types
 class IsTuple t where tupleType :: TypeR t
 instance {-# OVERLAPPING #-} IsTuple () where tupleType = TupRunit

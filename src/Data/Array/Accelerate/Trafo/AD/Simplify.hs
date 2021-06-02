@@ -114,6 +114,7 @@ goAcc = \case
     Permute lab f a1 pf a2 -> Permute lab !$! simplifyFun f !**! goAcc a1 !**! simplifyFun pf !**! goAcc a2
     Aget lab tidx a -> Aget lab tidx !$! goAcc a
     Aarg lab argsty tidx -> returnS $ Aarg lab argsty tidx
+    Acustom lab l1 f l2 l3 g a -> Acustom lab l1 !$! goAfun f !**! returnS l2 !**! returnS l3 !**! goAfun g !**! goAcc a
     Alet lhs a1 a2 ->
       \s -> let (s1, a1') = goAcc a1 s
                 (s2, a2') = goAcc a2 (spushLHS0 s1 lhs)
@@ -124,6 +125,14 @@ goAcc = \case
     Avar lab var referLab ->
       \s -> (statAddV var (Finite 1) s, Avar lab var referLab)
     AfreeVar lab var -> returnS $ AfreeVar lab var
+
+goAfun :: OpenAfun aenv () () args taenv t -> Stats aenv -> (Stats aenv, OpenAfun aenv () () args taenv t)
+goAfun (Alam lhs fun) =
+    \s -> let (s1, fun') = goAfun fun (spushLHS0 s lhs)
+          in case spopLHS' lhs s1 of
+               (s1', Some lhs') -> (s1', Alam lhs' (sinkAfun (sinkWithLHSAllowDrop lhs lhs' weakenId) fun'))
+goAfun (Abody acc) = Abody !$! goAcc acc
+
 
 goExp' :: OpenExp env aenv () alab args tenv taenv t -> Stats aenv -> (Stats aenv, OpenExp env aenv () alab args tenv taenv t)
 goExp' e s = let ((s', SNil), e') = goExp e (s, SNil) in (s', e')
@@ -212,6 +221,7 @@ goExp = \case
     Index lab ref execLab e -> Index lab !$! goArrayRef ref !**! returnS execLab !**! goExp e
     ShapeSize lab sht e -> ShapeSize lab sht !$! goExp e
     Undef ty -> returnS $ Undef ty  -- TODO: undef poisons, and can be propagated; however we currently don't generate code where that would help.
+    Ecustom lab l1 f l2 l3 g a -> Ecustom lab l1 !$! goFun f !**! returnS l2 !**! returnS l3 !**! goFun g !**! goExp a
     Let lhs rhs e ->
       \s -> let ((s1a, s1e), rhs') = goExp rhs s
                 ((s2a, s2e), e') = goExp e (s1a, spushLHS0 s1e lhs)
@@ -230,12 +240,19 @@ goExp = \case
       = True
     isNumConstant _ _ = False
 
+goFun :: OpenFun env aenv () alab args tenv taenv t -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), OpenFun env aenv () alab args tenv taenv t)
+goFun (Lam lhs fun) =
+    \s -> let (s1, fun') = goFun fun (second (`spushLHS0` lhs) s)
+          in case spopLHS' lhs (snd s1) of
+               (s1'snd, Some lhs') -> ((fst s1, s1'snd), Lam lhs' (sinkFun (sinkWithLHSAllowDrop lhs lhs' weakenId) fun'))
+goFun (Body expr) = Body !$! goExp expr
+
 goArrayRef :: ArrayRef aenv taenv alab t -> (Stats aenv, Stats env) -> ((Stats aenv, Stats env), ArrayRef aenv taenv alab t)
 goArrayRef (ARVar var) (sa, se) = ((statAddV var AccInExp sa, se), ARVar var)
 goArrayRef (ARFree var) s = (s, ARFree var)
 goArrayRef (ARLab lab) s = (s, ARLab lab)
 
-simplifyFun :: OpenFun env aenv () alab tenv taenv t -> Stats aenv -> (Stats aenv, OpenFun env aenv () alab tenv taenv t)
+simplifyFun :: OpenFun env aenv () alab args tenv taenv t -> Stats aenv -> (Stats aenv, OpenFun env aenv () alab args tenv taenv t)
 simplifyFun (Lam lhs fun) = Lam lhs !$! simplifyFun fun
 simplifyFun (Body ex) = Body !$! goExp' ex
 
@@ -288,12 +305,19 @@ inlineA f = \case
     Backpermute lab she f' a -> Backpermute lab (inlineAE f she) (inlineAEF f f') (inlineA f a)
     Permute lab f' a1 pf a2 -> Permute lab (inlineAEF f f') (inlineA f a1) (inlineAEF f pf) (inlineA f a2)
     Aget lab tidx a -> Aget lab tidx (inlineA f a)
+    Acustom lab l1 f' l2 l3 g a -> Acustom lab l1 (inlineAfun f f') l2 l3 (inlineAfun f g) (inlineA f a)
     Aarg lab argsty tidx -> Aarg lab argsty tidx
     Alet lhs a1 a2
       | Exists lhs2 <- rebuildLHS lhs
       -> Alet lhs2 (inlineA f a1) (inlineA (sinkInlinerALHS lhs lhs2 f) a2)
     Avar _ var _ -> unInlinerA f var
     AfreeVar lab var -> AfreeVar lab var
+
+inlineAfun :: InlinerA aenv aenv' lab () args taenv -> OpenAfun aenv lab () args taenv t -> OpenAfun aenv' lab () args taenv t
+inlineAfun f (Alam lhs fun)
+  | Exists lhs2 <- rebuildLHS lhs
+  = Alam lhs2 (inlineAfun (sinkInlinerALHS lhs lhs2 f) fun)
+inlineAfun f (Abody acc) = Abody (inlineA f acc)
 
 inlineAE :: InlinerA aenv aenv' lab alab aargs taenv -> OpenExp env aenv lab alab args tenv taenv t -> OpenExp env aenv' lab alab args tenv taenv t
 inlineAE f = \case
@@ -308,6 +332,7 @@ inlineAE f = \case
     ShapeSize lab sht e -> ShapeSize lab sht (inlineAE f e)
     Get lab ti e -> Get lab ti (inlineAE f e)
     Undef lab -> Undef lab
+    Ecustom lab l1 f' l2 l3 g e -> Ecustom lab l1 (inlineAEF f f') l2 l3 (inlineAEF f g) (inlineAE f e)
     Let lhs rhs e -> Let lhs (inlineAE f rhs) (inlineAE f e)
     Arg lab argsty tidx -> Arg lab argsty tidx
     Var lab var referLab -> Var lab var referLab
@@ -321,7 +346,7 @@ inlineAE f = \case
     inlineAE_ArrayRef _ (ARFree var) = ARFree var
     inlineAE_ArrayRef _ (ARLab lab) = ARLab lab
 
-inlineAEF :: InlinerA aenv aenv' lab alab args taenv -> OpenFun env aenv lab alab tenv taenv t -> OpenFun env aenv' lab alab tenv taenv t
+inlineAEF :: InlinerA aenv aenv' lab alab args taenv -> OpenFun env aenv lab alab args' tenv taenv t -> OpenFun env aenv' lab alab args' tenv taenv t
 inlineAEF f (Lam lhs fun) = Lam lhs (inlineAEF f fun)
 inlineAEF f (Body e) = Body (inlineAE f e)
 
@@ -355,12 +380,19 @@ inlineE f = \case
     ShapeSize lab sht e -> ShapeSize lab sht (inlineE f e)
     Get lab ti e -> Get lab ti (inlineE f e)
     Undef lab -> Undef lab
+    Ecustom lab l1 f' l2 l3 g e -> Ecustom lab l1 (inlineFun f f') l2 l3 (inlineFun f g) (inlineE f e)
     Let lhs rhs e
       | Exists lhs' <- rebuildLHS lhs
       -> Let lhs' (inlineE f rhs) (inlineE (sinkInlinerELHS lhs lhs' f) e)
     Arg lab argsty tidx -> Arg lab argsty tidx
     Var _ var _ -> unInlinerE f var
     FreeVar lab var -> FreeVar lab var
+
+inlineFun :: InlinerE env env' aenv () alab args tenv taenv -> OpenFun env aenv () alab args tenv taenv t -> OpenFun env' aenv () alab args tenv taenv t
+inlineFun f (Lam lhs fun)
+  | Exists lhs2 <- rebuildLHS lhs
+  = Lam lhs2 (inlineFun (sinkInlinerELHS lhs lhs2 f) fun)
+inlineFun f (Body acc) = Body (inlineE f acc)
 
 lhsHasWildcard :: LeftHandSide s t env env' -> Bool
 lhsHasWildcard (LeftHandSideWildcard _) = True
@@ -416,6 +448,8 @@ reprojectA rj@(RjFst resty rj1) acc = case acc of
     Scan' _ _ _ _ _ -> error "Invalid GADTs"
     Aget lab tidx a -> reprojectA rj1 (smartFstA (Aget lab tidx a))
     Alet lhs a1 a2 -> Alet lhs a1 (reprojectA rj a2)
+    _ | LetBoundVars lhs' vars <- rjToLHS (atypeOf acc) rj
+      -> Alet lhs' acc (avars vars)
 reprojectA rj@(RjSnd resty rj1) acc = case acc of
     Apair _ _ b -> reprojectA rj1 b
     Acond _ e a1 a2 -> Acond (DLabel resty ()) e (reprojectA rj a1) (reprojectA rj a2)
@@ -427,6 +461,8 @@ reprojectA rj@(RjSnd resty rj1) acc = case acc of
     Scan' _ _ _ _ _ -> error "Invalid GADTs"
     Aget lab tidx a -> reprojectA rj1 (smartSndA (Aget lab tidx a))
     Alet lhs a1 a2 -> Alet lhs a1 (reprojectA rj a2)
+    _ | LetBoundVars lhs' vars <- rjToLHS (atypeOf acc) rj
+      -> Alet lhs' acc (avars vars)
 reprojectA rj@(RjPair resty rj1 rj2) acc = case acc of
     Apair _ a b ->
         let a' = reprojectA rj1 a
@@ -440,6 +476,8 @@ reprojectA rj@(RjPair resty rj1 rj2) acc = case acc of
     Scan' _ _ _ _ _ -> error "Invalid GADTs"
     Aget _ tidx a -> reprojectA (addTidxToReproject (atypeOf a) tidx rj) a
     Alet lhs a1 a2 -> Alet lhs a1 (reprojectA rj a2)
+    _ | LetBoundVars lhs' vars <- rjToLHS (atypeOf acc) rj
+      -> Alet lhs' acc (avars vars)
 
 reprojectE :: Reprojection ScalarType t t' -> OpenExp env aenv () alab args tenv taenv t -> OpenExp env aenv () alab args tenv taenv t'
 reprojectE RjNil _ = Nil (nilLabel TupRunit)

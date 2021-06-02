@@ -140,6 +140,12 @@ layoutExp se d (ShapeSize lab _ e) =
 layoutExp se d (Get lab ti e) = parenthesise (d > 10) $
     lprefix (tiPrefixExp ti ++ showLabelSuffix' se lab ++ " ") (layoutExp se 11 e)
 layoutExp se _ (Undef lab) = string ("undef" ++ showLabelSuffix' se lab)
+layoutExp se d (Ecustom lab l1 f l2 l3 g e) =
+    parenthesise (d > 10) $
+        lprefix ("ecustom" ++ showLabelSuffix' se lab ++ " ")
+            (lseq' [insertAtEnd (showLabelSuffix' se l1) (layoutFun se 11 f)
+                   ,insertAtEnd (showLabelSuffix' se l2 ++ showLabelSuffix' se l3) (layoutFun se 11 g)
+                   ,layoutExp se 11 e])
 layoutExp se d (Let lhs rhs body) = parenthesise (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
         env' = descrs ++ seEnv se
@@ -253,6 +259,12 @@ layoutAcc se d (Reshape lab she e) =
                    ,layoutAcc se 11 e])
 layoutAcc se d (Aget lab ti e) = parenthesise (d > 10) $
     lprefix (tiPrefixAcc ti ++ ashowLabelSuffix' se lab ++ " ") (layoutAcc se 11 e)
+layoutAcc se d (Acustom lab l1 f l2 l3 g a) =
+    parenthesise (d > 10) $
+        lprefix ("acustom" ++ ashowLabelSuffix' se lab ++ " ")
+            (lseq' [insertAtEnd (ashowLabelSuffix' se l1) (layoutAfun se 11 f)
+                   ,insertAtEnd (ashowLabelSuffix' se l2 ++ ashowLabelSuffix' se l3) (layoutAfun se 11 g)
+                   ,layoutAcc se 11 a])
 layoutAcc se d (Alet lhs rhs body) = parenthesise (d > 0) $
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
         env' = descrs ++ seAenv se
@@ -275,7 +287,7 @@ layoutAcc se d (Aarg lab _ tidx) = parenthesise (d > 0) $
     string ((case tiPrefixAcc tidx of "" -> "A" ; pr -> "(" ++ pr ++ " A)")
             ++ ashowLabelSuffix' se lab ++ " :: " ++ show (labelType lab))
 
-layoutFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab tenv taenv t -> Layout
+layoutFun :: EShowEnv lab alab -> Int -> OpenFun env aenv lab alab args tenv taenv t -> Layout
 layoutFun se d (Body expr) = layoutExp se d expr
 layoutFun se d (Lam lhs fun) =
     let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
@@ -283,6 +295,15 @@ layoutFun se d (Lam lhs fun) =
     in parenthesise (d > 0) $
         LMaybeHanging (string ("\\" ++ descr ++ " ->"))
                       (layoutFun (se { seSeed = seed', seEnv = env' }) 0 fun)
+
+layoutAfun :: AShowEnv lab alab -> Int -> OpenAfun aenv lab alab args taenv t -> Layout
+layoutAfun se d (Abody expr) = layoutAcc se d expr
+layoutAfun se d (Alam lhs fun) =
+    let (descr, descrs, seed') = namifyLHS (seSeed se) lhs
+        env' = descrs ++ seAenv se
+    in parenthesise (d > 0) $
+        LMaybeHanging (string ("\\" ++ descr ++ " ->"))
+                      (layoutAfun (se { seSeed = seed', seAenv = env' }) 0 fun)
 
 layoutLambda :: EShowEnv lab alab -> Int -> ExpLambda1 aenv lab alab tenv taenv sh t1 t2 -> Layout
 layoutLambda se d (ELPlain fun) = layoutFun se d fun

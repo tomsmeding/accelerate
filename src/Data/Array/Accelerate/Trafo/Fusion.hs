@@ -180,7 +180,8 @@ manifest config (OpenAcc pacc) =
     Atrace msg a1 a2        -> Atrace msg (manifest config a1) (manifest config a2)
     Apply repr f a          -> apply repr (cvtAF f) (manifest config a)
     Aforeign repr ff f a    -> Aforeign repr ff (cvtAF f) (manifest config a)
-    Avjp t1 f a b           -> Avjp t1 (cvtAF f) (manifest config a) (manifest config b)
+    Avjp t f a b            -> Avjp t (cvtAF f) (manifest config a) (manifest config b)
+    AcustomDeriv t f g a    -> AcustomDeriv t (cvtAF f) (cvtAF g) (manifest config a)
 
     -- Producers
     -- ---------
@@ -373,7 +374,8 @@ embedPreOpenAcc config matchAcc embedAcc elimAcc pacc
     Atrace msg a1 a2    -> done $ Atrace msg (cvtA a1) (cvtA a2)
     Aforeign aR ff f a  -> done $ Aforeign aR ff (cvtAF f) (cvtA a)
     -- Collect s           -> collectD s
-    Avjp t1 f a b       -> done $ Avjp t1 (cvtAF f) (cvtA a) (cvtA b)
+    Avjp t f a b        -> done $ Avjp t (cvtAF f) (cvtA a) (cvtA b)
+    AcustomDeriv t f g a -> done $ AcustomDeriv t (cvtAF f) (cvtAF g) (cvtA a)
 
     -- Array injection
     Avar v              -> done $ Avar v
@@ -1509,7 +1511,8 @@ aletD' embedAcc elimAcc (LeftHandSideSingle ArrayR{}) (Embed env1 cc1) (Embed en
                                                b
           | otherwise                   -> LinearIndex a (cvtE i)
 
-        Evjp t1 f e a                   -> Evjp t1 (replaceF sh' f' avar f) (replaceE sh' f' avar e) (replaceE sh' f' avar a)
+        Evjp t f e a                    -> Evjp t (replaceF sh' f' avar f) (replaceE sh' f' avar e) (replaceE sh' f' avar a)
+        EcustomDeriv t f g a            -> EcustomDeriv t (replaceF sh' f' avar f) (replaceF sh' f' avar g) (replaceE sh' f' avar a)
 
       where
         cvtE :: OpenExp env aenv s -> OpenExp env aenv s
@@ -1572,7 +1575,8 @@ aletD' embedAcc elimAcc (LeftHandSideSingle ArrayR{}) (Embed env1 cc1) (Embed en
         Stencil s t f x a       -> Stencil s t (cvtF f) (cvtB x) (cvtA a)
         Stencil2 s1 s2 t f x a y b
                                 -> Stencil2 s1 s2 t (cvtF f) (cvtB x) (cvtA a) (cvtB y) (cvtA b)
-        Avjp t1 f a b           -> Avjp t1 (cvtAF f) (cvtA a) (cvtA b)
+        Avjp t f a b            -> Avjp t (cvtAF f) (cvtA a) (cvtA b)
+        AcustomDeriv t f g a    -> AcustomDeriv t (cvtAF f) (cvtAF g) (cvtA a)
         -- Collect seq             -> Collect (cvtSeq seq)
 
       where

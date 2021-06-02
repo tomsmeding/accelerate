@@ -476,6 +476,22 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
               -- -> PreOpenAcc acc aenv (((), b), a)
               -> PreOpenAcc acc aenv a
 
+  -- Given a primal interpretation and a function that computes the gradient
+  -- (reverse derivative), this defines a custom operation of which the
+  -- derivative in reverse AD is exactly the specified function.
+  -- Both functions may have free variable references, but they are inactive
+  -- for the purposes of differentiation; the full differentiation-relevant
+  -- behaviour of this operation is expected to be encapsulated in the given
+  -- derivative function.
+  --
+  -- Outside of Avjp, this primitive is equivalent to application of the primal
+  -- function to the a-typed argument.
+  AcustomDeriv :: ArraysR b
+               -> PreOpenAfun acc aenv (a -> b)
+               -> PreOpenAfun acc aenv ((((), a), b) -> a)
+               -> acc aenv a
+               -> PreOpenAcc acc aenv b
+
 
 data Direction = LeftToRight | RightToLeft
   deriving Eq
@@ -665,6 +681,22 @@ data OpenExp env aenv t where
                 -- -> OpenExp env aenv (((), t'), t)
                 -> OpenExp env aenv t
 
+  -- Given a primal interpretation and a function that computes the gradient
+  -- (reverse derivative), this defines a custom operation of which the
+  -- derivative in reverse AD is exactly the specified function.
+  -- Both functions may have free variable references, but they are inactive
+  -- for the purposes of differentiation; the full differentiation-relevant
+  -- behaviour of this operation is expected to be encapsulated in the given
+  -- derivative function.
+  --
+  -- Outside of Evjp, this primitive is equivalent to application of the primal
+  -- function to the a-typed argument.
+  EcustomDeriv  :: TypeR b
+                -> OpenFun env aenv (a -> b)
+                -> OpenFun env aenv ((((), a), b) -> a)
+                -> OpenExp env aenv a
+                -> OpenExp env aenv b
+
   -- Unsafe operations (may fail or result in undefined behaviour)
   -- An unspecified bit pattern
   Undef         :: ScalarType t
@@ -838,6 +870,7 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
   arraysR (Stencil2 _ _ tR _ _ a _ _) = let ArrayR sh _ = arrayR a
                                          in arraysRarray sh tR
   arraysR (Avjp t _ _ _)              = t
+  arraysR (AcustomDeriv t _ _ _)      = t
 
 expType :: HasCallStack => OpenExp aenv env t -> TypeR t
 expType = \case
@@ -868,6 +901,7 @@ expType = \case
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
   Evjp ty _ _ _                -> ty
+  EcustomDeriv ty _ _ _        -> ty
 
 primConstType :: PrimConst a -> SingleType a
 primConstType = \case
@@ -1062,6 +1096,7 @@ rnfPreOpenAcc rnfA pacc =
         repr2 = ArrayR shr $ stencilEltR sr2
       in rnfStencilR sr1 `seq` rnfStencilR sr2 `seq` rnfTupR rnfScalarType tp `seq` rnfF f `seq` rnfB repr1 b1 `seq` rnfB repr2 b2 `seq` rnfA a1 `seq` rnfA a2
     Avjp a f arg adj          -> rnfTupR rnfArrayR a `seq` rnfAF f `seq` rnfA arg `seq` rnfA adj
+    AcustomDeriv t f g a      -> rnfTupR rnfArrayR t `seq` rnfAF f `seq` rnfAF g `seq` rnfA a
 
 rnfArrayVar :: ArrayVar aenv a -> ()
 rnfArrayVar = rnfVar rnfArrayR
@@ -1124,6 +1159,7 @@ rnfOpenExp topExp =
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
     Evjp tp f e a             -> rnfTypeR tp `seq` rnfF f `seq` rnfE e `seq` rnfE a
+    EcustomDeriv t f g a      -> rnfTypeR t `seq` rnfF f `seq` rnfF g `seq` rnfE a
 
 rnfExpVar :: ExpVar env t -> ()
 rnfExpVar = rnfVar rnfScalarType
@@ -1270,6 +1306,7 @@ liftPreOpenAcc liftA pacc =
           repr2 = ArrayR shr $ stencilEltR sr2
        in [|| Stencil2 $$(liftStencilR sr1) $$(liftStencilR sr2) $$(liftTypeR tp) $$(liftF f) $$(liftB repr1 b1) $$(liftA a1) $$(liftB repr2 b2) $$(liftA a2) ||]
     Avjp a f arg adj          -> [|| Avjp $$(liftArraysR a) $$(liftAF f) $$(liftA arg) $$(liftA adj) ||]
+    AcustomDeriv t f g a      -> [|| AcustomDeriv $$(liftArraysR t) $$(liftAF f) $$(liftAF g) $$(liftA a) ||]
 
 
 liftALeftHandSide :: ALeftHandSide arrs aenv aenv' -> Q (TExp (ALeftHandSide arrs aenv aenv'))
@@ -1346,6 +1383,7 @@ liftOpenExp pexp =
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
     Evjp tp f e a             -> [|| Evjp $$(liftTypeR tp) $$(liftF f) $$(liftE e) $$(liftE a) ||]
+    EcustomDeriv t f g a      -> [|| EcustomDeriv $$(liftTypeR t) $$(liftF f) $$(liftF g) $$(liftE a) ||]
 
 liftELeftHandSide :: ELeftHandSide t env env' -> Q (TExp (ELeftHandSide t env env'))
 liftELeftHandSide = liftLeftHandSide liftScalarType
@@ -1462,6 +1500,7 @@ showPreAccOp Backpermute{}       = "Backpermute"
 showPreAccOp Stencil{}           = "Stencil"
 showPreAccOp Stencil2{}          = "Stencil2"
 showPreAccOp Avjp{}              = "Avjp"
+showPreAccOp AcustomDeriv{}      = "AcustomDeriv"
 
 showDirection :: Direction -> Builder
 showDirection LeftToRight = singleton 'l'
@@ -1492,3 +1531,4 @@ showExpOp Shape{}           = "Shape"
 showExpOp ShapeSize{}       = "ShapeSize"
 showExpOp Coerce{}          = "Coerce"
 showExpOp Evjp{}            = "Evjp"
+showExpOp EcustomDeriv{}    = "EcustomDeriv"

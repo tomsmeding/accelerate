@@ -237,6 +237,9 @@ evalOpenAcc (AST.Manifest pacc) aenv =
     Unit tp e                     -> unitOp tp (evalE e)
     -- Collect s                     -> evalSeq defaultSeqConfig s aenv
     Avjp _ _ _ _                  -> internalError "Avjp unimplemented in Interpreter"
+    AcustomDeriv _ (Alam lhs (Abody body)) _ a ->  -- Just pick the primal interpretation and run that
+                                     evalOpenAcc (AST.Manifest (Alet lhs a body)) aenv
+    AcustomDeriv _ _ _ _          -> internalError "Invalid GADTs for AcustomDeriv in Interpreter"
 
     -- Producers
     -- ---------
@@ -1006,6 +1009,9 @@ evalOpenExp pexp env aenv =
     Foreign _ _ f e             -> evalOpenFun f Empty Empty $ evalE e
     Coerce t1 t2 e              -> evalCoerceScalar t1 t2 (evalE e)
     Evjp _ _ _ _                -> internalError "Evjp unimplemented in Interpreter"
+    EcustomDeriv _ (Lam lhs (Body body)) _ a ->  -- Just pick the primal interpretation and run that
+                                   evalOpenExp (Let lhs a body) env aenv
+    EcustomDeriv _ _ _ _        -> internalError "Invalid GADTs for AcustomDeriv in Interpreter"
 
 
 -- Coercions

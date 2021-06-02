@@ -6,7 +6,7 @@ import Data.Array.Accelerate.Trafo.AD.Common
 import Data.Array.Accelerate.Trafo.AD.Exp
 
 
-functionSize :: OpenFun env aenv lab alab tenv taenv t -> Int
+functionSize :: OpenFun env aenv lab alab args tenv taenv t -> Int
 functionSize (Lam _ fun) = functionSize fun
 functionSize (Body expr) = exprSize expr
 
@@ -25,7 +25,12 @@ exprSize (Get ty (TIRight tidx) (Pair _ _ e)) = exprSize (Get ty tidx e)
 exprSize (Get _ TIHere e) = exprSize e
 exprSize (Get _ _ e) = 1 + exprSize e
 exprSize (Undef _) = 0
+exprSize (Ecustom _ _ f _ _ g a) = funSize f + funSize g + exprSize a
 exprSize (Let _ e1 e2) = exprSize e1 + exprSize e2
 exprSize (Var _ _ _) = 0
 exprSize (FreeVar _ _) = 0
 exprSize (Arg _ _ _) = 0
+
+funSize :: OpenFun env aenv lab alab args tenv taenv t -> Int
+funSize (Lam _ fun) = funSize fun
+funSize (Body expr) = exprSize expr

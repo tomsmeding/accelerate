@@ -470,6 +470,12 @@ data PreSmartAcc acc exp as where
                 -- -> PreSmartAcc acc exp (((), b), a)
                 -> PreSmartAcc acc exp a
 
+  AcustomDeriv  :: ArraysR b
+                -> (SmartAcc a -> acc b)
+                -> (SmartAcc (((), a), b) -> acc a)
+                -> acc a
+                -> PreSmartAcc acc exp b
+
 
 -- Embedded expressions of the surface language
 -- --------------------------------------------
@@ -592,6 +598,12 @@ data PreSmartExp acc exp t where
                 -> exp t'
                 -- -> PreSmartExp acc exp (((), t'), t)
                 -> PreSmartExp acc exp t
+
+  EcustomDeriv  :: TypeR b
+                -> (SmartExp a -> exp b)
+                -> (SmartExp (((), a), b) -> exp a)
+                -> exp a
+                -> PreSmartExp acc exp b
 
   Undef         :: ScalarType t
                 -> PreSmartExp acc exp t
@@ -847,6 +859,7 @@ instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
     Stencil s tp _ _ _        -> TupRsingle $ ArrayR (stencilShapeR s) tp
     Stencil2 s _ tp _ _ _ _ _ -> TupRsingle $ ArrayR (stencilShapeR s) tp
     Avjp t _ _ _              -> t
+    AcustomDeriv t _ _ _      -> t
 
 
 class HasTypeR f where
@@ -885,6 +898,7 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Undef tp                        -> TupRsingle tp
     Coerce _ tp _                   -> TupRsingle tp
     Evjp t _ _ _                    -> t
+    EcustomDeriv t _ _ _            -> t
 
 
 -- Smart constructors
@@ -1351,6 +1365,7 @@ showPreAccOp Stencil{}             = "Stencil"
 showPreAccOp Stencil2{}            = "Stencil2"
 showPreAccOp Aforeign{}            = "Aforeign"
 showPreAccOp Avjp{}                = "Avjp"
+showPreAccOp AcustomDeriv{}        = "AcustomDeriv"
 
 showDirection :: Direction -> Builder
 showDirection LeftToRight = singleton 'l'
@@ -1380,4 +1395,4 @@ showPreExpOp ShapeSize{}    = "ShapeSize"
 showPreExpOp Foreign{}      = "Foreign"
 showPreExpOp Coerce{}       = "Coerce"
 showPreExpOp Evjp{}             = "Evjp"
-
+showPreExpOp EcustomDeriv{}     = "EcustomDeriv"

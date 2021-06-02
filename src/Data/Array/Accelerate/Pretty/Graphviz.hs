@@ -231,6 +231,16 @@ prettyDelayedOpenAcc detail ctx aenv (Manifest pacc) =
           loop                             = nest 2 (sep ["avjp", pretty f', xb, ab ])
       return $ PNode ident (Leaf (Nothing,loop)) (fvsx ++ fvsa)
 
+    AcustomDeriv _ f g a             -> do  -- TODO: does this even remotely make sense?
+      ident <- genNodeId
+      f'    <- prettyDelayedAfun detail aenv f
+      g'    <- prettyDelayedAfun detail aenv g
+      a'    <- replant =<< prettyDelayedOpenAcc detail app aenv a
+      --
+      let PNode _ (Leaf (Nothing,ab)) fvsa = a'
+          loop                             = nest 2 (sep ["avjp", pretty f', pretty g', ab ])
+      return $ PNode ident (Leaf (Nothing,loop)) fvsa
+
     Apair a1 a2              -> genNodeId >>= prettyDelayedApair detail aenv a1 a2
 
     Anil                            -> "()"             .$ []
@@ -547,3 +557,4 @@ fvOpenExp env aenv = fv
     fv (While p f x)            = concat [ fvF p, fvF f, fv x ]
     fv (Coerce _ _ e)           = fv e
     fv (Evjp _ f e a)           = concat [ fvF f, fv e, fv a ]
+    fv (EcustomDeriv _ f g a)   = concat [ fvF f, fvF g, fv a ]

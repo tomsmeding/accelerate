@@ -521,6 +521,37 @@ prop_avjp = property $ do
   checkApproxEqual (I.run1 (\arg' -> AD.agradient (g . f) arg') arg)
                    (I.run1 (\arg' -> AD.areverseAD f arg' (AD.agradient g (f arg'))) arg)
 
+prop_afree1 :: Property
+prop_afree1 = property $ do
+  arg1 <- forAll sized_vec
+  arg2 <- forAll sized_vec
+  checkApproxEqual (I.run1 (\(A.T2 arg1' arg2') ->
+                              AD.agradient (\a -> A.sum (A.zipWith (*) a arg2')) arg1')
+                           (arg1, arg2))
+                   (I.run1 (A.afst . AD.agradient (\(A.T2 a a2) -> A.sum (A.zipWith (*) a a2)))
+                           (arg1, arg2))
+
+prop_afree2 :: Property
+prop_afree2 = property $ do
+  arg1 <- forAll sized_vec
+  arg2 <- forAll (Gen.filter ((> 0) . A.arraySize) sized_vec)
+  checkApproxEqual (I.run1 (\(A.T2 arg1' arg2') ->
+                              let A.I1 n = A.shape arg2'
+                              in AD.agradient (\a -> A.sum (A.map (\x -> x * arg2' A.! A.I1 (A.round x `mod` n)) a)) arg1')
+                           (arg1, arg2))
+                   (I.run1 (A.afst . AD.agradient (\(A.T2 a a2) ->
+                                let A.I1 n = A.shape a2
+                                in A.sum (A.map (\x -> x * a2 A.! A.I1 (A.round x `mod` n)) a)))
+                           (arg1, arg2))
+
+prop_acustom1 :: Property
+prop_acustom1 = property $ do
+  arg <- forAll sized_vec
+  let n = A.constant (A.arraySize arg)
+  let transpose' = AD.acustomDeriv A.transpose (const A.transpose)
+  checkApproxEqual (I.run1 (A.sum . A.transpose . A.backpermute (A.I2 n n) (\(A.I2 i j) -> A.I1 ((i + 2 * j) `mod` n))) arg)
+                   (I.run1 (A.sum . transpose'  . A.backpermute (A.I2 n n) (\(A.I2 i j) -> A.I1 ((i + 2 * j) `mod` n))) arg)
+
 
 -- Expression tests
 -- ----------------
@@ -582,10 +613,18 @@ prop_evjp = property $ do
       g :: A.Exp (Float, Float) -> A.Exp Float
       g (A.T2 x y) = 2 * x + 3 * y - x * y
       arg = (a1, a2)
-      runE func arg' = I.run1 (A.unit . func . (A.! A.Z_)) (A.fromList A.Z [arg']) `A.linearIndexArray` 0
+      runE func arg' = I.run1 (A.unit . func . A.the) (A.fromList A.Z [arg']) `A.linearIndexArray` 0
       transform (x, y) = A.fromList (A.Z A.:. (2 :: Int)) [x, y]
   checkApproxEqual (transform $ runE (\arg' -> AD.gradient (g . f) arg') arg)
                    (transform $ runE (\arg' -> AD.reverseAD f arg' (AD.gradient g (f arg'))) arg)
+
+prop_ecustom1 :: Property
+prop_ecustom1 = property $ do
+  arg <- A.fromList A.Z . pure <$> forAll genFloat
+  let square x = x * x
+      square' = AD.customDeriv (\x -> x * x) (\x d -> d * 2 * x)
+  checkApproxEqual (I.run1 (\a -> A.unit (AD.gradient square (A.the a))) arg)
+                   (I.run1 (\a -> A.unit (AD.gradient square' (A.the a))) arg)
 
 
 -- Main and driver

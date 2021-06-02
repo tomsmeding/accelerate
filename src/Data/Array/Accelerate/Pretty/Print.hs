@@ -216,6 +216,7 @@ prettyPreOpenAcc config ctx prettyAcc extractAcc aenv pacc =
     Stencil s _ f b a               -> ppN "stencil"     .$ [ ppF f,  ppB (stencilEltR s) b, ppA a ]
     Stencil2 s1 s2 _ f b1 a1 b2 a2  -> ppN "stencil2"    .$ [ ppF f,  ppB (stencilEltR s1) b1, ppA a1, ppB (stencilEltR s2) b2, ppA a2 ]
     Avjp _ f a b                    -> ppN "avjp"        .$ [ ppAF f, ppA a, ppA b ]
+    AcustomDeriv _ f g a            -> ppN "acustomDeriv" .$ [ ppAF f, ppAF g, ppA a ]
   where
     infixr 0 .$
     f .$ xs
@@ -445,6 +446,7 @@ prettyOpenExp ctx env aenv exp =
     Coerce _ tp x         -> ppF1 (Operator (withTypeRep tp "coerce") App L 10) (ppE x)
     Undef tp              -> withTypeRep tp "undef"
     Evjp _ f e a          -> ppF3 "evjp"        (ppF f) (ppE e) (ppE a)
+    EcustomDeriv _ f g a  -> ppF3 "ecustomDeriv" (ppF f) (ppF g) (ppE a)
 
   where
     ppE :: OpenExp env aenv e -> Context -> Adoc

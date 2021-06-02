@@ -378,6 +378,7 @@ convertSharingAcc config alyt aenv (ScopedAcc lams (AccSharing _ preAcc))
                         (convertSharingBoundary config alyt aenv' shr bndy2)
                         (cvtA acc2)
       Avjp tp f e a               -> AST.Avjp tp (cvtAfun1 tp f) (cvtA e) (cvtA a)
+      AcustomDeriv tp f g a       -> AST.AcustomDeriv tp (cvtAfun1 (Smart.arraysR a) f) (cvtAfun1 (TupRpair (TupRpair TupRunit (Smart.arraysR a)) tp) g) (cvtA a)
       -- Collect seq -> AST.Collect (convertSharingSeq config alyt EmptyLayout aenv' [] seq)
 
 {--
@@ -781,6 +782,7 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
           Foreign repr ff f e   -> AST.Foreign repr ff (convertSmartFun config (typeR e) f) (cvt e)
           Coerce t1 t2 e        -> AST.Coerce t1 t2 (cvt e)
           Evjp tp f e a         -> AST.Evjp tp (cvtFun1 tp f) (cvt e) (cvt a)
+          EcustomDeriv tp f g a -> AST.EcustomDeriv tp (cvtFun1 (Smart.typeR a) f) (cvtFun1 (TupRpair (TupRpair TupRunit (Smart.typeR a)) tp) g) (cvt a)
 
     cvtPrj :: forall a b c env1 aenv1. PairIdx (a, b) c -> AST.OpenExp env1 aenv1 (a, b) -> AST.OpenExp env1 aenv1 c
     cvtPrj PairIdxLeft  (AST.Pair a _) = a
@@ -1583,6 +1585,12 @@ makeOccMapSharingAcc config accOccMap = traverseAcc
                                              (adj', h3) <- traverseAcc lvl adj
                                              return (Avjp ty fun' arg' adj'
                                                     , h1 `max` h2 `max` h3 + 1)
+            AcustomDeriv ty fun der arg -> do
+                                             (fun', h1) <- traverseAfun1 lvl (Smart.arraysR arg) fun
+                                             (der', h2) <- traverseAfun1 lvl (TupRpair (TupRpair TupRunit (Smart.arraysR arg)) ty) der
+                                             (arg', h3) <- traverseAcc lvl arg
+                                             return (AcustomDeriv ty fun' der' arg'
+                                                    , h1 `max` h2 `max` h3 + 1)
             -- Collect s                   -> do
             --                                  (s', h) <- traverseSeq lvl s
             --                                  return (Collect s', h + 1)
@@ -1881,6 +1889,11 @@ makeOccMapSharingExp config accOccMap expOccMap = travE
                                       (e', h2) <- travE lvl e
                                       (a', h3) <- travE lvl a
                                       return (Evjp tp f' e' a', h1 `max` h2 `max` h3 + 1)
+            EcustomDeriv t f g a -> do
+                                      (f', h1) <- traverseFun1 lvl (Smart.typeR a) f
+                                      (g', h2) <- traverseFun1 lvl (TupRpair (TupRpair TupRunit (Smart.typeR a)) t) g
+                                      (a', h3) <- travE lvl a
+                                      return (EcustomDeriv t f' g' a', h1 `max` h2 `max` h3 + 1)
 
       where
         traverseAcc :: HasCallStack => Level -> SmartAcc arrs -> IO (UnscopedAcc arrs, Int)
@@ -2471,6 +2484,15 @@ determineScopesSharingAcc config accOccMap = scopesAcc
                                      reconstruct (Avjp ty fun' arg' adj')
                                                  (accCount1 +++ accCount2 +++ accCount3)
 
+          AcustomDeriv ty fun der arg ->
+                                     let
+                                       (fun', accCount1) = scopesAfun1 fun
+                                       (der', accCount2) = scopesAfun1 der
+                                       (arg', accCount3) = scopesAcc arg
+                                     in
+                                     reconstruct (AcustomDeriv ty fun' der' arg')
+                                                 (accCount1 +++ accCount2 +++ accCount3)
+
           -- Collect seq             -> let
           --                              (seq', accCount1) = scopesSeq seq
           --                            in
@@ -2799,6 +2821,11 @@ determineScopesSharingExp config accOccMap expOccMap = scopesExp
                                      (e', accCount2) = scopesExp e
                                      (a', accCount3) = scopesExp a
                                    in reconstruct (Evjp tp f' e' a') (accCount1 +++ accCount2 +++ accCount3)
+          EcustomDeriv tp f g a -> let
+                                     (f', accCount1) = scopesFun1 f
+                                     (g', accCount2) = scopesFun1 g
+                                     (a', accCount3) = scopesExp a
+                                   in reconstruct (EcustomDeriv tp f' g' a') (accCount1 +++ accCount2 +++ accCount3)
       where
         travE1 :: HasCallStack
                => (ScopedExp a -> PreSmartExp ScopedAcc ScopedExp t)

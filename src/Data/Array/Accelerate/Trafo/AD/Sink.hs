@@ -2,7 +2,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.Sink (
-  sinkExp, sinkExpAenv, sinkFunAenv, sinkAcc,
+  sinkExp, sinkExpAenv, sinkFunAenv, sinkAcc, sinkAfun,
   eCheckClosedInLHS, aCheckClosedInLHS,
   ExpandLHS(..), expandLHS, sameLHSsameEnv
 ) where
@@ -38,12 +38,13 @@ sinkExpAenv k (Index lab (ARLab alab) execLab idxe) = Index lab (ARLab alab) exe
 sinkExpAenv k (ShapeSize lab sht e) = ShapeSize lab sht (sinkExpAenv k e)
 sinkExpAenv k (Get lab ti e) = Get lab ti (sinkExpAenv k e)
 sinkExpAenv _ (Undef lab) = Undef lab
+sinkExpAenv k (Ecustom lab l1 f l2 l3 g a) = Ecustom lab l1 (sinkFunAenv k f) l2 l3 (sinkFunAenv k g) (sinkExpAenv k a)
 sinkExpAenv k (Let lhs rhs e) = Let lhs (sinkExpAenv k rhs) (sinkExpAenv k e)
 sinkExpAenv _ (Var lab var referLab) = Var lab var referLab
 sinkExpAenv _ (FreeVar lab var) = FreeVar lab var
 sinkExpAenv _ (Arg lab argsty tidx) = Arg lab argsty tidx
 
-sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab alab tenv taenv t -> OpenFun env aenv' lab alab tenv taenv t
+sinkFunAenv :: aenv A.:> aenv' -> OpenFun env aenv lab alab args tenv taenv t -> OpenFun env aenv' lab alab args tenv taenv t
 sinkFunAenv k (Lam lhs fun) = Lam lhs (sinkFunAenv k fun)
 sinkFunAenv k (Body e) = Body (sinkExpAenv k e)
 
@@ -66,12 +67,19 @@ sinkAcc k (Slice lab slt e sle) = Slice lab slt (sinkAcc k e) (sinkExpAenv k sle
 sinkAcc k (Reduce lab slt f e) = Reduce lab slt (sinkFunAenv k f) (sinkAcc k e)
 sinkAcc k (Reshape lab sle e) = Reshape lab (sinkExpAenv k sle) (sinkAcc k e)
 sinkAcc k (Aget lab ti e) = Aget lab ti (sinkAcc k e)
+sinkAcc k (Acustom lab l1 f l2 l3 g a) = Acustom lab l1 (sinkAfun k f) l2 l3 (sinkAfun k g) (sinkAcc k a)
 sinkAcc k (Alet lhs rhs e)
   | A.Exists lhs' <- rebuildLHS lhs =
       Alet lhs' (sinkAcc k rhs) (sinkAcc (A.sinkWithLHS lhs lhs' k) e)
 sinkAcc k (Avar lab (A.Var sty idx) referLab) = Avar lab (A.Var sty (k A.>:> idx)) referLab
 sinkAcc _ (AfreeVar lab var) = AfreeVar lab var
 sinkAcc _ (Aarg lab argsty tidx) = Aarg lab argsty tidx
+
+sinkAfun :: aenv A.:> aenv' -> OpenAfun aenv lab alab args taenv t -> OpenAfun aenv' lab alab args taenv t
+sinkAfun k (Abody ex) = Abody (sinkAcc k ex)
+sinkAfun k (Alam lhs fun)
+  | A.Exists lhs' <- rebuildLHS lhs
+  = Alam lhs' (sinkAfun (A.sinkWithLHS lhs lhs' k) fun)
 
 aCheckLocal :: A.ArrayVar env t -> TagVal A.ArrayR env2 -> Maybe (A.ArrayVar env2 t)
 aCheckLocal _ TEmpty = Nothing
@@ -104,12 +112,19 @@ eCheckClosedInTagval tv expr = case expr of
     ShapeSize lab sht e -> ShapeSize lab sht <$> eCheckClosedInTagval tv e
     Get lab ti e -> Get lab ti <$> eCheckClosedInTagval tv e
     Undef lab -> Just (Undef lab)
+    Ecustom lab l1 f l2 l3 g e -> (\f' g' e' -> Ecustom lab l1 f' l2 l3 g' e') <$> efCheckClosedInTagval tv f <*> efCheckClosedInTagval tv g <*> eCheckClosedInTagval tv e
     Let lhs rhs e
       | A.Exists lhs' <- rebuildLHS lhs ->
           Let lhs' <$> eCheckClosedInTagval tv rhs <*> eCheckClosedInTagval (valPushLHS lhs' tv) e
     Var lab var referLab -> Var lab <$> eCheckLocalT matchScalarType var tv <*> return referLab
     FreeVar lab var -> Just (FreeVar lab var)
     Arg lab argsty tidx -> Just (Arg lab argsty tidx)
+
+efCheckClosedInTagval :: TagVal A.ScalarType env2 -> OpenFun env aenv lab alab args tenv taenv t -> Maybe (OpenFun env2 aenv lab alab args tenv taenv t)
+efCheckClosedInTagval tv (Lam lhs fun)
+  | A.Exists lhs' <- rebuildLHS lhs
+  = Lam lhs' <$> efCheckClosedInTagval (valPushLHS lhs' tv) fun
+efCheckClosedInTagval tv (Body e) = Body <$> eCheckClosedInTagval tv e
 
 eCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenExp env aenv lab alab args tenv taenv t -> Maybe (OpenExp env aenv2 lab alab args tenv taenv t)
 eCheckAClosedInTagval tv expr = case expr of
@@ -128,12 +143,13 @@ eCheckAClosedInTagval tv expr = case expr of
     Cond lab c t e -> Cond lab <$> eCheckAClosedInTagval tv c  <*> eCheckAClosedInTagval tv t <*> eCheckAClosedInTagval tv e
     Get lab ti e -> Get lab ti <$> eCheckAClosedInTagval tv e
     Undef lab -> Just (Undef lab)
+    Ecustom lab l1 f l2 l3 g e -> (\f' g' e' -> Ecustom lab l1 f' l2 l3 g' e') <$> efCheckAClosedInTagval tv f <*> efCheckAClosedInTagval tv g <*> eCheckAClosedInTagval tv e
     Let lhs rhs e -> Let lhs <$> eCheckAClosedInTagval tv rhs <*> eCheckAClosedInTagval tv e
     Var lab var referLab -> Just (Var lab var referLab)
     FreeVar lab var -> Just (FreeVar lab var)
     Arg lab argsty tidx -> Just (Arg lab argsty tidx)
 
-efCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenFun env aenv lab alab tenv taenv t -> Maybe (OpenFun env aenv2 lab alab tenv taenv t)
+efCheckAClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenFun env aenv lab alab args tenv taenv t -> Maybe (OpenFun env aenv2 lab alab args tenv taenv t)
 efCheckAClosedInTagval tv (Lam lhs fun) = Lam lhs <$> efCheckAClosedInTagval tv fun
 efCheckAClosedInTagval tv (Body e) = Body <$> eCheckAClosedInTagval tv e
 
@@ -164,12 +180,19 @@ aCheckClosedInTagval tv expr = case expr of
     Reduce lab slt f e -> Reduce lab slt <$> efCheckAClosedInTagval tv f <*> aCheckClosedInTagval tv e
     Reshape lab sle e -> Reshape lab <$> eCheckAClosedInTagval tv sle <*> aCheckClosedInTagval tv e
     Aget lab ti e -> Aget lab ti <$> aCheckClosedInTagval tv e
+    Acustom lab l1 f l2 l3 g e -> (\f' g' e' -> Acustom lab l1 f' l2 l3 g' e') <$> afCheckClosedInTagval tv f <*> afCheckClosedInTagval tv g <*> aCheckClosedInTagval tv e
     Alet lhs rhs e
       | A.Exists lhs' <- rebuildLHS lhs ->
           Alet lhs' <$> aCheckClosedInTagval tv rhs <*> aCheckClosedInTagval (valPushLHS lhs' tv) e
     Avar lab var referLab -> Avar lab <$> aCheckLocal var tv <*> return referLab
     AfreeVar lab var -> Just (AfreeVar lab var)
     Aarg lab argsty tidx -> Just (Aarg lab argsty tidx)
+
+afCheckClosedInTagval :: TagVal A.ArrayR aenv2 -> OpenAfun aenv lab alab args taenv t -> Maybe (OpenAfun aenv2 lab alab args taenv t)
+afCheckClosedInTagval tv (Alam lhs fun)
+  | A.Exists lhs' <- rebuildLHS lhs
+  = Alam lhs' <$> afCheckClosedInTagval (valPushLHS lhs' tv) fun
+afCheckClosedInTagval tv (Abody a) = Abody <$> aCheckClosedInTagval tv a
 
 valPushLHS :: A.LeftHandSide s t env env' -> TagVal s env -> TagVal s env'
 valPushLHS (A.LeftHandSideWildcard _) tv = tv

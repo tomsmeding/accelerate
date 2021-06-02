@@ -93,7 +93,7 @@ convertAfunWith config
 convertExp :: Exp e -> AST.Exp () (EltR e)
 convertExp
   = phase "exp-simplify"     Rewrite.simplifyExp
-  . phase "ad-phase"         AD.convertExp
+  . phase "ad-phase"         AD.convertExpEntry
   . phase "sharing-recovery" Sharing.convertExp
 
 
@@ -103,6 +103,7 @@ convertExp
 convertFun :: Function f => f -> AST.Fun () (EltFunctionR f)
 convertFun
   = phase "exp-simplify"     Rewrite.simplifyFun
+  . phase "ad-phase"         AD.convertFunEntry
   . phase "sharing-recovery" Sharing.convertFun
 
 {--

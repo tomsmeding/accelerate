@@ -60,6 +60,7 @@ convertPreOpenAcc = \case
   Stencil s tp f b a              -> Stencil s tp f b (convertAcc a)
   Stencil2 s1 s2 tp f b1 a1 b2 a2 -> Stencil2 s1 s2 tp f b1 (convertAcc a1) b2 (convertAcc a2)
   Avjp a f arg adj                -> Avjp a (convertAfun f) (convertAcc arg) (convertAcc adj)
+  AcustomDeriv t f g a            -> AcustomDeriv t (convertAfun f) (convertAfun g) (convertAcc a)
 
 convertLHS
     :: ALeftHandSide bnd aenv aenv'
