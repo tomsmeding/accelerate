@@ -102,8 +102,8 @@ agradient f x = areverseAD f x (unit (constant 1))
 -- write the following:
 --
 -- @
---     square :: Exp Float -> Exp Float
---     square = customDeriv (\\x -> x * x) (\\x d -> d * 2 * x)
+-- square :: Exp Float -> Exp Float
+-- square = customDeriv (\\x -> x * x) (\\x d -> d * 2 * x)
 -- @
 --
 -- This is correct since the derivative of the input of (@\\x -> x * x@) is
