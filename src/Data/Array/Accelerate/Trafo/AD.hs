@@ -61,7 +61,7 @@ convertExp (Shape var) = Shape var
 convertExp (ShapeSize shr e) = ShapeSize shr (convertExp e)
 convertExp (Undef ty) = Undef ty
 convertExp (Coerce t1 t2 e) = Coerce t1 t2 (convertExp e)
-convertExp (Evjp _ (convertFun -> Lam lhs (Body body)) (convertExp -> arg) (convertExp -> adj))
+convertExp (Evjp _ _ (convertFun -> Lam lhs (Body body)) (convertExp -> arg) (convertExp -> adj))
   -- Target is to replace the Evjp with an expression of the following form:
   --   let _ = adj
   --   in let _ = arg
@@ -92,7 +92,7 @@ convertExp (Evjp _ (convertFun -> Lam lhs (Body body)) (convertExp -> arg) (conv
   where
     withAlabType :: AD.OpenExp env aenv lab alab args tenv taenv t -> alab -> AD.OpenExp env aenv lab alab args tenv taenv t
     withAlabType = const
-convertExp (Evjp _ _ _ _) =
+convertExp (Evjp _ _ _ _ _) =
   internalError ("convertExp: Invalid GADTs in Evjp")
 convertExp (EcustomDeriv ty fun der a) = EcustomDeriv ty (convertFun fun) (convertFun der) (convertExp a)
 
@@ -147,7 +147,7 @@ convertPAcc (Transform ty dim ixf vf a) =
 convertPAcc (Stencil rep ty f bnd a) = Stencil rep ty (convertFun f) (convertBoundary bnd) (convertAcc a)
 convertPAcc (Stencil2 r1 r2 ty f b1 a1 b2 a2) =
     Stencil2 r1 r2 ty (convertFun f) (convertBoundary b1) (convertAcc a1) (convertBoundary b2) (convertAcc a2)
-convertPAcc (Avjp _ (convertAfun -> Alam lhs (Abody body)) (convertAcc -> arg) (convertAcc -> adj))
+convertPAcc (Avjp _ _ (convertAfun -> Alam lhs (Abody body)) (convertAcc -> arg) (convertAcc -> adj))
   -- First declare variables for the adjoint...
   | DeclareVars adjlhs _ adjvarsgen <- declareVars (arraysR adj)
   -- ... and we construct the tuple of FreeVar nodes that will be bound to this LHS.
@@ -168,7 +168,7 @@ convertPAcc (Avjp _ (convertAfun -> Alam lhs (Abody body)) (convertAcc -> arg) (
   , AD.UntranslateResultA lhs3 body'' <- AD.untranslateLHSboundAcc lhs2 (AD.simplifyAcc body') weakenId
   -- Thus we construct the result.
   = Alet adjlhs adj $ OpenAcc $ Alet lhs3 (weaken (weakenWithLHS adjlhs) arg) body''
-convertPAcc (Avjp _ _ _ _) =
+convertPAcc (Avjp _ _ _ _ _) =
   internalError ("convertPAcc: Invalid GADTs in Avjp")
 -- Eliminate custom derivative nodes outside an Avjp subtree
 convertPAcc (AcustomDeriv t fun der a) = AcustomDeriv t (convertAfun fun) (convertAfun der) (convertAcc a)
@@ -193,7 +193,7 @@ elimCustomsE (EcustomDeriv _ (Lam lhs (Body body)) _ a) =
   elimCustomsE (Let lhs a body)
 elimCustomsE (EcustomDeriv _ _ _ _) =
   internalError ("elimCustomsE: Invalid GADTs in EcustomDeriv")
-elimCustomsE (Evjp _ _ _ _) = internalError "Unexpected Evjp in elimCustomsE"
+elimCustomsE (Evjp _ _ _ _ _) = internalError "Unexpected Evjp in elimCustomsE"
 -- Otherwise we recurse
 elimCustomsE (Const ty con) = Const ty con
 elimCustomsE (PrimApp f e) = PrimApp f (elimCustomsE e)
@@ -232,7 +232,7 @@ elimCustomsPAcc (AcustomDeriv _ (Alam lhs (Abody body)) _ a) =
   elimCustomsPAcc (Alet lhs a body)
 elimCustomsPAcc (AcustomDeriv _ _ _ _) =
   internalError ("elimCustomsPAcc: Invalid GADTs in AcustomDeriv")
-elimCustomsPAcc (Avjp _ _ _ _) = internalError "Unexpected Avjp in elimCustomsPAcc"
+elimCustomsPAcc (Avjp _ _ _ _ _) = internalError "Unexpected Avjp in elimCustomsPAcc"
 -- Otherwise we recurse
 elimCustomsPAcc (Alet lhs a b) = Alet lhs (elimCustomsA a) (elimCustomsA b)
 elimCustomsPAcc (Avar a) = Avar a

@@ -308,7 +308,7 @@ shrinkExp = Stats.substitution "shrinkE" . first getAny . shrinkE
       ShapeSize shr sh          -> ShapeSize shr <$> shrinkE sh
       Foreign repr ff f e       -> Foreign repr ff <$> shrinkF f <*> shrinkE e
       Coerce t1 t2 e            -> Coerce t1 t2 <$> shrinkE e
-      Evjp tp f e a             -> Evjp tp <$> shrinkF f <*> shrinkE e <*> shrinkE a
+      Evjp t t' f e a           -> Evjp t t' <$> shrinkF f <*> shrinkE e <*> shrinkE a
       EcustomDeriv t f g a      -> EcustomDeriv t <$> shrinkF f <*> shrinkF g <*> shrinkE a
 
     shrinkF :: HasCallStack => OpenFun env aenv t -> (Any, OpenFun env aenv t)
@@ -511,7 +511,7 @@ usesOfExp range = countE
       ShapeSize _ sh            -> countE sh
       Foreign _ _ _ e           -> countE e
       Coerce _ _ e              -> countE e
-      Evjp _ f e a              -> usesOfFun range f <> countE e <> countE a  -- TODO: is this counting correct?
+      Evjp _ _ f e a            -> usesOfFun range f <> countE e <> countE a  -- TODO: is this counting correct?
       EcustomDeriv _ f g a      -> usesOfFun range f <> usesOfFun range g <> countE a
 
 usesOfFun :: VarsRange env -> OpenFun env aenv f -> Count
@@ -573,7 +573,7 @@ usesOfPreAcc withShape countAcc idx = count
       Backpermute _ sh f a       -> countE sh + countF f  + countA a
       Stencil _ _ f _ a          -> countF f  + countA a
       Stencil2 _ _ _ f _ a1 _ a2 -> countF f  + countA a1 + countA a2
-      Avjp _ f a b               -> countAF f idx + countA a + countA b  -- TODO: is this counting correct (in particular of 'f')?
+      Avjp _ _ f a b             -> countAF f idx + countA a + countA b  -- TODO: is this counting correct (in particular of 'f')?
       AcustomDeriv _ f g a       -> countAF f idx + countAF g idx + countA a
       -- Collect s                 -> countS s
 
@@ -604,7 +604,7 @@ usesOfPreAcc withShape countAcc idx = count
         | otherwise              -> 0
       Foreign _ _ _ e            -> countE e
       Coerce _ _ e               -> countE e
-      Evjp _ f e a               -> countE e  + countF f  + countE a
+      Evjp _ _ f e a             -> countE e  + countF f  + countE a
       EcustomDeriv _ f g a       -> countF f + countF g + countE a
 
     countME :: Maybe (OpenExp env aenv e) -> Int

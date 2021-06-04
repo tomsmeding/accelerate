@@ -470,6 +470,7 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
   -- Note the return type of this operator; (((), b), a) is the representation
   -- type of (b', a'), if b and a are the representation types of b' and a'.
   Avjp        :: ArraysR a
+              -> ArraysR b
               -> PreOpenAfun acc aenv (a -> b)
               -> acc aenv a
               -> acc aenv b
@@ -675,6 +676,7 @@ data OpenExp env aenv t where
   -- Note the return type of this operator; (((), t'), t) is the representation
   -- type of (s', s), if t' and t are the representation types of s' and s.
   Evjp          :: TypeR t
+                -> TypeR t'
                 -> OpenFun env aenv (t -> t')
                 -> OpenExp env aenv t
                 -> OpenExp env aenv t'
@@ -869,7 +871,7 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
                                          in arraysRarray sh tR
   arraysR (Stencil2 _ _ tR _ _ a _ _) = let ArrayR sh _ = arrayR a
                                          in arraysRarray sh tR
-  arraysR (Avjp t _ _ _)              = t
+  arraysR (Avjp t _ _ _ _)            = t
   arraysR (AcustomDeriv t _ _ _)      = t
 
 expType :: HasCallStack => OpenExp aenv env t -> TypeR t
@@ -900,7 +902,7 @@ expType = \case
   ShapeSize{}                  -> TupRsingle scalarTypeInt
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
-  Evjp ty _ _ _                -> ty
+  Evjp t t' _ _ _              -> t
   EcustomDeriv ty _ _ _        -> ty
 
 primConstType :: PrimConst a -> SingleType a
@@ -1095,7 +1097,7 @@ rnfPreOpenAcc rnfA pacc =
         repr1 = ArrayR shr $ stencilEltR sr1
         repr2 = ArrayR shr $ stencilEltR sr2
       in rnfStencilR sr1 `seq` rnfStencilR sr2 `seq` rnfTupR rnfScalarType tp `seq` rnfF f `seq` rnfB repr1 b1 `seq` rnfB repr2 b2 `seq` rnfA a1 `seq` rnfA a2
-    Avjp a f arg adj          -> rnfTupR rnfArrayR a `seq` rnfAF f `seq` rnfA arg `seq` rnfA adj
+    Avjp a b f arg adj        -> rnfTupR rnfArrayR a `seq` rnfTupR rnfArrayR b `seq` rnfAF f `seq` rnfA arg `seq` rnfA adj
     AcustomDeriv t f g a      -> rnfTupR rnfArrayR t `seq` rnfAF f `seq` rnfAF g `seq` rnfA a
 
 rnfArrayVar :: ArrayVar aenv a -> ()
@@ -1158,7 +1160,7 @@ rnfOpenExp topExp =
     Shape a                   -> rnfArrayVar a
     ShapeSize shr sh          -> rnfShapeR shr `seq` rnfE sh
     Coerce t1 t2 e            -> rnfScalarType t1 `seq` rnfScalarType t2 `seq` rnfE e
-    Evjp tp f e a             -> rnfTypeR tp `seq` rnfF f `seq` rnfE e `seq` rnfE a
+    Evjp t t' f e a           -> rnfTypeR t `seq` rnfTypeR t' `seq` rnfF f `seq` rnfE e `seq` rnfE a
     EcustomDeriv t f g a      -> rnfTypeR t `seq` rnfF f `seq` rnfF g `seq` rnfE a
 
 rnfExpVar :: ExpVar env t -> ()
@@ -1305,7 +1307,7 @@ liftPreOpenAcc liftA pacc =
           repr1 = ArrayR shr $ stencilEltR sr1
           repr2 = ArrayR shr $ stencilEltR sr2
        in [|| Stencil2 $$(liftStencilR sr1) $$(liftStencilR sr2) $$(liftTypeR tp) $$(liftF f) $$(liftB repr1 b1) $$(liftA a1) $$(liftB repr2 b2) $$(liftA a2) ||]
-    Avjp a f arg adj          -> [|| Avjp $$(liftArraysR a) $$(liftAF f) $$(liftA arg) $$(liftA adj) ||]
+    Avjp a b f arg adj        -> [|| Avjp $$(liftArraysR a) $$(liftArraysR b) $$(liftAF f) $$(liftA arg) $$(liftA adj) ||]
     AcustomDeriv t f g a      -> [|| AcustomDeriv $$(liftArraysR t) $$(liftAF f) $$(liftAF g) $$(liftA a) ||]
 
 
@@ -1382,7 +1384,7 @@ liftOpenExp pexp =
     Shape a                   -> [|| Shape $$(liftArrayVar a) ||]
     ShapeSize shr ix          -> [|| ShapeSize $$(liftShapeR shr) $$(liftE ix) ||]
     Coerce t1 t2 e            -> [|| Coerce $$(liftScalarType t1) $$(liftScalarType t2) $$(liftE e) ||]
-    Evjp tp f e a             -> [|| Evjp $$(liftTypeR tp) $$(liftF f) $$(liftE e) $$(liftE a) ||]
+    Evjp t t' f e a           -> [|| Evjp $$(liftTypeR t) $$(liftTypeR t') $$(liftF f) $$(liftE e) $$(liftE a) ||]
     EcustomDeriv t f g a      -> [|| EcustomDeriv $$(liftTypeR t) $$(liftF f) $$(liftF g) $$(liftE a) ||]
 
 liftELeftHandSide :: ELeftHandSide t env env' -> Q (TExp (ELeftHandSide t env env'))

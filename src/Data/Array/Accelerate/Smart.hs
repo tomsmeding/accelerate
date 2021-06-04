@@ -464,6 +464,7 @@ data PreSmartAcc acc exp as where
                 -> PreSmartAcc acc exp (Array sh c)
 
   Avjp          :: ArraysR a
+                -> ArraysR b
                 -> (SmartAcc a -> acc b)
                 -> acc a
                 -> acc b
@@ -593,6 +594,7 @@ data PreSmartExp acc exp t where
                 -> PreSmartExp acc exp y
 
   Evjp          :: TypeR t
+                -> TypeR t'
                 -> (SmartExp t -> exp t')
                 -> exp t
                 -> exp t'
@@ -858,7 +860,7 @@ instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
                                  in  TupRsingle (ArrayR shr tp)
     Stencil s tp _ _ _        -> TupRsingle $ ArrayR (stencilShapeR s) tp
     Stencil2 s _ tp _ _ _ _ _ -> TupRsingle $ ArrayR (stencilShapeR s) tp
-    Avjp t _ _ _              -> t
+    Avjp t _ _ _ _            -> t
     AcustomDeriv t _ _ _      -> t
 
 
@@ -897,7 +899,7 @@ instance HasTypeR exp => HasTypeR (PreSmartExp acc exp) where
     Foreign tp _ _ _                -> tp
     Undef tp                        -> TupRsingle tp
     Coerce _ tp _                   -> TupRsingle tp
-    Evjp t _ _ _                    -> t
+    Evjp t _ _ _ _                  -> t
     EcustomDeriv t _ _ _            -> t
 
 

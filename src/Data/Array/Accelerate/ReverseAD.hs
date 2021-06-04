@@ -33,7 +33,7 @@ reverseAD :: forall t t'. (Elt t, Elt t')
           -> Exp t'
           -- -> Exp (t', t)
           -> Exp t
-reverseAD f (Exp e) (Exp a) = mkExp $ Evjp (eltR @t) (unExp . f . Exp) e a
+reverseAD f (Exp e) (Exp a) = mkExp $ Evjp (eltR @t) (eltR @t') (unExp . f . Exp) e a
 
 -- | A special case of 'reverseAD' that works only for functions that return a single scalar, floating-point value.
 --
@@ -61,7 +61,7 @@ areverseAD :: forall a b. (Arrays a, Arrays b)
            -> Acc b
            -- -> Acc (b, a)
            -> Acc a
-areverseAD = Acc $$$ applyAcc $ Avjp (arraysR @a)
+areverseAD = Acc $$$ applyAcc $ Avjp (arraysR @a) (arraysR @b)
 
 -- | A special case of 'areverseAD' that works only for functions that return a single scalar, floating-point value.
 --

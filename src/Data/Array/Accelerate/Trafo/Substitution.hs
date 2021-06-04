@@ -172,7 +172,7 @@ inlineVars lhsBound expr bound
       ShapeSize shr e1    -> ShapeSize shr <$> travE e1
       Undef t             -> Just $ Undef t
       Coerce t1 t2 e1     -> Coerce t1 t2 <$> travE e1
-      Evjp tp f e1 e2     -> Evjp tp <$> travF f <*> travE e1 <*> travE e2
+      Evjp t t' f e1 e2   -> Evjp t t' <$> travF f <*> travE e1 <*> travE e2
       EcustomDeriv t f g e -> EcustomDeriv t <$> travF f <*> travF g <*> travE e
 
       where
@@ -573,7 +573,7 @@ rebuildOpenExp v av@(ReindexAvar reindex) exp =
     ShapeSize shr sh    -> ShapeSize shr   <$> rebuildOpenExp v av sh
     Foreign tp ff f e   -> Foreign tp ff f <$> rebuildOpenExp v av e
     Coerce t1 t2 e      -> Coerce t1 t2    <$> rebuildOpenExp v av e
-    Evjp tp f e a       -> Evjp tp         <$> rebuildFun v av f      <*> rebuildOpenExp v av e   <*> rebuildOpenExp v av a
+    Evjp t t' f e a     -> Evjp t t'       <$> rebuildFun v av f      <*> rebuildOpenExp v av e   <*> rebuildOpenExp v av a
     EcustomDeriv t f g e -> EcustomDeriv t <$> rebuildFun v av f      <*> rebuildFun v av g       <*> rebuildOpenExp v av e
 
 {-# INLINEABLE rebuildFun #-}
@@ -706,7 +706,7 @@ rebuildPreOpenAcc k av acc =
     Stencil2 s1 s2 tp f b1 a1 b2 a2
                               -> Stencil2 s1 s2 tp <$> rebuildFun (pure . IE) av' f <*> rebuildBoundary av' b1 <*> k av a1 <*> rebuildBoundary av' b2 <*> k av a2
     Aforeign repr ff afun as  -> Aforeign repr ff afun <$> k av as
-    Avjp a f arg adj          -> Avjp a          <$> rebuildAfun k av f <*> k av arg <*> k av adj
+    Avjp a b f arg adj        -> Avjp a b        <$> rebuildAfun k av f <*> k av arg <*> k av adj
     AcustomDeriv t f g a      -> AcustomDeriv t  <$> rebuildAfun k av f <*> rebuildAfun k av g <*> k av a
     -- Collect seq             -> Collect      <$> rebuildSeq k av seq
   where

@@ -377,7 +377,7 @@ convertSharingAcc config alyt aenv (ScopedAcc lams (AccSharing _ preAcc))
                         (cvtA acc1)
                         (convertSharingBoundary config alyt aenv' shr bndy2)
                         (cvtA acc2)
-      Avjp tp f e a               -> AST.Avjp tp (cvtAfun1 tp f) (cvtA e) (cvtA a)
+      Avjp t t' f e a             -> AST.Avjp t t' (cvtAfun1 t f) (cvtA e) (cvtA a)
       AcustomDeriv tp f g a       -> AST.AcustomDeriv tp (cvtAfun1 (Smart.arraysR a) f) (cvtAfun1 (TupRpair (TupRpair TupRunit (Smart.arraysR a)) tp) g) (cvtA a)
       -- Collect seq -> AST.Collect (convertSharingSeq config alyt EmptyLayout aenv' [] seq)
 
@@ -781,7 +781,7 @@ convertSharingExp config lyt alyt env aenv exp@(ScopedExp lams _) = cvt exp
           ShapeSize shr e       -> AST.ShapeSize shr (cvt e)
           Foreign repr ff f e   -> AST.Foreign repr ff (convertSmartFun config (typeR e) f) (cvt e)
           Coerce t1 t2 e        -> AST.Coerce t1 t2 (cvt e)
-          Evjp tp f e a         -> AST.Evjp tp (cvtFun1 tp f) (cvt e) (cvt a)
+          Evjp t t' f e a       -> AST.Evjp t t' (cvtFun1 t f) (cvt e) (cvt a)
           EcustomDeriv tp f g a -> AST.EcustomDeriv tp (cvtFun1 (Smart.typeR a) f) (cvtFun1 (TupRpair (TupRpair TupRunit (Smart.typeR a)) tp) g) (cvt a)
 
     cvtPrj :: forall a b c env1 aenv1. PairIdx (a, b) c -> AST.OpenExp env1 aenv1 (a, b) -> AST.OpenExp env1 aenv1 c
@@ -1579,18 +1579,18 @@ makeOccMapSharingAcc config accOccMap = traverseAcc
                                              (acc2', h5) <- traverseAcc lvl acc2
                                              return (Stencil2 s1 s2 tp f' bnd1' acc1' bnd2' acc2',
                                                      h1 `max` h2 `max` h3 `max` h4 `max` h5 + 1)
-            Avjp ty fun arg adj         -> do
-                                             (fun', h1) <- traverseAfun1 lvl ty fun
+            Avjp t t' fun arg adj       -> do
+                                             (fun', h1) <- traverseAfun1 lvl t fun
                                              (arg', h2) <- traverseAcc lvl arg
                                              (adj', h3) <- traverseAcc lvl adj
-                                             return (Avjp ty fun' arg' adj'
-                                                    , h1 `max` h2 `max` h3 + 1)
+                                             return (Avjp t t' fun' arg' adj',
+                                                     h1 `max` h2 `max` h3 + 1)
             AcustomDeriv ty fun der arg -> do
                                              (fun', h1) <- traverseAfun1 lvl (Smart.arraysR arg) fun
                                              (der', h2) <- traverseAfun1 lvl (TupRpair (TupRpair TupRunit (Smart.arraysR arg)) ty) der
                                              (arg', h3) <- traverseAcc lvl arg
-                                             return (AcustomDeriv ty fun' der' arg'
-                                                    , h1 `max` h2 `max` h3 + 1)
+                                             return (AcustomDeriv ty fun' der' arg',
+                                                     h1 `max` h2 `max` h3 + 1)
             -- Collect s                   -> do
             --                                  (s', h) <- traverseSeq lvl s
             --                                  return (Collect s', h + 1)
@@ -1884,11 +1884,11 @@ makeOccMapSharingExp config accOccMap expOccMap = travE
                                       (e', h) <- travE lvl e
                                       return  (Foreign tp ff f e', h+1)
             Coerce t1 t2 e      -> travE1 (Coerce t1 t2) e
-            Evjp tp f e a       -> do
-                                      (f', h1) <- traverseFun1 lvl tp f
+            Evjp t t' f e a     -> do
+                                      (f', h1) <- traverseFun1 lvl t f
                                       (e', h2) <- travE lvl e
                                       (a', h3) <- travE lvl a
-                                      return (Evjp tp f' e' a', h1 `max` h2 `max` h3 + 1)
+                                      return (Evjp t t' f' e' a', h1 `max` h2 `max` h3 + 1)
             EcustomDeriv t f g a -> do
                                       (f', h1) <- traverseFun1 lvl (Smart.typeR a) f
                                       (g', h2) <- traverseFun1 lvl (TupRpair (TupRpair TupRunit (Smart.typeR a)) t) g
@@ -2476,12 +2476,12 @@ determineScopesSharingAcc config accOccMap = scopesAcc
                                      reconstruct (Stencil2 s1 s2 tp st' bnd1' acc1' bnd2' acc2')
                                        (accCount1 +++ accCount2 +++ accCount3 +++ accCount4 +++ accCount5)
 
-          Avjp ty fun arg adj     -> let
+          Avjp t t' fun arg adj   -> let
                                        (fun', accCount1) = scopesAfun1 fun
                                        (arg', accCount2) = scopesAcc arg
                                        (adj', accCount3) = scopesAcc adj
                                      in
-                                     reconstruct (Avjp ty fun' arg' adj')
+                                     reconstruct (Avjp t t' fun' arg' adj')
                                                  (accCount1 +++ accCount2 +++ accCount3)
 
           AcustomDeriv ty fun der arg ->
@@ -2816,11 +2816,11 @@ determineScopesSharingExp config accOccMap expOccMap = scopesExp
           ShapeSize shr e       -> travE1 (ShapeSize shr) e
           Foreign tp ff f e     -> travE1 (Foreign tp ff f) e
           Coerce t1 t2 e        -> travE1 (Coerce t1 t2) e
-          Evjp tp f e a         -> let
+          Evjp t t' f e a       -> let
                                      (f', accCount1) = scopesFun1 f
                                      (e', accCount2) = scopesExp e
                                      (a', accCount3) = scopesExp a
-                                   in reconstruct (Evjp tp f' e' a') (accCount1 +++ accCount2 +++ accCount3)
+                                   in reconstruct (Evjp t t' f' e' a') (accCount1 +++ accCount2 +++ accCount3)
           EcustomDeriv tp f g a -> let
                                      (f', accCount1) = scopesFun1 f
                                      (g', accCount2) = scopesFun1 g
