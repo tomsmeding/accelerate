@@ -56,6 +56,9 @@ nil = return ()
 t2_ :: Gen a -> Gen b -> Gen (a, b)
 t2_ a b = Gen.small ((,) <$> a <*> b)
 
+nonEmpty :: A.Elt a => A.Vector a -> Bool
+nonEmpty a = A.arraySize a > 0
+
 uniqueMax :: (A.Elt a, Ord a, Fractional a) => A.Vector a -> Bool
 uniqueMax v = let m = maximum (A.toList v)
               in sum (map (fromEnum . (>= m - 0.5)) (A.toList v)) <= 1
@@ -236,13 +239,13 @@ prop_fold_3_friendly = compareAD' nil (Gen.filter (restrictAll (\x -> abs x > 0.
   A.fold (\x y -> let abs' v = A.cond (v A.< 0) (-v) v in abs' x + abs' y) 0 a
 
 prop_fold1_1 :: Property
-prop_fold1_1 = compareAD' nil sized_vec $ \() a -> A.fold1 (*) a
+prop_fold1_1 = compareAD' nil (Gen.filter nonEmpty sized_vec) $ \() a -> A.fold1 (*) a
 
 prop_fold1_2 :: Property
-prop_fold1_2 = compareAD' nil sized_vec $ \() a -> A.fold1 A.max a
+prop_fold1_2 = compareAD' nil (Gen.filter nonEmpty sized_vec) $ \() a -> A.fold1 A.max a
 
 prop_fold1_2_friendly :: Property
-prop_fold1_2_friendly = compareAD' nil (Gen.filter uniqueMax sized_vec) $ \() a -> A.fold1 A.max a
+prop_fold1_2_friendly = compareAD' nil (Gen.filter (\a -> uniqueMax a && nonEmpty a) sized_vec) $ \() a -> A.fold1 A.max a
 
 prop_replicate_1 :: Property
 prop_replicate_1 = compareAD' nil sized_vec $ \() a ->
@@ -281,7 +284,7 @@ prop_slice_1 = compareAD' nil sized_vec $ \() a ->
   where cAll = A.constant A.All
 
 prop_slice_2 :: Property
-prop_slice_2 = compareAD' (t2_ intgen intgen) sized_vec $ \(p1, p2) a ->
+prop_slice_2 = compareAD' (t2_ intgen intgen) (Gen.filter nonEmpty sized_vec) $ \(p1, p2) a ->
   let A.I1 n = A.shape a
       a1 = A.backpermute (A.I3 n n (n+1))
                          (\(A.I3 i j k) -> A.I1 ((i + j + k) `mod` n))
@@ -306,7 +309,7 @@ prop_reshape_2 = compareAD' nil (Gen.filter (even . A.arraySize) sized_vec) $ \(
 prop_backpermute_1 :: Property
 prop_backpermute_1 =
   compareAD' (Gen.int (Range.linear 5 15))
-             (Gen.filter ((> 0) . A.arraySize) sized_vec)
+             (Gen.filter nonEmpty sized_vec)
   $ \m a ->
     let A.I1 n = A.shape a
         b = A.backpermute (A.I2 (A.constant m) (2 * A.constant m))
@@ -317,7 +320,7 @@ prop_backpermute_1 =
 prop_backpermute_2 :: Property
 prop_backpermute_2 =
   compareAD' (Gen.int (Range.linear 5 15))
-             (Gen.filter ((> 0) . A.arraySize) sized_vec)
+             (Gen.filter nonEmpty sized_vec)
   $ \m a ->
     let A.I1 n = A.shape a
         b = A.backpermute (A.I2 (A.constant m) (2 * A.constant m))
@@ -410,7 +413,7 @@ prop_aindex_acond_1_friendly = compareAD' nil (Gen.filter (\v -> let s = arraySu
                     (A.generate (A.I1 1) (\(A.I1 _) -> 0)))
 
 prop_aindex_only :: Property
-prop_aindex_only = compareAD' nil sized_vec $ \() a ->
+prop_aindex_only = compareAD' nil (Gen.filter nonEmpty sized_vec) $ \() a ->
   let A.I1 n = A.shape a
   in A.sum (A.generate (A.I1 5) (\(A.I1 i) -> a A.! A.I1 (i `mod` n)))
 
@@ -428,21 +431,21 @@ prop_nonfloat_lambda_friendly = compareAD' nil (Gen.filter allNiceRound sized_ve
   in A.sum (A.map (\(A.T2 i x) -> A.toFloating i * x) b)
 
 prop_logsumexp1 :: Property
-prop_logsumexp1 = compareAD' nil sized_vec $ \() a ->
+prop_logsumexp1 = compareAD' nil (Gen.filter nonEmpty sized_vec) $ \() a ->
   let A.I1 n = A.shape a
       maxx = A.maximum a
       shiftedx = A.zipWith (-) a (A.replicate (A.lift A.Any A.::. n) maxx)
   in A.zipWith (+) (A.map log (A.sum (A.map exp shiftedx))) maxx
 
 prop_logsumexp2 :: Property
-prop_logsumexp2 = compareAD' nil sized_vec $ \() a ->
+prop_logsumexp2 = compareAD' nil (Gen.filter nonEmpty sized_vec) $ \() a ->
   let A.I1 n = A.shape a
       maxx = A.maximum a
       shiftedx = A.zipWith (-) a (A.replicate (A.lift A.Any A.::. n) maxx)
   in A.map log (A.sum (A.map exp shiftedx))
 
 prop_logsumexp3 :: Property
-prop_logsumexp3 = compareAD' nil sized_vec $ \() a ->
+prop_logsumexp3 = compareAD' nil (Gen.filter nonEmpty sized_vec) $ \() a ->
   let maxx = A.maximum a
   in A.zipWith (+) maxx maxx
 
@@ -461,7 +464,7 @@ prop_tuple2 = compareAD'2 nil sized_vec sized_vec $ \() a b ->
   in A.zipWith (\x (A.T2 y z) -> log (y * z) + x) d1 (A.zip d2 (A.sum c1))
 
 prop_tuple3 :: Property
-prop_tuple3 = compareAD'2 nil (Gen.filter ((> 0) . A.arraySize) sized_vec) (Gen.filter ((> 0) . A.arraySize) sized_vec) $ \() a b ->
+prop_tuple3 = compareAD'2 nil (Gen.filter nonEmpty sized_vec) (Gen.filter nonEmpty sized_vec) $ \() a b ->
   let tupa@(A.T2 a1 a2) = A.acond (let A.I1 n = A.shape a in n `mod` 3 A.== 0)
                                   (A.T2 (A.replicate (A.I2 (A.constant A.All) (3 :: A.Exp Int)) b) a)
                                   (A.T2 (A.generate (A.I2 1 2) (\(A.I2 i j) -> A.toFloating (i + j))) b)
@@ -478,7 +481,7 @@ prop_tuple4 = compareAD'2 nil sized_vec sized_vec $ \() a b ->
 
 prop_neural :: Property
 prop_neural = compareAD'2 (let gen = Gen.int (Range.linear 1 15) in (,) <$> gen <*> gen)
-                          (Gen.filter ((> 0) . A.arraySize) sized_vec)
+                          (Gen.filter nonEmpty sized_vec)
                           (Gen.filter ((>= 3) . A.arraySize) sized_vec)
   $ \(len1, len2) input weightdata ->
     let pickWeights :: (A.Shape sh, A.Elt a) => Int -> A.Exp sh -> (A.Exp sh -> A.Exp A.DIM2) -> A.Acc (A.Vector a) -> A.Acc (A.Array sh a)
@@ -498,7 +501,7 @@ prop_neural = compareAD'2 (let gen = Gen.int (Range.linear 1 15) in (,) <$> gen 
     in sigmoid (dotp w3 (sigmoid (mvmul w2 (sigmoid (mvmul w1 input)))))
 
 prop_acond_cond1 :: Property
-prop_acond_cond1 = compareAD' nil (Gen.filter ((> 0) . A.arraySize) sized_vec) $ \() a ->
+prop_acond_cond1 = compareAD' nil (Gen.filter nonEmpty sized_vec) $ \() a ->
   let b = A.map (*2) a
       A.I1 n = A.shape a
       sigmoid x = 1 / (1 + exp (-x))
@@ -519,7 +522,7 @@ prop_avjp = property $ do
       g :: A.Acc (A.Vector Float) -> A.Acc (A.Scalar Float)
       g = A.sum . A.map (\x -> x * A.sqrt x)
   checkApproxEqual (I.run1 (\arg' -> AD.agradient (g . f) arg') arg)
-                   (I.run1 (\arg' -> AD.areverseAD f arg' (AD.agradient g (f arg'))) arg)
+                   (I.run1 (\arg' -> A.asnd (AD.areverseAD f arg' (AD.agradient g (f arg')))) arg)
 
 prop_afree1 :: Property
 prop_afree1 = property $ do
@@ -534,7 +537,7 @@ prop_afree1 = property $ do
 prop_afree2 :: Property
 prop_afree2 = property $ do
   arg1 <- forAll sized_vec
-  arg2 <- forAll (Gen.filter ((> 0) . A.arraySize) sized_vec)
+  arg2 <- forAll (Gen.filter nonEmpty sized_vec)
   checkApproxEqual (I.run1 (\(A.T2 arg1' arg2') ->
                               let A.I1 n = A.shape arg2'
                               in AD.agradient (\a -> A.sum (A.map (\x -> x * arg2' A.! A.I1 (A.round x `mod` n)) a)) arg1')
@@ -616,7 +619,7 @@ prop_evjp = property $ do
       runE func arg' = I.run1 (A.unit . func . A.the) (A.fromList A.Z [arg']) `A.linearIndexArray` 0
       transform (x, y) = A.fromList (A.Z A.:. (2 :: Int)) [x, y]
   checkApproxEqual (transform $ runE (\arg' -> AD.gradient (g . f) arg') arg)
-                   (transform $ runE (\arg' -> AD.reverseAD f arg' (AD.gradient g (f arg'))) arg)
+                   (transform $ runE (\arg' -> A.snd (AD.reverseAD f arg' (AD.gradient g (f arg')))) arg)
 
 prop_ecustom1 :: Property
 prop_ecustom1 = property $ do

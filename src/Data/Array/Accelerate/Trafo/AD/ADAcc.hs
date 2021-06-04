@@ -151,15 +151,15 @@ inlineLabelsPrimalF ctx FLEnd (Abody expr) = Abody <$> inlineLabelsPrimal ctx ex
 inlineLabelsPrimalF _ FLEnd Alam{} = internalError "Not enough labels given to inlineLabelsPrimalF"
 inlineLabelsPrimalF _ FLLab{} Abody{} = internalError "Too many labels given to inlineLabelsPrimalF?"
 
-data ReverseADResA alab tenv taenv t =
+data ReverseADResA alab tenv taenv t t' =
     forall aenv.
         ReverseADResA (A.ALeftHandSide t () aenv)
-                      (OpenAcc aenv () () () taenv t)
+                      (OpenAcc aenv () () () taenv (((), t'), t))
 
 reverseADA :: ALeftHandSide t () aenv
            -> OpenAcc aenv () () () taenv t'
            -> A.ArrayVars taenv t'
-           -> ReverseADResA alab tenv taenv t
+           -> ReverseADResA alab tenv taenv t t'
 reverseADA paramlhs expr adjfreevars = evalIdGen $ do
     let paramty = lhsToTupR paramlhs
     (argsRHSlabel, expr') <-
@@ -175,13 +175,15 @@ reverseADA paramlhs expr adjfreevars = evalIdGen $ do
     DualResult (ABuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx cmap0 expr'
     let argpvars = resolveEnvLabs dualCtx (findPrimalBMap dualCtx argsRHSlabel)
     (gradient, _) <- collectAdjointCMap dualCMap (Argument paramty) argpvars dualCtx
+    let primalResult = avars (resolveEnvLabs dualCtx (findPrimalBMap dualCtx (alabelOf expr')))
+        output = smartApair (smartApair (Anil (nilLabel TupRunit)) primalResult) gradient
 
     return $ ReverseADResA
         paramlhs
         (realiseArgs paramlhs
             (primalBuilder
              . dualBuilder
-             $ gradient))
+             $ output))
 
 argumentTuple :: ArraysR args -> OpenAcc aenv () () args taenv args
 argumentTuple argsty = untupleAccs
@@ -853,8 +855,8 @@ dual ctx cmap = \case
                                         -- let sc = init (scanl f x0 a)
                                         -- in zipWith (*) (zipWith D₂f sc a)
                                         --                (tail (scanr (*) 1 (zipWith D₁f sc a)))
-                                        let d1f = Lam lambdalhs' (Body (smartFst dualbody))
-                                            d2f = Lam lambdalhs' (Body (smartSnd dualbody))
+                                        let d1f = Lam lambdalhs' (Body (smartFst (smartSnd dualbody)))
+                                            d2f = Lam lambdalhs' (Body (smartSnd (smartSnd dualbody)))
                                             weaken1 = A.weakenSucc A.weakenId
                                             (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
                                             argvar = resolveEnvLab ctx'1 (untupleA (findPrimalBMap ctx'1 (alabelOf arg1)))
@@ -916,8 +918,8 @@ dual ctx cmap = \case
                                         -- let sc = init (scanl1 f a)
                                         -- in zipWith (*) ([1] ++ zipWith D₂f sc (tail l))
                                         --                (scanr (*) 1 (zipWith D₁f sc (tail l)))
-                                        let d1f = Lam lambdalhs' (Body (smartFst dualbody))
-                                            d2f = Lam lambdalhs' (Body (smartSnd dualbody))
+                                        let d1f = Lam lambdalhs' (Body (smartFst (smartSnd dualbody)))
+                                            d2f = Lam lambdalhs' (Body (smartSnd (smartSnd dualbody)))
                                             weaken1 = A.weakenSucc A.weakenId
                                             (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
                                             argvar = resolveEnvLab ctx'1 (untupleA (findPrimalBMap ctx'1 (alabelOf arg1)))

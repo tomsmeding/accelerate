@@ -228,16 +228,16 @@ data RelocatableExp tenv taenv t =
     RelocatableExp (forall env aenv alab args.
                     OpenExp env aenv () alab args tenv taenv t)
 
-data ReverseADResE aenv alab tenv taenv t =
+data ReverseADResE aenv alab tenv taenv t t' =
     forall env.
         ReverseADResE (A.ELeftHandSide t () env)
-                      (OpenExp env aenv () alab () tenv taenv t)
+                      (OpenExp env aenv () alab () tenv taenv (((), t'), t))
 
 reverseAD :: Show alab
           => ELeftHandSide t () env
           -> OpenExp env aenv () alab () tenv taenv t'
           -> RelocatableExp tenv taenv t'
-          -> ReverseADResE aenv alab tenv taenv t
+          -> ReverseADResE aenv alab tenv taenv t t'
 reverseAD paramlhs expr (RelocatableExp adjexpr) = evalIdGen $ do
     let paramty = lhsToTupR paramlhs
         argsRHS = untupleExps
@@ -255,13 +255,15 @@ reverseAD paramlhs expr (RelocatableExp adjexpr) = evalIdGen $ do
     let cmap0 = DMap.singleton (Local (elabelOf expr')) (AdjList (\_ -> return [adjexpr]))
     DualResult (EBuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx cmap0 expr'
     (gradient, _) <- collectAdjointCMap dualCMap (Argument paramty) dualCtx
+    let primalResult = evars (resolveEnvLabs dualCtx (findPrimalBMap dualCtx (elabelOf expr')))
+        output = smartPair (smartPair (Nil magicLabel) primalResult) gradient
 
     return $ ReverseADResE
         paramlhs
         (realiseArgs paramlhs
             (primalBuilder
              . dualBuilder
-             $ gradient))
+             $ output))
 
 splitLambdaAD :: forall t t' tenv taenv.
                  Fun () () Int () tenv taenv (t -> t')

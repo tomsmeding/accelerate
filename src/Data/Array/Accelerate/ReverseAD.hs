@@ -14,7 +14,7 @@ module Data.Array.Accelerate.ReverseAD (
 ) where
 
 import Data.Array.Accelerate.Language                               ( unit )
-import qualified Data.Array.Accelerate.Prelude as A                 ( uncurry )
+import qualified Data.Array.Accelerate.Prelude as A                 ( asnd, snd, uncurry )
 import Data.Array.Accelerate.Smart                                  hiding ( arraysR )
 import Data.Array.Accelerate.Sugar.Array                            ( Arrays(..), Scalar )
 import Data.Array.Accelerate.Sugar.Elt
@@ -27,17 +27,20 @@ import Data.Array.Accelerate.Sugar.Elt
 -- to @f x@. Formulated differently, this invocation computes a linear
 -- combination of the rows of the Jacobian matrix of @f@ at @x@, where the
 -- coefficients of the linear combination are given by @a@.
+--
+-- Returned is a pair containing the normal function output as well as the
+-- gradient as described above.
 reverseAD :: forall t t'. (Elt t, Elt t')
           => (Exp t -> Exp t')
           -> Exp t
           -> Exp t'
-          -- -> Exp (t', t)
-          -> Exp t
+          -> Exp (t', t)
 reverseAD f (Exp e) (Exp a) = mkExp $ Evjp (eltR @t) (eltR @t') (unExp . f . Exp) e a
 
--- | A special case of 'reverseAD' that works only for functions that return a single scalar, floating-point value.
+-- | A special case of 'reverseAD' that works only for functions that return a
+-- single scalar, floating-point value.
 --
--- > gradient f x = reverseAD f x (constant 1)
+-- > gradient f x = snd (reverseAD f x (constant 1))
 --
 -- Note: The restriction to a floating-point result is technically unnecessary,
 -- but returning an integral value would always produce a zero gradient, which
@@ -46,7 +49,7 @@ gradient :: (Elt t, Elt e, Floating e)
          => (Exp t -> Exp e)
          -> Exp t
          -> Exp t
-gradient f x = reverseAD f x (constant 1)
+gradient f x = A.snd (reverseAD f x (constant 1))
 
 -- | Reverse AD on the array level. (See 'reverseAD' for the expression level.)
 --
@@ -55,17 +58,20 @@ gradient f x = reverseAD f x (constant 1)
 -- to @f x@. Formulated differently, this invocation computes a linear
 -- combination of the rows of the Jacobian matrix of @f@ at @x@, where the
 -- coefficients of the linear combination are given by @a@.
+--
+-- Returned is a pair containing the normal function output as well as the
+-- gradient as described above.
 areverseAD :: forall a b. (Arrays a, Arrays b)
            => (Acc a -> Acc b)
            -> Acc a
            -> Acc b
-           -- -> Acc (b, a)
-           -> Acc a
+           -> Acc (b, a)
 areverseAD = Acc $$$ applyAcc $ Avjp (arraysR @a) (arraysR @b)
 
--- | A special case of 'areverseAD' that works only for functions that return a single scalar, floating-point value.
+-- | A special case of 'areverseAD' that works only for functions that return a
+-- single scalar, floating-point value.
 --
--- > agradient f x = areverseAD f x (unit (constant 1))
+-- > agradient f x = asnd (areverseAD f x (unit (constant 1)))
 --
 -- Note: The restriction to a floating-point result is technically unnecessary,
 -- but returning an integral value would always produce a zero gradient, which
@@ -74,7 +80,7 @@ agradient :: (Arrays a, Elt e, Floating e)
           => (Acc a -> Acc (Scalar e))
           -> Acc a
           -> Acc a
-agradient f x = areverseAD f x (unit (constant 1))
+agradient f x = A.asnd (areverseAD f x (unit (constant 1)))
 
 -- | Provide a custom derivative for a subcomputation.
 --

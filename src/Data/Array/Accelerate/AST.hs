@@ -474,8 +474,7 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
               -> PreOpenAfun acc aenv (a -> b)
               -> acc aenv a
               -> acc aenv b
-              -- -> PreOpenAcc acc aenv (((), b), a)
-              -> PreOpenAcc acc aenv a
+              -> PreOpenAcc acc aenv (((), b), a)
 
   -- Given a primal interpretation and a function that computes the gradient
   -- (reverse derivative), this defines a custom operation of which the
@@ -680,8 +679,7 @@ data OpenExp env aenv t where
                 -> OpenFun env aenv (t -> t')
                 -> OpenExp env aenv t
                 -> OpenExp env aenv t'
-                -- -> OpenExp env aenv (((), t'), t)
-                -> OpenExp env aenv t
+                -> OpenExp env aenv (((), t'), t)
 
   -- Given a primal interpretation and a function that computes the gradient
   -- (reverse derivative), this defines a custom operation of which the
@@ -871,7 +869,7 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
                                          in arraysRarray sh tR
   arraysR (Stencil2 _ _ tR _ _ a _ _) = let ArrayR sh _ = arrayR a
                                          in arraysRarray sh tR
-  arraysR (Avjp t _ _ _ _)            = t
+  arraysR (Avjp t t' _ _ _)           = TupRpair (TupRpair TupRunit t') t
   arraysR (AcustomDeriv t _ _ _)      = t
 
 expType :: HasCallStack => OpenExp aenv env t -> TypeR t
@@ -902,7 +900,7 @@ expType = \case
   ShapeSize{}                  -> TupRsingle scalarTypeInt
   Undef tR                     -> TupRsingle tR
   Coerce _ tR _                -> TupRsingle tR
-  Evjp t t' _ _ _              -> t
+  Evjp t t' _ _ _              -> TupRpair (TupRpair TupRunit t') t
   EcustomDeriv ty _ _ _        -> ty
 
 primConstType :: PrimConst a -> SingleType a
