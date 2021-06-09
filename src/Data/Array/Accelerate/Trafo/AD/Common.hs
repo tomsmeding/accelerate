@@ -396,11 +396,15 @@ lpushLabTup (LeftHandSidePair lhs1 lhs2) (TupRpair labs1 labs2) labelenv =
 lpushLabTup _ _ _ = error "lpushLabTup: impossible GADTs"
 
 lpushLHS_parts :: TagVal (AnyPartLabel NodeLabel (TupR s) Int) env -> DLabel NodeLabel (TupR s) Int tfull -> TupleIdx tfull t -> LeftHandSide s t env env' -> TagVal (AnyPartLabel NodeLabel (TupR s) Int) env'
-lpushLHS_parts env' referLab ti (LeftHandSidePair lhs1 lhs2) =
-    lpushLHS_parts (lpushLHS_parts env' referLab (insertFst ti) lhs1) referLab (insertSnd ti) lhs2
-lpushLHS_parts env' referLab ti (LeftHandSideSingle _) =
-    TPush env' (AnyPartLabel (PartLabel referLab ti))
-lpushLHS_parts env' _ _ (LeftHandSideWildcard _) = env'
+lpushLHS_parts env referLab toptidx lhs =
+    lpushLHS_parts' env (\_ tidx -> AnyPartLabel (PartLabel referLab tidx)) toptidx lhs
+
+lpushLHS_parts' :: TagVal f env -> (forall t'. s t' -> TupleIdx tfull t' -> f t') -> TupleIdx tfull t -> LeftHandSide s t env env' -> TagVal f env'
+lpushLHS_parts' env _ _ (LeftHandSideWildcard _) = env
+lpushLHS_parts' env f tidx (LeftHandSideSingle ty) = TPush env (f ty tidx)
+lpushLHS_parts' env f tidx (LeftHandSidePair lhs1 lhs2) =
+    let env1 = lpushLHS_parts' env f (insertFst tidx) lhs1
+    in lpushLHS_parts' env1 f (insertSnd tidx) lhs2
 
 
 class Matchable s where

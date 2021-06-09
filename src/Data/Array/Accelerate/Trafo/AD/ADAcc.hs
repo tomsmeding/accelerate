@@ -4,6 +4,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
@@ -16,7 +17,8 @@ import Data.Function ((&))
 import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
-import Data.List (sort)
+import Data.Either (partitionEithers)
+import Data.List (sort, intercalate)
 import Data.Maybe (fromMaybe)
 import Data.Some (Some, pattern Some)
 import Data.GADT.Compare (GCompare)
@@ -171,8 +173,8 @@ reverseADA paramlhs expr adjfreevars = evalIdGen $ do
         primal (Context LEmpty mempty) expr'
 
     let cmap0 = DMap.singleton (Local (alabelOf expr'))
-                               (AdjList (\_ -> return [untupleAccs (fmapTupR smartAfreeVar adjfreevars)]))
-    DualResult (ABuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx cmap0 expr'
+                               (AdjList (\_ -> return [AdjListContrib False (untupleAccs (fmapTupR smartAfreeVar adjfreevars))]))
+    DualResult (ABuilder dualCtx dualBuilder) _ dualCMap <- dual primalCtx CEEmpty cmap0 expr'
     let argpvars = resolveEnvLabs dualCtx (findPrimalBMap dualCtx argsRHSlabel)
     (gradient, _) <- collectAdjointCMap dualCMap (Argument paramty) argpvars dualCtx
     let primalResult = avars (resolveEnvLabs dualCtx (findPrimalBMap dualCtx (alabelOf expr')))
@@ -589,13 +591,24 @@ simplePrimal' args ctx lab buildf =
                  (arglabs1 :@ arglabss2)
 
 -- List of adjoints, collected for a particular label.
--- The exact variable references in the adjoints are dependent on the Let stack, thus the
+-- The exact variable references in the adjoints are dependent on the Alet stack, thus the
 -- environment (and the bindmap) is needed.
 newtype AdjList lab alab args taenv t =
-    AdjList (forall aenv. AContext alab aenv -> IdGen [OpenAcc aenv lab () args taenv t])
+    AdjList (forall aenv. AContext alab aenv -> IdGen [AdjListContrib aenv lab args taenv t])
 
 instance Semigroup (AdjList lab alab args taenv t) where
     AdjList f1 <> AdjList f2 = AdjList (\ctx -> (++) <$> f1 ctx <*> f2 ctx)
+
+-- A contribution in an adjoint list stores the contribution itself, but also whether the
+-- contribution is guaranteed to be "full-size", meaning that it is the same size as the
+-- primal value of the contributed-to node. Full-size contributions to a single node are
+-- (of course) guaranteed to be the same size, so they can be added using a simple
+-- `zipWith (+)`. Non-full-size contributions have to be expanded to the right size first
+-- before being added, and hence they are slower.
+data AdjListContrib aenv lab args taenv t =
+    AdjListContrib { alcFullSize :: Bool  -- ^ Whether the contribution is guaranteed full-size
+                   , alcContrib  :: OpenAcc aenv lab () args taenv t }
+  deriving (Show)
 
 showAdjList :: AContext alab aenv -> AdjList lab alab args taenv t -> String
 showAdjList ctx (AdjList f) =
@@ -605,6 +618,41 @@ showAdjList ctx (AdjList f) =
 showCMapA :: AContext alab aenv -> DMap (CMapKey ArrayR Int) (AdjList () alab args taenv) -> String
 showCMapA ctx = showCMap' (showAdjList ctx)
 
+-- | An environment in which lookup always succeeds: the projected value of a particular
+-- level is the monoid product of all values in the environment above and at that level.
+-- See the definition of 'ceprj'.
+data CombineEnv m env where
+    CEEmpty :: CombineEnv m ()
+    CEPush :: CombineEnv m env -> m -> CombineEnv m (env, t)
+
+deriving instance Show m => Show (CombineEnv m env)
+
+ceprj :: Monoid m => Idx env t -> CombineEnv m env -> m
+ceprj _ CEEmpty = mempty
+ceprj ZeroIdx (CEPush _ m) = m
+ceprj (SuccIdx idx) (CEPush env m) = ceprj idx env <> m
+
+cepushLHS :: CombineEnv m env -> LeftHandSide s t env env' -> m -> CombineEnv m env'
+cepushLHS env (LeftHandSideWildcard _) _ = env
+cepushLHS env (LeftHandSideSingle _) m = CEPush env m
+cepushLHS env (LeftHandSidePair lhs1 lhs2) m = cepushLHS (cepushLHS env lhs1 m) lhs2 m
+
+cecombineTopIfNonempty :: Semigroup m => CombineEnv m env -> m -> CombineEnv m env
+cecombineTopIfNonempty CEEmpty _ = CEEmpty
+cecombineTopIfNonempty (CEPush env m) m' = CEPush env (m <> m')
+
+data VarInfo = VarInfo
+    { -- | Whether this variable is re-bound by a conditional
+      viBoundByCond :: Bool
+    }
+  deriving (Show)
+
+instance Semigroup VarInfo where
+    VarInfo bycond <> VarInfo bycond' = VarInfo (bycond' || bycond)
+
+instance Monoid VarInfo where
+    mempty = VarInfo False
+
 data DualResult aenv alab args taenv =
     DualResult (ABuilder aenv alab args taenv)  -- Dual builder
                [Some (ADLabel Int)]             -- To-store "set" (really list): Pair (labelToStore) (shapeReference)
@@ -612,10 +660,11 @@ data DualResult aenv alab args taenv =
                      (AdjList () alab args taenv))
 
 dual :: AContext Int aenv
+     -> CombineEnv VarInfo progaenv
      -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)  -- Contribution map
      -> OpenAcc progaenv () Int args taenv t
      -> IdGen (DualResult aenv Int args taenv)
-dual ctx cmap = \case
+dual ctx vienv cmap = \case
     Aconst lab _ ->
         return (DualResult (ABuilder ctx id) [] (DMap.delete (Local (tupleLabel' lab)) cmap))
 
@@ -624,17 +673,19 @@ dual ctx cmap = \case
         (Exists lhs, envlabs) <- genSingleIds (labelType lab)
         let ctx' = ctxPush lhs (fmapLabel D lab) envlabs ctx
             cmap'' = addContrib (Local (alabelOf arg1))
+                                True
                                 (\ctx2 ->
                                     let TupRpair labs _ = resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab)
                                     in avars labs)
                    . addContrib (Local (alabelOf arg2))
+                                True
                                 (\ctx2 ->
                                     let TupRpair _ labs = resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab)
                                     in avars labs)
                    $ cmap'
         traceM ("!dual Apair[" ++ showDLabel lab ++ "]: envlabs = " ++ showTupR showDLabel envlabs)
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
-        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx1 cmap1 arg2
+        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' vienv cmap'' arg1
+        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx1 vienv cmap1 arg2
         return $ DualResult
             (ABuilder ctx2 (Alet lhs adjoint . f1 . f2))
             (stores1 ++ stores2)  -- don't need to store this node
@@ -647,14 +698,31 @@ dual ctx cmap = \case
         (adjoint, cmap') <- collectAdjointCMap cmap (Local lab) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         (Exists envlhs, envlabs) <- genSingleIds (labelType lab)
         let ctx' = ctxPush envlhs (fmapLabel D lab) envlabs ctx
+            -- The contributions into the arms of the Acond are full-size because the
+            -- collected adjoint for the current node is always (made) full-size, and
+            -- we're just copying it. This in contrast to the adjoint that we will
+            -- propagate from the arms onto referenced variables, of course.
             cmap'' = addContrib (Local (alabelOf argT))
+                                True
                                 (\ctx2 -> avars (resolveEnvLabs ctx2 envlabs))
                    . addContrib (Local (alabelOf argE))
+                                True
                                 (\ctx2 -> avars (resolveEnvLabs ctx2 envlabs))
                    $ cmap'
         traceM ("!dual Acond[" ++ showDLabel lab ++ "]: envlabs = " ++ showTupR showDLabel envlabs)
-        DualResult (ABuilder ctxT fT) storesT cmapT <- dual ctx' cmap'' argT
-        DualResult (ABuilder ctxE fE) storesE cmapE <- dual ctx' cmapT argE
+        -- This is the only place where we set 'viBoundByCond' to True. Indeed, the point
+        -- is that any variable reference into the current environment (so, excluding any
+        -- local variable references in one of the arms, of course) might not have their
+        -- adjoints executed in the dual because of the conditional behaviour. This means
+        -- that in the 'Avar' case, we can use this 'viBoundByCond' value to determine
+        -- that we need to mark the contributions done there as potentially partial.
+        -- Note that the fact that 'viBoundByCond' doesn't get set if the environment is
+        -- empty is fine, since then there's nothing to refer to and hence nothing to go
+        -- wrong.
+        let vienv1 = cecombineTopIfNonempty vienv (VarInfo True)
+        traceM ("  Acond: passing vienv " ++ show vienv1)
+        DualResult (ABuilder ctxT fT) storesT cmapT <- dual ctx' vienv1 cmap'' argT
+        DualResult (ABuilder ctxE fE) storesE cmapE <- dual ctx' vienv1 cmapT argE
         Some' tmplabsT <- returnSome (tuplify (sortUniq storesT))
         Some' tmplabsE <- returnSome (tuplify (sortUniq storesE))
         let tmptyT = fmapTupR labelType tmplabsT
@@ -738,9 +806,10 @@ dual ctx cmap = \case
             ctx' = ctx'1 & ctxPushSEnvOnly envlab1
                          & ctxPushSEnvOnly envlab2
             cmap'' = addContrib (Local (alabelOf arg1))
+                                True
                                 (\ctx2 -> smartAvar (resolveEnvLab ctx2 envlab1))
                                 cmap'
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
+        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' vienv cmap'' arg1
         traceM (unlines ["!dual Map[" ++ showDLabel lab ++ "]:"
                         ,"  envlab0 = " ++ showDLabel envlab0
                         ,"  envlab1 = " ++ showDLabel envlab1 ++ "  (adjoint of node " ++ showDLabel (alabelOf arg1) ++ ")"
@@ -780,14 +849,14 @@ dual ctx cmap = \case
                          & ctxPushSEnvOnly envlab2
                          & ctxPushSEnvOnly envlab3
             cmap'' = addContrib (Local (alabelOf arg1))
-                                (\ctx2 -> reshapesWithZeros (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf1 arg1)))
-                                                            (smartAvar (resolveEnvLab ctx2 envlab1)))
+                                False
+                                (\ctx2 -> smartAvar (resolveEnvLab ctx2 envlab1))
                    . addContrib (Local (alabelOf arg2))
-                                (\ctx2 -> reshapesWithZeros (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf1 arg2)))
-                                                            (smartAvar (resolveEnvLab ctx2 envlab2)))
+                                False
+                                (\ctx2 -> smartAvar (resolveEnvLab ctx2 envlab2))
                    $ cmap'
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
-        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx1 cmap1 arg2
+        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' vienv cmap'' arg1
+        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx1 vienv cmap1 arg2
         traceM (unlines ["!dual ZipWith[" ++ showDLabel lab ++ "]:"
                         ,"  envlab0 = " ++ showDLabel envlab0
                         ,"  envlab1 = " ++ showDLabel envlab1 ++ "  (adjoint of node " ++ showDLabel (alabelOf arg1) ++ ")"
@@ -831,6 +900,7 @@ dual ctx cmap = \case
         let ctx'1 = ctxPushS (fmapLabel D lab) envlab0 ctx
             ctx' = ctxPushSEnvOnly envlab1 ctx'1
             cmap'' = addContrib (Local (alabelOf arg1))
+                                True
                                 (\ctx2 ->
                                     -- zipWith (*) (replicate (shape a) adjoint) (usual_derivative)
                                     let tempvar = resolveEnvLab ctx2 envlab1
@@ -839,7 +909,7 @@ dual ctx cmap = \case
                                                    (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
                                         (smartAvar tempvar))
                                 cmap'
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
+        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' vienv cmap'' arg1
         traceM (unlines ["!dual Fold[" ++ showDLabel lab ++ "]:"
                         ,"  envlab0 = " ++ showDLabel envlab0
                         ,"  envlab1 = " ++ showDLabel envlab1
@@ -894,6 +964,7 @@ dual ctx cmap = \case
         let ctx'1 = ctxPushS (fmapLabel D lab) envlab0 ctx
             ctx' = ctxPushSEnvOnly envlab1 ctx'1
             cmap'' = addContrib (Local (alabelOf arg1))
+                                True
                                 (\ctx2 ->
                                     -- zipWith (*) (replicate (shape a) adjoint) (usual_derivative)
                                     let tempvar = resolveEnvLab ctx2 envlab1
@@ -902,7 +973,7 @@ dual ctx cmap = \case
                                                    (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
                                         (smartAvar tempvar))
                                 cmap'
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg1
+        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' vienv cmap'' arg1
         traceM (unlines ["!dual Fold1[" ++ showDLabel lab ++ "]:"
                         ,"  envlab0 = " ++ showDLabel envlab0
                         ,"  envlab1 = " ++ showDLabel envlab1
@@ -942,7 +1013,7 @@ dual ctx cmap = \case
 
     Sum lab arg1 -> do
         ReplicateOneMore slixType slixExpGen <- return (replicateOneMore (arrayRshape (labelType lab)))
-        simpleArrayDual "Sum" lab arg1 ctx cmap
+        simpleArrayDual "Sum" lab arg1 ctx vienv cmap
             (\ctx2 ->
                 Replicate (nilLabel (atypeOf1 arg1))
                           slixType
@@ -951,7 +1022,7 @@ dual ctx cmap = \case
                           (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
 
     Replicate lab slixspec _ arg1 ->
-        simpleArrayDual "Replicate" lab arg1 ctx cmap
+        simpleArrayDual "Replicate" lab arg1 ctx vienv cmap
             (\ctx2 ->
                 Reduce (nilLabel (atypeOf1 arg1))
                        (reduceSpecFromReplicate slixspec)
@@ -959,7 +1030,7 @@ dual ctx cmap = \case
                        (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
 
     Slice lab slixspec arg1 slexp ->
-        simpleArrayDual "Slice" lab arg1 ctx cmap
+        simpleArrayDual "Slice" lab arg1 ctx vienv cmap
             (\ctx2 ->
                 Generate (nilLabel (atypeOf1 arg1))
                          (smartShape
@@ -969,7 +1040,7 @@ dual ctx cmap = \case
                                                    (resolveAlabs ctx2 slexp))))
 
     Reshape lab _ arg1 ->
-        simpleArrayDual "Reshape" lab arg1 ctx cmap
+        simpleArrayDual "Reshape" lab arg1 ctx vienv cmap
             (\ctx2 ->
                 Reshape (nilLabel (atypeOf1 arg1))
                         (smartShape
@@ -978,24 +1049,26 @@ dual ctx cmap = \case
 
     Backpermute lab _ lam arg1
       | MatchLamBody funLHS funBody <- matchLamBody lam ->
-        simpleArrayDual "Backpermute" lab arg1 ctx cmap
+        simpleArrayDual "Backpermute" lab arg1 ctx vienv cmap
             (\ctx2 ->
                 Permute (nilLabel (atypeOf1 arg1))
                         (plusLam (arrayRtype (atypeOf1 arg1)))
-                        (generateConstantArray (atypeOf1 arg1) (smartShape
+                        (generateZeroArray (atypeOf1 arg1) (smartShape
                             (resolveEnvLab ctx2 (untupleA (findPrimalBMap ctx2 (alabelOf arg1))))))
                         (Lam funLHS (Body (mkJust (resolveAlabs ctx2 funBody))))
                         (smartAvar (resolveEnvLab ctx2 (untupleA (findAdjointBMap ctx2 lab)))))
 
     Aget lab tidx arg1 -> do
-        simpleArrayDual "Aget" lab arg1 ctx cmap
+        simpleArrayDual "Aget" lab arg1 ctx vienv cmap
             (\ctx2 ->
+                -- TODO: Do we want to postpone expansion of zeros until adjoint addition
+                -- here too?
                 oneHotTup (atypeOf arg1) tidx
                           (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf arg1)))
                           (avars (resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab))))
 
     Acustom lab _ _ lab2 lab3 (Alam arglhs (Alam adjlhs (Abody dacc))) arg -> do
-        simpleArrayDual' "Acustom" lab arg ctx cmap
+        simpleArrayDual' "Acustom" lab arg ctx vienv cmap
             (\ctx2 -> do
                 let adjoint' = avars (resolveEnvLabs ctx2 (findAdjointBMap ctx2 lab))
                     argPrimal = avars (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf arg)))
@@ -1013,13 +1086,13 @@ dual ctx cmap = \case
 
     Acustom _ _ _ _ _ _ _ -> error "impossible GADTs"
 
-    Alet _ arg1 arg2 -> do
+    Alet lhs arg1 arg2 -> do
         -- The contribution is stored in the cmap under the label of the body,
         -- so it will be communicated without work here in Let.
-        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx cmap arg2
+        DualResult (ABuilder ctx2 f2) stores2 cmap2 <- dual ctx (cepushLHS vienv lhs mempty) cmap arg2
         -- The contribution for the RHS is already stored in the cmap, nothing
         -- more to do.
-        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx2 cmap2 arg1
+        DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx2 vienv cmap2 arg1
         traceM (unlines ["!dual Alet[let " ++ showDLabel (alabelOf arg1) ++ " in " ++ showDLabel (alabelOf arg2) ++ "]:"
                         ,"  cmap2 ! " ++ show (labelLabel (alabelOf arg1)) ++ " has " ++
                               show (maybe 0 (\(AdjList f) -> length (evalIdGen (f ctx2))) (DMap.lookup (Local (alabelOf arg1)) cmap2)) ++ " entries"
@@ -1031,11 +1104,21 @@ dual ctx cmap = \case
             (stores1 ++ stores2)
             cmap1
 
-    Avar lab _ (PartLabel referLab referPart) -> do
+    Avar lab (A.Var _ idx) (PartLabel referLab referPart) -> do
         (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         envlab0 <- genSingleId (labelType lab)
         let ctx' = ctxPushS (fmapLabel D lab) envlab0 ctx
+            -- Note that here we use 'viBoundByCond' to determine whether the variable
+            -- this 'Avar' references is outside of an 'Acond', which would mean that out
+            -- adjoint might get replaced with an empty array. To ensure that the
+            -- referenced right-hand side still does the right thing in that case, we must
+            -- state that our contribution is not full-size in case 'viBoundByCond' is
+            -- true.
+
+            -- TODO: Do we want to postpone expansion of zeros until adjoint addition
+            -- here too within oneHotTup?
             cmap'' = addContrib (Local referLab)
+                                (not (viBoundByCond (ceprj idx vienv)))
                                 (\ctx2 ->
                                     oneHotTup (labelType referLab) referPart
                                               (resolveEnvLabs ctx2 (findPrimalBMap ctx2 referLab))
@@ -1057,7 +1140,10 @@ dual ctx cmap = \case
         (adjoint, cmap') <- collectAdjointCMap cmap (Local (tupleLabel' lab)) (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
         envlab0 <- genSingleId (labelType lab)
         let ctx' = ctxPushS (fmapLabel D lab) envlab0 ctx
+            -- TODO: Do we want to postpone expansion of zeros until adjoint addition
+            -- here too?
             cmap'' = addContrib (Argument argsty)
+                                True
                                 (\ctx2 ->
                                     case lhsCopy argsty of
                                       LetBoundVars argslhs argsvars ->
@@ -1146,32 +1232,36 @@ dual ctx cmap = \case
                                            prefix)))))
     smartCons _ _ = error "impossible GADTs"
 
+-- The contribution given to simpleArrayDual must be full-size.
 simpleArrayDual :: (IsTupleType ArrayR s, Show (s t))
                 => String
                 -> DLabel NodeLabel s Int t
                 -> OpenAcc progaenv () Int args taenv a
                 -> AContext Int aenv
+                -> CombineEnv VarInfo progaenv
                 -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)  -- contribmap
                 -> (forall aenv'. AContext Int aenv' -> OpenAcc aenv' () () args taenv a)
                 -> IdGen (DualResult aenv Int args taenv)
-simpleArrayDual name lab arg ctx cmap contribution =
-    simpleArrayDual' name lab arg ctx cmap (return . contribution)
+simpleArrayDual name lab arg ctx vienv cmap contribution =
+    simpleArrayDual' name lab arg ctx vienv cmap (return . contribution)
 
+-- The contribution given to simpleArrayDual' must be full-size.
 simpleArrayDual' :: (IsTupleType ArrayR s, Show (s t))
                  => String
                  -> DLabel NodeLabel s Int t
                  -> OpenAcc progaenv () Int args taenv a
                  -> AContext Int aenv
+                 -> CombineEnv VarInfo progaenv
                  -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)  -- contribmap
                  -> (forall aenv'. AContext Int aenv' -> IdGen (OpenAcc aenv' () () args taenv a))
                  -> IdGen (DualResult aenv Int args taenv)
-simpleArrayDual' name lab arg ctx cmap contribution = do
+simpleArrayDual' name lab arg ctx vienv cmap contribution = do
     let lab' = tupleLabel lab
     (adjoint, cmap') <- collectAdjointCMap cmap (Local lab') (resolveEnvLabs ctx (findPrimalBMap ctx lab)) ctx
     (Exists envlhs, envlabs) <- genSingleIds (labelType lab')
     let ctx' = ctxPush envlhs (fmapLabel D lab') envlabs ctx
-        cmap'' = addContrib' (Local (alabelOf arg)) contribution cmap'
-    DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' cmap'' arg
+        cmap'' = addContrib' (Local (alabelOf arg)) True contribution cmap'
+    DualResult (ABuilder ctx1 f1) stores1 cmap1 <- dual ctx' vienv cmap'' arg
     traceM (unlines ["!dual " ++ name ++ "[" ++ showDLabel lab ++ "]:"
                     ,"  envlabs = " ++ showTupR showDLabel envlabs
                     ,"  stores = " ++ show stores1
@@ -1213,25 +1303,28 @@ collectAdjointCMap contribmap key pvars ctx
   = adjgen ctx >>= \case
       [] ->
           -- if there are no contributions, the adjoint is an empty sum (i.e. zero)
-          let res = arraysSum (cmapKeyType key) pvars []
+          let res = generateZeroArrays (cmapKeyType key) pvars
           in return $ trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==> {} ==> " ++ show res ++ "\x1B[0m") $
                       (res, contribmap)
       contribs ->
-          let adj = arraysSum (cmapKeyType key) pvars contribs
-          in return $ trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==>[" ++ show (length contribs) ++ "] " ++ show adj ++ "\x1B[0m") $
-                      (reshapesWithZeros pvars adj, DMap.delete key contribmap)
+          let adj = contribsSum (cmapKeyType key) pvars contribs
+              signature = intercalate "," [if isfull then "full" else "part" | AdjListContrib isfull _ <- contribs]
+          in return $ trace ("\x1B[1macc cmap collect: " ++ showCMapKey showDLabel key ++ " ==>[" ++ signature ++ "] " ++ show adj ++ "\x1B[0m") $
+                      (adj, DMap.delete key contribmap)
 
 addContrib :: CMapKey ArrayR Int t
+           -> Bool  -- ^ Whether the added contribution is guaranteed full-size
            -> (forall aenv. AContext Int aenv -> OpenAcc aenv () () args taenv t)
            -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
            -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
-addContrib key gen = DMap.insertWith (<>) key (AdjList (\ctx -> return [gen ctx]))
+addContrib key isfull gen = DMap.insertWith (<>) key (AdjList (\ctx -> return [AdjListContrib isfull (gen ctx)]))
 
 addContrib' :: CMapKey ArrayR Int t
+            -> Bool  -- ^ Whether the added contribution is guaranteed full-size
             -> (forall aenv. AContext Int aenv -> IdGen (OpenAcc aenv () () args taenv t))
             -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
             -> DMap (CMapKey ArrayR Int) (AdjList () Int args taenv)
-addContrib' key gen = DMap.insertWith (<>) key (AdjList (\ctx -> pure <$> gen ctx))
+addContrib' key isfull gen = DMap.insertWith (<>) key (AdjList (\ctx -> pure . AdjListContrib isfull <$> gen ctx))
 
 lookupLambdaLabs :: AContext Int env  -- context
                  -> TupR (AAnyPartLabelN Int) t  -- free variable labels from SplitLambdaAD
@@ -1265,8 +1358,7 @@ indexingContributions idxadjlab idxInstMap =
                  TupRsingle backingPVar = pickTupR backingPart pvars
                  contrib = Permute (nilLabel backingType)
                                    (plusLam backingEltType)
-                                   (generateConstantArray backingType
-                                        (smartShape backingPVar))
+                                   (generateZeroArray backingType (smartShape backingPVar))
                                    (case lhsCopy (shapeType shtype) of  -- Lambda: map use-point index to backing index
                                       LetBoundVars idxlhs idxvars
                                         | LetBoundVars ialhs iavars <- lhsCopy idxadjType ->
@@ -1287,7 +1379,7 @@ indexingContributions idxadjlab idxInstMap =
                                                   (smartGet (TILeft (TILeft TIHere))
                                                      (instantiator (evars vars))))))
                                         (smartAvar (resolveEnvLab ctx idxadjlab)))
-             in oneHotTup fullBackingType backingPart pvars contrib
+             in AdjListContrib True (oneHotTup fullBackingType backingPart pvars contrib)
             | IndexInstantiator instantiator <- insts
             , let fullBackingType = labelType backingLab
                   TupRsingle backingType@(ArrayR backingSht backingEltType) =
@@ -1295,55 +1387,19 @@ indexingContributions idxadjlab idxInstMap =
                   backingShapeT = shapeType backingSht])
          | AnyPartLabel (PartLabel backingLab backingPart) :=> IndexInstantiators insts <- DMap.toList idxInstMap]
 
-arrayPlus :: OpenAcc aenv () () args taenv (Array sh t)
+arrayPlus :: ArrayR (Array sh t)
           -> OpenAcc aenv () () args taenv (Array sh t)
           -> OpenAcc aenv () () args taenv (Array sh t)
--- arrayPlus a1 a2
---   | TupRsingle arrty@(ArrayR _ ty) <- atypeOf a1
---   = ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam ty))) a1 a2
-arrayPlus a1 a2 = case atypeOf1 a1 of
-    arrty@(ArrayR ShapeRz ty) ->
-      ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam ty))) a1 a2
-
-    arrty@(ArrayR sht@(ShapeRsnoc _) ty)
-      | LetBoundVars shlhs shvars <- lhsCopy (shapeType sht) ->
-          Alet (LeftHandSidePair (LeftHandSideSingle arrty) (LeftHandSideSingle arrty))
-               (smartApair a1 a2) $
-            let a1var = A.Var arrty (SuccIdx ZeroIdx)
-                a2var = A.Var arrty ZeroIdx
-            in
-              -- -- TODO: of these two, which is more efficient?
-              -- Acond (nilLabel (TupRsingle arrty))
-              --       (shapeIsZeroE sht (smartShape (Left a1var)))
-              --       (smartAvar a2var)
-              --       (Acond (nilLabel (TupRsingle arrty))
-              --              (shapeIsZeroE sht (smartShape (Left a2var)))
-              --              (smartAvar a1var)
-              --              (ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam ty))) (smartAvar a1var) (smartAvar a2var)))
-              Generate (nilLabel arrty)
-                       (maxShapeE sht (smartShape a1var) (smartShape a2var))
-                       (ELPlain (Lam shlhs (Body
-                           (smartCond (shapeIsZeroE sht (smartShape a1var))
-                                      (smartIndex a2var (evars shvars))
-                                      (smartCond (shapeIsZeroE sht (smartShape a2var))
-                                                 (smartIndex a1var (evars shvars))
-                                                 (expPlus ty (smartIndex a1var (evars shvars))
-                                                             (smartIndex a2var (evars shvars))))))))
+          -> OpenAcc aenv () () args taenv (Array sh t)
+arrayPlus arrty@(ArrayR _ eltty) = ZipWith (nilLabel arrty) (ELPlain (uncurryFun (plusLam eltty)))
 
 arraySum :: ArrayR (Array sh t)
          -> A.ArrayVar aenv (Array sh t)  -- primal result
          -> [OpenAcc aenv () () args taenv (Array sh t)]
          -> OpenAcc aenv () () args taenv (Array sh t)
-arraySum ty pvar [] = generateConstantArray ty (smartShape pvar)
+arraySum ty pvar [] = generateZeroArray ty (smartShape pvar)
 arraySum _ _ [a] = a
-arraySum arrty pvar (a1:as) = arrayPlus a1 (arraySum arrty pvar as)
-
-shapeIsZeroE :: ShapeR (sh, Int) -> OpenExp env aenv () alab args tenv taenv (sh, Int) -> OpenExp env aenv () alab args tenv taenv A.PrimBool
-shapeIsZeroE (ShapeRsnoc ShapeRz) expr =
-    smartEq singleType (smartSnd expr) (Const (nilLabel scalarType) 0)
-shapeIsZeroE (ShapeRsnoc sht@(ShapeRsnoc _)) expr =
-    smartLAnd (shapeIsZeroE sht (smartFst expr))
-              (smartEq singleType (smartSnd expr) (Const (nilLabel scalarType) 0))
+arraySum arrty pvar (a1:as) = arrayPlus arrty a1 (arraySum arrty pvar as)
 
 arraysSum :: ArraysR t
           -> A.ArrayVars aenv t  -- primal result
@@ -1352,20 +1408,44 @@ arraysSum :: ArraysR t
 arraysSum TupRunit TupRunit _ = Anil (nilLabel TupRunit)
 arraysSum (TupRsingle ty@ArrayR{}) (TupRsingle pvar) l =
     arraySum ty pvar l
-arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) l
-  | Just (l1, l2) <- unzip <$> traverse (\case Apair _ a1 a2 -> Just (a1, a2) ; _ -> Nothing) l =
-      Apair (nilLabel ty) (arraysSum t1 pvars1 l1) (arraysSum t2 pvars2 l2)
-arraysSum ty _ l =
-    foldl1 (tupleZipAcc' ty (\_ _ _ -> arrayPlus) (\_ _ -> False)) l
+arraysSum ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) l =
+    let (pairs, nonpairs) = partitionEithers [case acc of Apair _ a1 a2 -> Left (a1, a2) ; _ -> Right acc
+                                             | acc <- l]
+    in foldr (tupleZipAcc' ty (\arrty _ _ -> arrayPlus arrty) (\_ _ -> False))
+             (let (l1, l2) = unzip pairs
+              in Apair (nilLabel ty) (arraysSum t1 pvars1 l1) (arraysSum t2 pvars2 l2))
+             nonpairs
+arraysSum _ _ _ = error "Invalid GADTs"
 
-generateConstantArray :: ArrayR (Array sh t) -> Exp aenv () () () () taenv sh -> OpenAcc aenv () () args taenv (Array sh t)
-generateConstantArray ty@(ArrayR sht eltty) she =
+generateZeroArrays :: ArraysR t
+                   -> A.ArrayVars aenv t  -- primal result
+                   -> OpenAcc aenv () () args taenv t
+generateZeroArrays TupRunit TupRunit = Anil (nilLabel TupRunit)
+generateZeroArrays (TupRsingle ty@ArrayR{}) (TupRsingle pvar) =
+    generateZeroArray ty (smartShape pvar)
+generateZeroArrays ty@(TupRpair t1 t2) (TupRpair pvars1 pvars2) =
+    Apair (nilLabel ty) (generateZeroArrays t1 pvars1) (generateZeroArrays t2 pvars2)
+generateZeroArrays _ _ = error "Invalid GADTs"
+
+generateZeroArray :: ArrayR (Array sh t) -> Exp aenv () () () () taenv sh -> OpenAcc aenv () () args taenv (Array sh t)
+generateZeroArray ty@(ArrayR sht eltty) she =
     Generate (nilLabel ty) she
              (ELPlain (Lam (LeftHandSideWildcard (shapeType sht)) (Body (zeroForType eltty))))
 
+contribsSum :: ArraysR t
+            -> A.ArrayVars aenv t  -- primal result
+            -> [AdjListContrib aenv () args taenv t]
+            -> OpenAcc aenv () () args taenv t
+contribsSum ty pvars [] = generateZeroArrays ty pvars
+contribsSum ty pvars l@(_:_) =
+    let (fulls, partials) = partitionEithers [if isfull then Left arr else Right arr
+                                             | AdjListContrib isfull arr <- l]
+        arrtups = fulls ++ map (reshapesWithZeros pvars) partials
+    in arraysSum ty pvars arrtups
+
 emptiesForType :: ArraysR t -> OpenAcc aenv () () args taenv t
 emptiesForType TupRunit = Anil (nilLabel TupRunit)
-emptiesForType (TupRsingle ty@(ArrayR sht _)) = generateConstantArray ty (zeroForType (shapeType sht))
+emptiesForType (TupRsingle ty@(ArrayR sht _)) = generateZeroArray ty (zeroForType (shapeType sht))
 emptiesForType (TupRpair t1 t2) = smartApair (emptiesForType t1) (emptiesForType t2)
 
 expGetLam :: TupleIdx t t' -> TypeR t -> Fun aenv () alab args tenv taenv (t -> t')
@@ -1397,9 +1477,9 @@ uncurryFun _ = error "uncurryFun: impossible GADTs"
 oneHotTup :: ArraysR t -> TupleIdx t t' -> A.ArrayVars aenv t -> OpenAcc aenv () () args taenv t' -> OpenAcc aenv () () args taenv t
 oneHotTup _ TIHere _ ex = ex
 oneHotTup ty@(TupRpair ty1 ty2) (TILeft ti) (TupRpair pvars1 pvars2) ex =
-    Apair (nilLabel ty) (oneHotTup ty1 ti pvars1 ex) (arraysSum ty2 pvars2 [])
+    Apair (nilLabel ty) (oneHotTup ty1 ti pvars1 ex) (generateZeroArrays ty2 pvars2)
 oneHotTup ty@(TupRpair ty1 ty2) (TIRight ti) (TupRpair pvars1 pvars2) ex =
-    Apair (nilLabel ty) (arraysSum ty1 pvars1 []) (oneHotTup ty2 ti pvars2 ex)
+    Apair (nilLabel ty) (generateZeroArrays ty1 pvars1) (oneHotTup ty2 ti pvars2 ex)
 oneHotTup _ _ _ _ = error "oneHotTup: impossible GADTs"
 
 -- Remark: this function is uniquely defined by its types (ignoring bottoms). This is nice.
@@ -1536,12 +1616,6 @@ resolveAlabsFun :: HasCallStack
                 -> OpenFun env aenv lab alab' args tenv taenv t
 resolveAlabsFun ctx (Lam lhs fun) = Lam lhs (resolveAlabsFun ctx fun)
 resolveAlabsFun ctx (Body ex) = Body (resolveAlabs ctx ex)
-
--- minShapeE :: ShapeR sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh -> OpenExp env aenv () alab args tenv sh
--- minShapeE sht = tupleZipExp' (shapeType sht) (\(SingleScalarType sty) e1 e2 -> smartMin sty e1 e2) (\_ _ -> False)
-
-maxShapeE :: ShapeR sh -> OpenExp env aenv () alab args tenv taenv sh -> OpenExp env aenv () alab args tenv taenv sh -> OpenExp env aenv () alab args tenv taenv sh
-maxShapeE sht = tupleZipExp' (shapeType sht) (\(SingleScalarType sty) _ _ e1 e2 -> smartMax sty e1 e2) (\_ _ -> False)
 
 sortUniq :: Ord a => [a] -> [a]
 sortUniq = uniq . sort
