@@ -782,13 +782,14 @@ dual ctx vienv cmap = \case
                         ,"  out cmap = " ++ showCMapA ctx' (cmap' `unionCMap` indexingContributions envlab1 idxInsts)
                         ])
         return $ DualResult
-            (ABuilder ctx' (Alet (LeftHandSideSingle (labelType lab)) adjoint .
-                            Alet (LeftHandSideSingle iaarrty)
-                                 (mapSnd
-                                     (ZipWith (nilLabel pairarrty)
-                                              (ELPlain (dualLambda (lookupLambdaLabs ctx'1 fvlabs)))
-                                              (smartAvar (A.Var (labelType lab) ZeroIdx))
-                                              (avars (resolveEnvLabs ctx'1 (findPrimalBMap ctx'1 tmplab)))))))
+            (ABuilder ctx'
+                      (Alet (LeftHandSideSingle (labelType lab)) adjoint .
+                       Alet (LeftHandSideSingle iaarrty)
+                            (mapSnd
+                                (ZipWith (nilLabel pairarrty)
+                                         (ELPlain (dualLambda (lookupLambdaLabs ctx'1 fvlabs)))
+                                         (smartAvar (A.Var (labelType lab) ZeroIdx))
+                                         (avars (resolveEnvLabs ctx'1 (findPrimalBMap ctx'1 tmplab)))))))
             [Some envlab1]  -- should store the IAI array for the indexing contributions
             (cmap' `unionCMap` indexingContributions envlab1 idxInsts)
 
@@ -818,17 +819,18 @@ dual ctx vienv cmap = \case
                         ,"  out cmap = " ++ showCMapA ctx1 (cmap1 `unionCMap` indexingContributions envlab2 idxInsts)
                         ])
         return $ DualResult
-            (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
-                            Alet (LeftHandSidePair (LeftHandSideSingle (atypeOf1 arg1))
-                                                   (LeftHandSideSingle iaarrty))
-                                 (Alet (LeftHandSideSingle pairarrty)
-                                       (ZipWith (nilLabel pairarrty)
-                                                (ELPlain (dualLambda (lookupLambdaLabs ctx'1 fvlabs)))
-                                                (smartAvar (A.Var (labelType lab) ZeroIdx))
-                                                (avars (resolveEnvLabs ctx'1 (findPrimalBMap ctx'1 tmplab))))
-                                       (let var = smartAvar (A.Var pairarrty ZeroIdx)
-                                        in smartApair (mapFst var) (mapSnd var)))
-                            . f1))
+            (ABuilder ctx1
+                      (Alet (LeftHandSideSingle (labelType lab)) adjoint .
+                       Alet (LeftHandSidePair (LeftHandSideSingle (atypeOf1 arg1))
+                                              (LeftHandSideSingle iaarrty))
+                            (Alet (LeftHandSideSingle pairarrty)
+                                  (ZipWith (nilLabel pairarrty)
+                                           (ELPlain (dualLambda (lookupLambdaLabs ctx'1 fvlabs)))
+                                           (smartAvar (A.Var (labelType lab) ZeroIdx))
+                                           (avars (resolveEnvLabs ctx'1 (findPrimalBMap ctx'1 tmplab))))
+                                  (let var = smartAvar (A.Var pairarrty ZeroIdx)
+                                   in smartApair (mapFst var) (mapSnd var)))
+                       . f1))
             (Some envlab2 : stores1)  -- should store the IAI array for the indexing contributions
             (cmap1 `unionCMap` indexingContributions envlab2 idxInsts)
 
@@ -848,6 +850,18 @@ dual ctx vienv cmap = \case
             ctx' = ctx'1 & ctxPushSEnvOnly envlab1
                          & ctxPushSEnvOnly envlab2
                          & ctxPushSEnvOnly envlab3
+            -- TODO: Is is better to do the resize here immediately or to postpone until
+            -- adjoint addition?
+
+            -- cmap'' = addContrib (Local (alabelOf arg1))
+            --                     True
+            --                     (\ctx2 -> reshapesWithZeros (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf1 arg1)))
+            --                                                 (smartAvar (resolveEnvLab ctx2 envlab1)))
+            --        . addContrib (Local (alabelOf arg2))
+            --                     True
+            --                     (\ctx2 -> reshapesWithZeros (resolveEnvLabs ctx2 (findPrimalBMap ctx2 (alabelOf1 arg2)))
+            --                                                 (smartAvar (resolveEnvLab ctx2 envlab2)))
+            --        $ cmap'
             cmap'' = addContrib (Local (alabelOf arg1))
                                 False
                                 (\ctx2 -> smartAvar (resolveEnvLab ctx2 envlab1))
@@ -866,20 +880,21 @@ dual ctx vienv cmap = \case
                         ,"  out cmap = " ++ showCMapA ctx2 (cmap2 `unionCMap` indexingContributions envlab3 idxInsts)
                         ])
         return $ DualResult
-            (ABuilder ctx2 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
-                            Alet (LeftHandSidePair (LeftHandSidePair (LeftHandSideSingle (atypeOf1 arg1))
-                                                                     (LeftHandSideSingle (atypeOf1 arg2)))
-                                                   (LeftHandSideSingle iaarrty))
-                                 (Alet (LeftHandSideSingle pairarrty)
-                                       (ZipWith (nilLabel pairarrty)
-                                                (ELPlain (dualLambda (lookupLambdaLabs ctx'1 fvlabs)))
-                                                (smartAvar (A.Var (labelType lab) ZeroIdx))
-                                                (avars (resolveEnvLabs ctx'1 (findPrimalBMap ctx'1 tmplab))))
-                                       (let var = smartAvar (A.Var pairarrty ZeroIdx)
-                                        in smartApair (smartApair (mapGet (TILeft (TILeft TIHere)) var)
-                                                                  (mapGet (TILeft (TIRight TIHere)) var))
-                                                      (mapSnd var)))
-                            . f1 . f2))
+            (ABuilder ctx2
+                      (Alet (LeftHandSideSingle (labelType lab)) adjoint .
+                       Alet (LeftHandSidePair (LeftHandSidePair (LeftHandSideSingle (atypeOf1 arg1))
+                                                                (LeftHandSideSingle (atypeOf1 arg2)))
+                                              (LeftHandSideSingle iaarrty))
+                            (Alet (LeftHandSideSingle pairarrty)
+                                  (ZipWith (nilLabel pairarrty)
+                                           (ELPlain (dualLambda (lookupLambdaLabs ctx'1 fvlabs)))
+                                           (smartAvar (A.Var (labelType lab) ZeroIdx))
+                                           (avars (resolveEnvLabs ctx'1 (findPrimalBMap ctx'1 tmplab))))
+                                  (let var = smartAvar (A.Var pairarrty ZeroIdx)
+                                   in smartApair (smartApair (mapGet (TILeft (TILeft TIHere)) var)
+                                                             (mapGet (TILeft (TIRight TIHere)) var))
+                                                 (mapSnd var)))
+                       . f1 . f2))
             (Some envlab3 : stores1 ++ stores2)  -- should store the IAI array for the indexing contributions
             (cmap2 `unionCMap` indexingContributions envlab3 idxInsts)
 
@@ -917,35 +932,36 @@ dual ctx vienv cmap = \case
                         ,"  out cmap = " ++ showCMapA ctx1 cmap1
                         ])
         return $ DualResult
-            (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
-                            Alet (LeftHandSideSingle (labelType envlab1))
-                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody)
-                                                       (RelocatableExp $ Const scalarLabel 1.0) of
-                                    ADExp.ReverseADResE lambdalhs' dualbody ->
-                                        -- let sc = init (scanl f x0 a)
-                                        -- in zipWith (*) (zipWith D₂f sc a)
-                                        --                (tail (scanr (*) 1 (zipWith D₁f sc a)))
-                                        let d1f = Lam lambdalhs' (Body (smartFst (smartSnd dualbody)))
-                                            d2f = Lam lambdalhs' (Body (smartSnd (smartSnd dualbody)))
-                                            weaken1 = A.weakenSucc A.weakenId
-                                            (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
-                                            argvar = resolveEnvLab ctx'1 (untupleA (findPrimalBMap ctx'1 (alabelOf arg1)))
-                                            argvar' = weaken weaken1 argvar
-                                            initScan ty dir f e0 a =  -- init (scanl) / tail (scanr)
-                                                let scan'type = let ArrayR (ShapeRsnoc shtype) elttype = ty
-                                                                in TupRpair (TupRsingle ty) (TupRsingle (ArrayR shtype elttype))
-                                                in Aget (nilLabel (TupRsingle ty)) (TILeft TIHere) (Scan' (nilLabel scan'type) dir f e0 a)
-                                        in Alet (LeftHandSideSingle (labelType envlab1))
-                                                (initScan (labelType envlab1) A.LeftToRight
-                                                    (resolveAlabsFun ctx'1 combfun)
-                                                    (resolveAlabs ctx'1 initexp)
-                                                    (smartAvar argvar))
-                                                (smartZipWith (timesLam numType)
-                                                    (smartZipWith d2f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartAvar argvar'))
-                                                    (initScan (atypeOf1 arg1) A.RightToLeft (timesLam numType)
-                                                        (zeroForType' 1 numType)
-                                                        (smartZipWith d1f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartAvar argvar')))))
-                            . f1))
+            (ABuilder ctx1
+                      (Alet (LeftHandSideSingle (labelType lab)) adjoint .
+                       Alet (LeftHandSideSingle (labelType envlab1))
+                            (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody)
+                                                  (RelocatableExp $ Const scalarLabel 1.0) of
+                               ADExp.ReverseADResE lambdalhs' dualbody ->
+                                   -- let sc = init (scanl f x0 a)
+                                   -- in zipWith (*) (zipWith D₂f sc a)
+                                   --                (tail (scanr (*) 1 (zipWith D₁f sc a)))
+                                   let d1f = Lam lambdalhs' (Body (smartFst (smartSnd dualbody)))
+                                       d2f = Lam lambdalhs' (Body (smartSnd (smartSnd dualbody)))
+                                       weaken1 = A.weakenSucc A.weakenId
+                                       (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
+                                       argvar = resolveEnvLab ctx'1 (untupleA (findPrimalBMap ctx'1 (alabelOf arg1)))
+                                       argvar' = weaken weaken1 argvar
+                                       initScan ty dir f e0 a =  -- init (scanl) / tail (scanr)
+                                           let scan'type = let ArrayR (ShapeRsnoc shtype) elttype = ty
+                                                           in TupRpair (TupRsingle ty) (TupRsingle (ArrayR shtype elttype))
+                                           in Aget (nilLabel (TupRsingle ty)) (TILeft TIHere) (Scan' (nilLabel scan'type) dir f e0 a)
+                                   in Alet (LeftHandSideSingle (labelType envlab1))
+                                           (initScan (labelType envlab1) A.LeftToRight
+                                               (resolveAlabsFun ctx'1 combfun)
+                                               (resolveAlabs ctx'1 initexp)
+                                               (smartAvar argvar))
+                                           (smartZipWith (timesLam numType)
+                                               (smartZipWith d2f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartAvar argvar'))
+                                               (initScan (atypeOf1 arg1) A.RightToLeft (timesLam numType)
+                                                   (zeroForType' 1 numType)
+                                                   (smartZipWith d1f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartAvar argvar')))))
+                       . f1))
             stores1  -- don't need to store this node
             cmap1
       | otherwise -> error ("Fold over non-Float array of type " ++ show (labelType lab) ++ " not yet supported for AD")
@@ -981,32 +997,33 @@ dual ctx vienv cmap = \case
                         ,"  out cmap = " ++ showCMapA ctx1 cmap1
                         ])
         return $ DualResult
-            (ABuilder ctx1 (Alet (LeftHandSideSingle (labelType lab)) adjoint .
-                            Alet (LeftHandSideSingle (labelType envlab1))
-                                 (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody)
-                                                       (RelocatableExp $ Const scalarLabel 1.0) of
-                                    ADExp.ReverseADResE lambdalhs' dualbody ->
-                                        -- let sc = init (scanl1 f a)
-                                        -- in zipWith (*) ([1] ++ zipWith D₂f sc (tail l))
-                                        --                (scanr (*) 1 (zipWith D₁f sc (tail l)))
-                                        let d1f = Lam lambdalhs' (Body (smartFst (smartSnd dualbody)))
-                                            d2f = Lam lambdalhs' (Body (smartSnd (smartSnd dualbody)))
-                                            weaken1 = A.weakenSucc A.weakenId
-                                            (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
-                                            argvar = resolveEnvLab ctx'1 (untupleA (findPrimalBMap ctx'1 (alabelOf arg1)))
-                                            argvar' = weaken weaken1 argvar
-                                        in Alet (LeftHandSideSingle (atypeOf1 arg1))
-                                                (smartInit (Scan (nilLabel (atypeOf1 arg1)) A.LeftToRight
-                                                    (resolveAlabsFun ctx'1 combfun)
-                                                    Nothing
-                                                    (smartAvar argvar)))
-                                                (smartZipWith (timesLam numType)
-                                                    (smartCons (zeroForType' 1 numType)
-                                                        (smartZipWith d2f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartTail (smartAvar argvar'))))
-                                                    (Scan (nilLabel (atypeOf1 arg1)) A.RightToLeft (timesLam numType)
-                                                        (Just (zeroForType' 1 numType))
-                                                        (smartZipWith d1f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartTail (smartAvar argvar'))))))
-                            . f1))
+            (ABuilder ctx1
+                      (Alet (LeftHandSideSingle (labelType lab)) adjoint .
+                       Alet (LeftHandSideSingle (labelType envlab1))
+                            (case ADExp.reverseAD lambdalhs (resolveAlabs ctx'1 lambdabody)
+                                                  (RelocatableExp $ Const scalarLabel 1.0) of
+                               ADExp.ReverseADResE lambdalhs' dualbody ->
+                                   -- let sc = init (scanl1 f a)
+                                   -- in zipWith (*) ([1] ++ zipWith D₂f sc (tail l))
+                                   --                (scanr (*) 1 (zipWith D₁f sc (tail l)))
+                                   let d1f = Lam lambdalhs' (Body (smartFst (smartSnd dualbody)))
+                                       d2f = Lam lambdalhs' (Body (smartSnd (smartSnd dualbody)))
+                                       weaken1 = A.weakenSucc A.weakenId
+                                       (d1f', d2f') = (sinkFunAenv weaken1 d1f, sinkFunAenv weaken1 d2f)
+                                       argvar = resolveEnvLab ctx'1 (untupleA (findPrimalBMap ctx'1 (alabelOf arg1)))
+                                       argvar' = weaken weaken1 argvar
+                                   in Alet (LeftHandSideSingle (atypeOf1 arg1))
+                                           (smartInit (Scan (nilLabel (atypeOf1 arg1)) A.LeftToRight
+                                               (resolveAlabsFun ctx'1 combfun)
+                                               Nothing
+                                               (smartAvar argvar)))
+                                           (smartZipWith (timesLam numType)
+                                               (smartCons (zeroForType' 1 numType)
+                                                   (smartZipWith d2f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartTail (smartAvar argvar'))))
+                                               (Scan (nilLabel (atypeOf1 arg1)) A.RightToLeft (timesLam numType)
+                                                   (Just (zeroForType' 1 numType))
+                                                   (smartZipWith d1f' (smartAvar (A.Var (atypeOf1 arg1) ZeroIdx)) (smartTail (smartAvar argvar'))))))
+                       . f1))
             stores1  -- don't need to store this node
             cmap1
       | otherwise -> error ("Fold1 over non-Float array of type " ++ show (labelType lab) ++ " not yet supported for AD")
