@@ -338,6 +338,7 @@ library
         Data.Array.Accelerate.Lifetime
         Data.Array.Accelerate.Pretty
         Data.Array.Accelerate.Pretty.NoTrafo
+        Data.Array.Accelerate.Pretty.ToHaskell
         Data.Array.Accelerate.Representation.Array
         Data.Array.Accelerate.Representation.Elt
         Data.Array.Accelerate.Representation.Shape
@@ -359,6 +360,7 @@ library
         Data.Array.Accelerate.Trafo.Fusion
         Data.Array.Accelerate.Trafo.Sharing
         Data.Array.Accelerate.Trafo.Substitution
+        Data.Array.Accelerate.Trafo.UnDelayed
         Data.Array.Accelerate.Type
 
         -- For testing

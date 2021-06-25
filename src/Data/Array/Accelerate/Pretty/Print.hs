@@ -43,6 +43,7 @@ module Data.Array.Accelerate.Pretty.Print (
   Context(..),
   Keyword(..),
   Operator(..),
+  Fixity(..),
   parensIf, needsParens,
   ansiKeyword,
   shiftwidth,
