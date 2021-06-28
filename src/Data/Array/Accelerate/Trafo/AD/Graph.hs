@@ -9,6 +9,7 @@ module Data.Array.Accelerate.Trafo.AD.Graph (
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import Data.Some
+import qualified Data.Text.Lazy.Builder as TB
 
 import qualified Data.Array.Accelerate.AST as A
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -145,8 +146,8 @@ accAdeps env = \case
 afunAdeps :: AD.TagVal (AD.AAnyPartLabelN Int) aenv -> AD.FunctionLabels AD.NodeLabel ArraysR Int t -> AD.OpenAfun aenv lab Int args taenv t -> [AccDep Int]
 afunAdeps env' (AD.FLLab lab labs) (AD.Alam lhs fun) = afunAdeps (AD.lpushLHS_parts env' lab AD.TIHere lhs) labs fun
 afunAdeps env' AD.FLEnd (AD.Abody acc) = accAdeps env' acc
-afunAdeps _ AD.FLEnd AD.Alam{} = internalError "Too few labels to afunAdeps"
-afunAdeps _ AD.FLLab{} AD.Abody{} = internalError "Too many labels to afunAdeps"
+afunAdeps _ AD.FLEnd AD.Alam{} = internalError (TB.fromString "Too few labels to afunAdeps")
+afunAdeps _ AD.FLLab{} AD.Abody{} = internalError (TB.fromString "Too many labels to afunAdeps")
 
 -- Fold over all subexpressions, but skip functions contained in an Ecustom.
 expFoldNoCustom :: Monoid s

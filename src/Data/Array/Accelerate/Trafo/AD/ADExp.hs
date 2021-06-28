@@ -24,6 +24,7 @@ import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
 import Data.Maybe (fromMaybe)
 import Data.Some
+import qualified Data.Text.Lazy.Builder as TB
 import Data.Type.Equality
 import GHC.Stack (HasCallStack)
 
@@ -221,8 +222,8 @@ inlineLabelsPrimalF ctx (FLLab lab labs) (Lam lhs fun) = do
     (Exists lhs', envlabs) <- genSingleIds (lhsToTupR lhs)
     Lam lhs' <$> inlineLabelsPrimalF (ctxPush lhs' (fmapLabel P lab) envlabs ctx) labs fun
 inlineLabelsPrimalF ctx FLEnd (Body expr) = Body <$> inlineLabelsPrimal ctx expr
-inlineLabelsPrimalF _ FLEnd Lam{} = internalError "Not enough labels given to inlineLabelsPrimalF"
-inlineLabelsPrimalF _ FLLab{} Body{} = internalError "Too many labels given to inlineLabelsPrimalF?"
+inlineLabelsPrimalF _ FLEnd Lam{} = internalError (TB.fromString "Not enough labels given to inlineLabelsPrimalF")
+inlineLabelsPrimalF _ FLLab{} Body{} = internalError (TB.fromString "Too many labels given to inlineLabelsPrimalF?")
 
 data RelocatableExp tenv taenv t =
     RelocatableExp (forall env aenv alab args.
@@ -319,7 +320,7 @@ splitLambdaAD (Lam paramlhs (Body expr))
           (etypeOf idxadjExpr)
           idxadjInsts
 splitLambdaAD _ =
-    internalError "splitLambdaAD passed function with more than 1 argument"
+    internalError (TB.fromString "splitLambdaAD passed function with more than 1 argument")
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
@@ -464,8 +465,8 @@ enlabelFun :: FunctionLabels NodeLabel TypeR Int t
            -> IdGen (OpenFun env aenv Int alab args tenv taenv t)
 enlabelFun (FLLab lab labs) env (Lam lhs fun) = Lam lhs <$> enlabelFun labs (lpushLHS_parts env lab TIHere lhs) fun
 enlabelFun FLEnd env (Body expr) = Body <$> enlabelExp env expr
-enlabelFun FLEnd _ Lam{} = internalError "Not enough labels given to enlabelFun"
-enlabelFun FLLab{} _ Body{} = internalError "Too many labels given to enlabelFun?"
+enlabelFun FLEnd _ Lam{} = internalError (TB.fromString "Not enough labels given to enlabelFun")
+enlabelFun FLLab{} _ Body{} = internalError (TB.fromString "Too many labels given to enlabelFun?")
 
 data EBuilder env aenv alab args tenv taenv =
     forall env'.

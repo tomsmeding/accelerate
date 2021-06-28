@@ -15,6 +15,7 @@ module Data.Array.Accelerate.Trafo.AD.Translate (
 import Data.List (sort, sortBy)
 import Data.Maybe (fromJust)
 import Data.Ord (comparing)
+import qualified Data.Text.Lazy.Builder as TB
 
 import qualified Data.Array.Accelerate.AST as A
 import qualified Data.Array.Accelerate.AST.Environment as A
@@ -169,7 +170,7 @@ translateAccInPVal vt pv prf (A.OpenAcc expr) = case expr of
       | PushedLHS lhs' pv' prf' <- pvalPushLHS' lhs pv prf
       -> D.Alet lhs' (trA def) (translateAccInPVal vt pv' prf' body)
     A.Avar var                -> either D.smartAfreeVar D.smartAvar (vt prf pv var)
-    _ -> internalError ("AD.translateAccInPVal: Cannot perform AD on Acc node <" ++ A.showPreAccOp expr ++ ">")
+    _ -> internalError (TB.fromString "AD.translateAccInPVal: Cannot perform AD on Acc node <" <> A.showPreAccOp expr <> TB.fromString ">")
   where
     trE :: A.OpenExp env aenv t' -> D.OpenExp env aenv2 () () args' env taenv t'
     trE = translateExp' (vt prf pv)
@@ -256,7 +257,7 @@ translateExpInPVal vt avt pv prf expr = case expr of
     A.EcustomDeriv t f g e ->
       let t' = A.expType e
       in D.Ecustom (nilLabel t) (nilLabel t') (translateFunInPVal avt pv f) (nilLabel t') (nilLabel t) (translateFunInPVal avt pv (curryFun g)) (translateExpInPVal vt avt pv prf e)
-    _ -> internalError ("AD.translateExp: Cannot perform AD on Exp node <" ++ A.showExpOp expr ++ ">")
+    _ -> internalError (TB.fromString "AD.translateExp: Cannot perform AD on Exp node <" <> A.showExpOp expr <> TB.fromString ">")
 
 data UntranslateResultE a env aenv t =
     forall env'. UntranslateResultE (A.ELeftHandSide a env env') (A.OpenExp env' aenv t)
@@ -286,16 +287,16 @@ untranslateLHSboundExp toplhs topexpr topaweak topweak
         D.Cond _ e1 e2 e3 -> A.Cond (go aw w pv e1) (go aw w pv e2) (go aw w pv e3)
         D.Shape _ (D.ARVar avar) -> A.Shape avar
         D.Shape _ (D.ARFree avar) -> A.Shape (A.weaken aw avar)
-        D.Shape _ (D.ARLab _) -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Shape) in array var position"
+        D.Shape _ (D.ARLab _) -> internalError (TB.fromString "AD.untranslateLHSboundExp: Cannot translate label (Shape) in array var position")
         D.Index _ (D.ARVar avar) _ e -> A.Index avar (go aw w pv e)
         D.Index _ (D.ARFree avar) _ e -> A.Index (A.weaken aw avar) (go aw w pv e)
-        D.Index _ (D.ARLab _) _ _ -> internalError "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position"
+        D.Index _ (D.ARLab _) _ _ -> internalError (TB.fromString "AD.untranslateLHSboundExp: Cannot translate label (Index) in array var position")
         D.ShapeSize _ sht e -> A.ShapeSize sht (go aw w pv e)
         D.Get _ path e
           | D.LetBoundVars lhs vars <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go aw w pv e) (a_evars vars)
         D.Undef lab -> A.Undef (labelType lab)
-        D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!"
+        D.Arg _ _ _ -> internalError (TB.fromString "AD.untranslateLHSboundExp: Unexpected Arg in untranslate!")
         D.Ecustom lab _ f _ _ g e -> A.EcustomDeriv (labelType lab) (goF aw w pv f) (uncurryFun (goF aw w pv g)) (go aw w pv e)
 
     goF :: taenv A.:> aenv -> tenv A.:> env2 -> PartialVal ScalarType topenv env2 -> D.OpenFun env aenv lab alab args tenv taenv t -> A.OpenFun env2 aenv t
@@ -321,7 +322,7 @@ untranslateLHSboundExpA toplhs topexpr arrweak arrpv
         D.PrimConst _ c -> A.PrimConst c
         -- TODO: Don't use a fallible call here, perhaps something with the double-tracking of PartialVal' ?
         D.Var _ var _ -> A.Evar (fromJust (checkLocalPFallible matchScalarType var pv))
-        D.FreeVar _ _ -> internalError "AD.untranslateLHSboundExpA: Unexpected free expression variable in array code"
+        D.FreeVar _ _ -> internalError (TB.fromString "AD.untranslateLHSboundExpA: Unexpected free expression variable in array code")
         D.Let lhs def body
           | A.Exists lhs' <- A.rebuildLHS lhs
           -> A.Let lhs' (go aw pv def) (go aw (pvalPushLHS lhs' pv) body)
@@ -330,16 +331,16 @@ untranslateLHSboundExpA toplhs topexpr arrweak arrpv
         D.Cond _ e1 e2 e3 -> A.Cond (go aw pv e1) (go aw pv e2) (go aw pv e3)
         D.Shape _ (D.ARVar avar) -> A.Shape (fromJust (checkLocalPFallible matchArrayR avar arrpv))
         D.Shape _ (D.ARFree avar) -> A.Shape (A.weaken aw avar)
-        D.Shape _ (D.ARLab _) -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position"
+        D.Shape _ (D.ARLab _) -> internalError (TB.fromString "AD.untranslateLHSboundExpA: Cannot translate label (Shape) in array var position")
         D.Index _ (D.ARVar avar) _ e -> A.Index (fromJust (checkLocalPFallible matchArrayR avar arrpv)) (go aw pv e)
         D.Index _ (D.ARFree avar) _ e -> A.Index (A.weaken aw avar) (go aw pv e)
-        D.Index _ (D.ARLab _) _ _ -> internalError "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position"
+        D.Index _ (D.ARLab _) _ _ -> internalError (TB.fromString "AD.untranslateLHSboundExpA: Cannot translate label (Index) in array var position")
         D.ShapeSize _ sht e -> A.ShapeSize sht (go aw pv e)
         D.Get _ path e
           | D.LetBoundVars lhs vars <- euntranslateGet (D.etypeOf e) path
           -> A.Let lhs (go aw pv e) (a_evars vars)
         D.Undef lab -> A.Undef (labelType lab)
-        D.Arg _ _ _ -> internalError "AD.untranslateLHSboundExpA: Unexpected Arg in untranslate!"
+        D.Arg _ _ _ -> internalError (TB.fromString "AD.untranslateLHSboundExpA: Unexpected Arg in untranslate!")
         D.Ecustom lab _ f _ _ g e -> A.EcustomDeriv (labelType lab) (goF aw pv f) (uncurryFun (goF aw pv g)) (go aw pv e)
 
     goF :: taenv A.:> aenv2 -> PartialVal ScalarType topenv env2 -> D.OpenFun env' aenv lab alab args tenv taenv t' -> A.OpenFun env2 aenv2 t'
@@ -447,7 +448,7 @@ untranslateLHSboundAcc toplhs topexpr topweak
           | D.LetBoundVars lhs vars <- auntranslateGet (D.atypeOf e) path
           -> A.Alet lhs (go w pv e) (a_avars vars)
         D.Acustom lab _ f _ _ g e -> A.AcustomDeriv (labelType lab) (goAF w pv f) (uncurryAfun (goAF w pv g)) (go w pv e)
-        D.Aarg _ _ _ -> internalError "AD.untranslateLHSboundAcc: Unexpected Arg in untranslate!"
+        D.Aarg _ _ _ -> internalError (TB.fromString "AD.untranslateLHSboundAcc: Unexpected Arg in untranslate!")
         D.Map _ _ _ -> error "Unexpected Map shape in untranslate"
         D.ZipWith _ _ _ _ -> error "Unexpected ZipWith shape in untranslate"
         D.Sum _ _ -> error "Unexpected Sum shape in untranslate"

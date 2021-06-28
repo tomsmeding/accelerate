@@ -40,6 +40,7 @@ import Data.Array.Accelerate.Pretty.Print                           hiding ( Key
 import Data.Array.Accelerate.Trafo.Delayed
 
 import Data.Maybe
+import qualified Data.Text.Lazy.Builder as TB
 import Data.Text.Prettyprint.Doc
 import Data.Text.Prettyprint.Doc.Render.String
 import Data.Text.Prettyprint.Doc.Render.Terminal
@@ -198,7 +199,7 @@ poorShowP env@(PSE envnames seed) = \pacc -> case pacc of
         (PSR seed2, a2S) = poorShow' (PSE envnames seed1) a2
     in (PSR seed2, "(zipWith _ " ++ a1S ++ " " ++ a2S ++ ")")
 
-  _ -> (PSR seed, "(" ++ showPreAccOp pacc ++ "??)")
+  _ -> (PSR seed, "(" ++ T.unpack (TB.toLazyText (showPreAccOp pacc)) ++ "??)")
 
 poorShowLHS :: PoorShowEnv -> ALeftHandSide t aenv aenv' -> (PoorShowEnv, String)
 poorShowLHS env@(PSE envnames seed) = \lhs -> case lhs of

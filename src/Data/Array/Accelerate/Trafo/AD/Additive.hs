@@ -3,6 +3,8 @@
 {-# LANGUAGE RankNTypes #-}
 module Data.Array.Accelerate.Trafo.AD.Additive where
 
+import qualified Data.Text.Lazy.Builder as TB
+
 import qualified Data.Array.Accelerate.AST as A
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Type
@@ -69,10 +71,10 @@ instance IsAdditive SingleType where
 
 instance IsAdditive ScalarType where
     zeroForType' z (SingleScalarType t) = zeroForType' z t
-    zeroForType' _ (VectorScalarType _) = internalError "AD: Can't handle vectors yet"
+    zeroForType' _ (VectorScalarType _) = internalError (TB.fromString "AD: Can't handle vectors yet")
 
     expPlus (SingleScalarType ty) e1 e2 = expPlus ty e1 e2
-    expPlus (VectorScalarType _) _ _ = internalError "AD: Can't handle vectors yet"
+    expPlus (VectorScalarType _) _ _ = internalError (TB.fromString "AD: Can't handle vectors yet")
 
 instance IsAdditive TypeR where
     zeroForType' _ TupRunit = Nil magicLabel

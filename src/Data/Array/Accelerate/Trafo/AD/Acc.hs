@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -7,7 +8,7 @@
 {-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.AD.Acc (
     module Data.Array.Accelerate.Trafo.AD.Acc,
-    Idx(..), idxToInt
+    Idx, pattern ZeroIdx, pattern SuccIdx, idxToInt
 ) where
 
 import Data.Functor.Identity

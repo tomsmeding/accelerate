@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -10,7 +11,7 @@
 {-# LANGUAGE ViewPatterns #-}
 module Data.Array.Accelerate.Trafo.AD.Exp (
     module Data.Array.Accelerate.Trafo.AD.Exp,
-    Idx(..), idxToInt
+    Idx, pattern ZeroIdx, pattern SuccIdx, idxToInt
 ) where
 
 import qualified Data.Dependent.Map as DMap

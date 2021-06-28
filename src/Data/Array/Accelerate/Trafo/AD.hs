@@ -5,6 +5,7 @@ module Data.Array.Accelerate.Trafo.AD (
   convertAccEntry, convertAfunEntry
 ) where
 
+import qualified Data.Text.Lazy.Builder as TB
 import System.IO.Unsafe (unsafePerformIO)
 
 import Data.Array.Accelerate.AST
@@ -93,7 +94,7 @@ convertExp (Evjp _ _ (convertFun -> Lam lhs (Body body)) (convertExp -> arg) (co
     withAlabType :: AD.OpenExp env aenv lab alab args tenv taenv t -> alab -> AD.OpenExp env aenv lab alab args tenv taenv t
     withAlabType = const
 convertExp (Evjp _ _ _ _ _) =
-  internalError ("convertExp: Invalid GADTs in Evjp")
+  internalError (TB.fromString "convertExp: Invalid GADTs in Evjp")
 convertExp (EcustomDeriv ty fun der a) = EcustomDeriv ty (convertFun fun) (convertFun der) (convertExp a)
 
 convertFun :: OpenFun env aenv t -> OpenFun env aenv t
@@ -169,7 +170,7 @@ convertPAcc (Avjp _ _ (convertAfun -> Alam lhs (Abody body)) (convertAcc -> arg)
   -- Thus we construct the result.
   = Alet adjlhs adj $ OpenAcc $ Alet lhs3 (weaken (weakenWithLHS adjlhs) arg) body''
 convertPAcc (Avjp _ _ _ _ _) =
-  internalError ("convertPAcc: Invalid GADTs in Avjp")
+  internalError (TB.fromString "convertPAcc: Invalid GADTs in Avjp")
 -- Eliminate custom derivative nodes outside an Avjp subtree
 convertPAcc (AcustomDeriv t fun der a) = AcustomDeriv t (convertAfun fun) (convertAfun der) (convertAcc a)
 
@@ -192,8 +193,8 @@ elimCustomsE :: OpenExp env aenv t -> OpenExp env aenv t
 elimCustomsE (EcustomDeriv _ (Lam lhs (Body body)) _ a) =
   elimCustomsE (Let lhs a body)
 elimCustomsE (EcustomDeriv _ _ _ _) =
-  internalError ("elimCustomsE: Invalid GADTs in EcustomDeriv")
-elimCustomsE (Evjp _ _ _ _ _) = internalError "Unexpected Evjp in elimCustomsE"
+  internalError (TB.fromString "elimCustomsE: Invalid GADTs in EcustomDeriv")
+elimCustomsE (Evjp _ _ _ _ _) = internalError (TB.fromString "Unexpected Evjp in elimCustomsE")
 -- Otherwise we recurse
 elimCustomsE (Const ty con) = Const ty con
 elimCustomsE (PrimApp f e) = PrimApp f (elimCustomsE e)
@@ -231,8 +232,8 @@ elimCustomsPAcc :: PreOpenAcc OpenAcc aenv t -> PreOpenAcc OpenAcc aenv t
 elimCustomsPAcc (AcustomDeriv _ (Alam lhs (Abody body)) _ a) =
   elimCustomsPAcc (Alet lhs a body)
 elimCustomsPAcc (AcustomDeriv _ _ _ _) =
-  internalError ("elimCustomsPAcc: Invalid GADTs in AcustomDeriv")
-elimCustomsPAcc (Avjp _ _ _ _ _) = internalError "Unexpected Avjp in elimCustomsPAcc"
+  internalError (TB.fromString "elimCustomsPAcc: Invalid GADTs in AcustomDeriv")
+elimCustomsPAcc (Avjp _ _ _ _ _) = internalError (TB.fromString "Unexpected Avjp in elimCustomsPAcc")
 -- Otherwise we recurse
 elimCustomsPAcc (Alet lhs a b) = Alet lhs (elimCustomsA a) (elimCustomsA b)
 elimCustomsPAcc (Avar a) = Avar a

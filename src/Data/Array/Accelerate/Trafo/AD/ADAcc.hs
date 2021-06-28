@@ -18,10 +18,11 @@ import qualified Data.Dependent.Map as DMap
 import Data.Dependent.Map (DMap)
 import Data.Dependent.Sum
 import Data.Either (partitionEithers)
+import Data.GADT.Compare (GCompare)
 import Data.List (sort, intercalate)
 import Data.Maybe (fromMaybe)
 import Data.Some (Some, pattern Some)
-import Data.GADT.Compare (GCompare)
+import qualified Data.Text.Lazy.Builder as TB
 
 import qualified Data.Array.Accelerate.AST as A
 import Data.Array.Accelerate.AST (ALeftHandSide)
@@ -150,8 +151,8 @@ inlineLabelsPrimalF ctx (FLLab lab labs) (Alam lhs fun) = do
     (Exists lhs', envlabs) <- genSingleIds (lhsToTupR lhs)
     Alam lhs' <$> inlineLabelsPrimalF (ctxPush lhs' (fmapLabel P lab) envlabs ctx) labs fun
 inlineLabelsPrimalF ctx FLEnd (Abody expr) = Abody <$> inlineLabelsPrimal ctx expr
-inlineLabelsPrimalF _ FLEnd Alam{} = internalError "Not enough labels given to inlineLabelsPrimalF"
-inlineLabelsPrimalF _ FLLab{} Abody{} = internalError "Too many labels given to inlineLabelsPrimalF?"
+inlineLabelsPrimalF _ FLEnd Alam{} = internalError (TB.fromString "Not enough labels given to inlineLabelsPrimalF")
+inlineLabelsPrimalF _ FLLab{} Abody{} = internalError (TB.fromString "Too many labels given to inlineLabelsPrimalF?")
 
 data ReverseADResA alab tenv taenv t t' =
     forall aenv.
@@ -319,8 +320,8 @@ enlabelAfun :: Bool
             -> IdGen (OpenAfun aenv () Int args taenv t)
 enlabelAfun spl (FLLab lab labs) env (Alam lhs fun) = Alam lhs <$> enlabelAfun spl labs (lpushLHS_parts env lab TIHere lhs) fun
 enlabelAfun spl FLEnd env (Abody expr) = Abody <$> enlabelAcc spl env expr
-enlabelAfun _ FLEnd _ Alam{} = internalError "Not enough labels given to enlabelAfun"
-enlabelAfun _ FLLab{} _ Abody{} = internalError "Too many labels given to enlabelAfun?"
+enlabelAfun _ FLEnd _ Alam{} = internalError (TB.fromString "Not enough labels given to enlabelAfun")
+enlabelAfun _ FLLab{} _ Abody{} = internalError (TB.fromString "Too many labels given to enlabelAfun?")
 
 data ABuilder aenv alab args taenv =
     forall aenv'.

@@ -16,6 +16,7 @@ module Data.Array.Accelerate.Pretty.ToHaskell (
 
 import Control.Monad.State.Strict
 import Data.List (intercalate)
+import qualified Data.Text.Lazy.Builder as TB
 
 import Data.Array.Accelerate.AST
 import Data.Array.Accelerate.AST.LeftHandSide
@@ -166,9 +167,9 @@ layoutA p aenv = \case
   Anil -> parenthesise (p > 10) <$> do
     return (string "use ()")
 
-  Apply _ _ _ -> internalError "showsAsHaskell: Don't know what to do with Apply"
+  Apply _ _ _ -> internalError (TB.fromString "showsAsHaskell: Don't know what to do with Apply")
 
-  Aforeign _ _ _ _ -> internalError "showsAsHaskell: Foreign calls unsupported"
+  Aforeign _ _ _ _ -> internalError (TB.fromString "showsAsHaskell: Foreign calls unsupported")
 
   Acond e a1 a2 ->
     parenthesise (p > 10) <$>
@@ -260,7 +261,7 @@ layoutA p aenv = \case
       hang "fold1" <$>> [layoutEF 11 FNormal FNormal aenv Top ef
                         ,layoutAO 11 aenv a1]
 
-  FoldSeg _ _ _ _ _ -> internalError "I'm lazy"
+  FoldSeg _ _ _ _ _ -> internalError (TB.fromString "I'm lazy")
 
   Scan dir ef me0 a1 ->
     let name = "scan" ++ (case dir of LeftToRight -> "l"
@@ -295,8 +296,8 @@ layoutA p aenv = \case
                               ,layoutEF 11 FIndex FIndex aenv Top ef
                               ,layoutAO 11 aenv a1]
 
-  Stencil _ _ _ _ _ -> internalError "I'm lazy"
-  Stencil2 _ _ _ _ _ _ _ _ -> internalError "I'm lazy"
+  Stencil _ _ _ _ _ -> internalError (TB.fromString "I'm lazy")
+  Stencil2 _ _ _ _ _ _ _ _ -> internalError (TB.fromString "I'm lazy")
 
   Avjp _ _ af a1 a2 ->
     parenthesise (p > 10) <$>
@@ -326,7 +327,7 @@ layoutE p form aenv env = \case
     toForm p form (TupRsingle ty) $ \_ ->
       return (string (layoutVar "x" env var))
 
-  Foreign _ _ _ _ -> internalError "showsAsHaskell: Foreign calls unsupported"
+  Foreign _ _ _ _ -> internalError (TB.fromString "showsAsHaskell: Foreign calls unsupported")
 
   pair@(Pair a1 a2) ->
     case form of
@@ -377,10 +378,10 @@ layoutE p form aenv env = \case
       FNormal -> parenthesise (p > 10) <$> return (string "constant ()")
       FIndex -> return (string "Z_")
       FIndexArg -> parenthesise (p > 10) <$> return (string "constant All")
-      FMaybe _ -> internalError "showsAsHaskell: Nil doesn't make sense as a Maybe"
+      FMaybe _ -> internalError (TB.fromString "showsAsHaskell: Nil doesn't make sense as a Maybe")
 
-  VecPack _ _ -> internalError "I'm lazy"
-  VecUnpack _ _ -> internalError "I'm lazy"
+  VecPack _ _ -> internalError (TB.fromString "I'm lazy")
+  VecUnpack _ _ -> internalError (TB.fromString "I'm lazy")
 
   expr@(IndexSlice _ a1 a2) ->
     fromIndexToForm p form (expType expr) $ \p' ->
@@ -394,9 +395,9 @@ layoutE p form aenv env = \case
         hang "indexFull" <$>> [layoutE 11 FIndex aenv env a1
                               ,layoutE 11 FIndex aenv env a2]
 
-  ToIndex _ _ _ -> internalError "I'm lazy"
-  FromIndex _ _ _ -> internalError "I'm lazy"
-  Case _ _ _ -> internalError "I'm lazy"
+  ToIndex _ _ _ -> internalError (TB.fromString "I'm lazy")
+  FromIndex _ _ _ -> internalError (TB.fromString "I'm lazy")
+  Case _ _ _ -> internalError (TB.fromString "I'm lazy")
 
   Cond e a1 a2 ->
     parenthesise (p > 10) <$>
@@ -530,7 +531,7 @@ layoutE p form aenv env = \case
       return $ parenthesise (p' > 0) $
         string ("undef :: " ++ showExpTy (TupRsingle ty))
 
-  Coerce _ _ _ -> internalError "I'm lazy"
+  Coerce _ _ _ -> internalError (TB.fromString "I'm lazy")
 
 fromIndexToForm :: Int -> Form -> TypeR a -> (Int -> IdGen Layout) -> IdGen Layout
 fromIndexToForm p FIndex _ layoutf = layoutf p
@@ -562,7 +563,7 @@ toForm p FIndex ty layoutf =
                  (string ("in " ++ tupstr 'I'))
 toForm p FIndexArg ty layoutf = toForm p FNormal ty layoutf
 toForm _ (FMaybe _) _ layoutf =
-  internalError ("I'm lazy: " ++ show (evalIdGen (layoutf 11)))
+  internalError (TB.fromString $ "I'm lazy: " ++ show (evalIdGen (layoutf 11)))
 
 nestedPairs :: Int -> (Int -> String) -> [String] -> ShowS
 nestedPairs topp nilcore topnames = go topp (reverse topnames)
@@ -599,7 +600,7 @@ layoutEF p formIn formOut aenv env fun@Lam{} = do
         FNormal   -> layoutLHS 11 IdTypeE env' lhs
         FIndexArg -> layoutLHS 11 IdTypeE env' lhs
         FIndex -> layoutLHSIndex 11 IdTypeE env' lhs
-        FMaybe _ -> internalError "showsAsHaskell: Maybe arguments unsupported"
+        FMaybe _ -> internalError (TB.fromString "showsAsHaskell: Maybe arguments unsupported")
       (rest, body) <- go aenv' env'' fun'
       return (lhsString "" : rest, body)
 
@@ -783,7 +784,7 @@ scalarHasShow (SingleScalarType (NumSingleType t)) = goN t
     goF TypeFloat = Has
     goF TypeDouble = Has
 scalarHasShow (VectorScalarType _) =
-  internalError "showsAsHaskell: Can't handle vector types"
+  internalError (TB.fromString "showsAsHaskell: Can't handle vector types")
 
 isTwoArgOp :: PrimFun a -> Bool
 isTwoArgOp PrimAdd{}                = True
