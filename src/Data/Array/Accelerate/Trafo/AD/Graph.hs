@@ -12,14 +12,18 @@ import Data.Some
 import qualified Data.Text.Lazy.Builder as TB
 
 import qualified Data.Array.Accelerate.AST as A
+import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.Error
 import qualified Data.Array.Accelerate.AST.Var as A
 import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Representation.Type
 import qualified Data.Array.Accelerate.Trafo.AD.Acc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.ADAcc as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Common as AD
 import qualified Data.Array.Accelerate.Trafo.AD.Exp as AD
+import qualified Data.Array.Accelerate.Trafo.AD.Sink as AD
+import Data.Array.Accelerate.Trafo.Substitution (rebuildLHS)
 
 
 newtype Graph = Graph (Map Int (String, [(Int, String)]))
@@ -46,9 +50,19 @@ writeGraphToFile fp lhs a =
         | (i, (_, edges)) <- Map.assocs graph
         , (j, label) <- edges]
 
+splitLHSlet :: A.ALeftHandSide t aenv aenv' -> TupR (AD.OpenAcc aenv () () args taenv) t -> AD.OpenAcc aenv' () () args taenv a -> AD.OpenAcc aenv () () args taenv a
+splitLHSlet (LeftHandSideWildcard _) _ = id
+splitLHSlet (LeftHandSideSingle ty) (TupRsingle ex) = AD.Alet (LeftHandSideSingle ty) ex
+splitLHSlet (LeftHandSidePair lhs1 lhs2) (TupRpair exs1 exs2)
+  | Exists lhs2' <- rebuildLHS lhs2
+  = splitLHSlet lhs1 exs1
+    . splitLHSlet lhs2' (AD.fmapTupR (AD.sinkAcc (weakenWithLHS lhs1)) exs2)
+    . AD.sinkAcc (sinkWithLHS lhs2 lhs2' weakenId)
+splitLHSlet _ _ = error "Invalid GADTs"
+
 accToGraph :: A.ALeftHandSide args () aenv -> AD.OpenAcc aenv () () args' taenv t -> Graph
 accToGraph lhs acc =
-    let (_, labeled) = AD.evalIdGen $ AD.enlabelAccToplevel False lhs (AD.argumentTuple (lhsToTupR lhs)) (AD.generaliseArgs acc)
+    let labeled = AD.evalIdGen $ AD.enlabelAcc False AD.TEmpty (splitLHSlet lhs (AD.argumentTuple' (lhsToTupR lhs)) (AD.generaliseArgs acc))
     in go AD.TEmpty labeled
   where
     -- Combine the graph elements for this particular element with the

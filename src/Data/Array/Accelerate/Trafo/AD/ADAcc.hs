@@ -10,7 +10,7 @@
 {-# LANGUAGE TypeOperators #-}
 module Data.Array.Accelerate.Trafo.AD.ADAcc (
   reverseADA, ReverseADResA(..),
-  generaliseArgs, enlabelAccToplevel, argumentTuple,
+  generaliseArgs, enlabelAcc, argumentTuple',
 ) where
 
 import Data.Function ((&))
@@ -188,10 +188,12 @@ reverseADA paramlhs expr adjfreevars = evalIdGen $ do
              . dualBuilder
              $ output))
 
+argumentTuple' :: ArraysR args -> TupR (OpenAcc aenv () () args taenv) args
+argumentTuple' argsty = zipWithTupR (\ty@ArrayR{} tidx -> Aarg (nilLabel ty) argsty tidx)
+                                        argsty (tupleIndices argsty)
+
 argumentTuple :: ArraysR args -> OpenAcc aenv () () args taenv args
-argumentTuple argsty = untupleAccs
-                           (zipWithTupR (\ty@ArrayR{} tidx -> Aarg (nilLabel ty) argsty tidx)
-                                        argsty (tupleIndices argsty))
+argumentTuple = untupleAccs . argumentTuple'
 
 -- Produces an expression that can be put under a LHS that binds exactly the
 -- 'args' of the original expression.
