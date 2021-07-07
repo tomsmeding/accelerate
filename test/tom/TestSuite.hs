@@ -26,6 +26,7 @@ import qualified Data.Array.Accelerate as A
 import qualified Data.Array.Accelerate.Data.Bits as A
 import qualified Data.Array.Accelerate.Interpreter as I
 import qualified Data.Array.Accelerate.ForwardAD as AD
+import qualified Data.Array.Accelerate.ForwardAD.Gradient as AD
 import qualified Data.Array.Accelerate.ReverseAD as AD
 
 import qualified ADHelp
@@ -79,33 +80,35 @@ gradientFwdAD :: (HasCallStack, Shape sh)
               -> (forall a. AD.ADFClasses a => A.Acc (A.Array sh a) -> A.Acc (A.Scalar a))
               -> A.Array sh Float
 gradientFwdAD input func =
-  A.fromList (A.arrayShape input)
-             [AD.derivativePlain $ (`A.linearIndexArray` 0) $ I.run1 func $
-                 A.fromFunction (A.arrayShape input)
-                                (\j -> let x = input `A.indexArray` j
-                                       in if j == idx then AD.variablePlain x
-                                                      else AD.constantPlain x)
-             | idx <- enumShape (A.arrayShape input)]
+  let dict1 = AD.arrayDict AD.floatDict
+      dict2 = AD.scalarDict AD.floatDict
+      func' = snd . I.run1 (AD.forwardADA func)
+  in AD.forwardGradient dict1 dict2 func' input (A.fromList A.Z [1])
 
 gradientFwdAD2 :: (Shape sh1, Shape sh2)
                => (A.Array sh1 Float, A.Array sh2 Float)
                -> (forall a. AD.ADFClasses a => A.Acc (A.Array sh1 a) -> A.Acc (A.Array sh2 a) -> A.Acc (A.Scalar a))
                -> (A.Array sh1 Float, A.Array sh2 Float)
-gradientFwdAD2 (input1, input2) func =
-  let grad =
-        [AD.derivativePlain $ (`A.linearIndexArray` 0) $ I.runN func
-            (A.fromFunction (A.arrayShape input1)
-                            (\j -> let x = input1 `A.indexArray` j
-                                   in if Left j == eidx then AD.variablePlain x
-                                                        else AD.constantPlain x))
-            (A.fromFunction (A.arrayShape input2)
-                            (\j -> let x = input2 `A.indexArray` j
-                                   in if Right j == eidx then AD.variablePlain x
-                                                         else AD.constantPlain x))
-        | eidx <- disjointUnion (enumShape (A.arrayShape input1))
-                                (enumShape (A.arrayShape input2))]
-      (pre, post) = splitAt (A.arraySize input1) grad
-  in (A.fromList (A.arrayShape input1) pre, A.fromList (A.arrayShape input2) post)
+gradientFwdAD2 input func =
+  let dict1 = AD.pairDict (AD.arrayDict AD.floatDict) (AD.arrayDict AD.floatDict)
+      dict2 = AD.scalarDict AD.floatDict
+      func' = snd . I.run1 (AD.forwardADA ( func))
+  in AD.forwardGradient dict1 dict2 undefined input (A.fromList A.Z [1])
+-- gradientFwdAD2 (input1, input2) func =
+--   let grad =
+--         [AD.derivativePlain $ (`A.linearIndexArray` 0) $ I.runN func
+--             (A.fromFunction (A.arrayShape input1)
+--                             (\j -> let x = input1 `A.indexArray` j
+--                                    in if Left j == eidx then AD.variablePlain x
+--                                                         else AD.constantPlain x))
+--             (A.fromFunction (A.arrayShape input2)
+--                             (\j -> let x = input2 `A.indexArray` j
+--                                    in if Right j == eidx then AD.variablePlain x
+--                                                          else AD.constantPlain x))
+--         | eidx <- disjointUnion (enumShape (A.arrayShape input1))
+--                                 (enumShape (A.arrayShape input2))]
+--       (pre, post) = splitAt (A.arraySize input1) grad
+--   in (A.fromList (A.arrayShape input1) pre, A.fromList (A.arrayShape input2) post)
 
 
 findiff :: (HasCallStack, ADHelp.AFinDiff a) => (A.Acc a -> A.Acc (A.Scalar Float)) -> a -> ((String, Float), a)

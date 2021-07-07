@@ -301,7 +301,6 @@ library
   exposed-modules:
         -- The core language and reference implementation
         Data.Array.Accelerate
-        Data.Array.Accelerate.ForwardAD
         Data.Array.Accelerate.ReverseAD
         Data.Array.Accelerate.Interpreter
 
@@ -316,6 +315,8 @@ library
         Data.Array.Accelerate.Data.Monoid
         Data.Array.Accelerate.Data.Ratio
         Data.Array.Accelerate.Debug.Trace
+        Data.Array.Accelerate.ForwardAD
+        Data.Array.Accelerate.ForwardAD.Gradient
         Data.Array.Accelerate.Unsafe
 
         -- For backend development (hidden)

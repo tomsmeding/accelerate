@@ -11,6 +11,11 @@ code. Use the @Plain@-suffixed functions for that.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Array.Accelerate.ForwardAD (
     -- * Dual numbers
     ADF, -- pattern ADF,
@@ -26,8 +31,14 @@ module Data.Array.Accelerate.ForwardAD (
     gradientA_FAD_Vector
 ) where
 
+import Data.Proxy
+
 import Data.Array.Accelerate (Generic, Elt, Exp, Acc, Array, Vector, Scalar, Shape)
 import qualified Data.Array.Accelerate as A
+import qualified Data.Array.Accelerate.Smart as A
+import qualified Data.Array.Accelerate.Sugar.Elt as A
+import qualified Data.Array.Accelerate.Type as A
+import qualified Data.Array.Accelerate.Representation.Type as A
 
 
 -- | Forward AD. This type is an instance of many of the standard numeric
@@ -102,12 +113,154 @@ instance Floating a => Floating (ADF s a) where
 forwardADPlain :: (forall s. ADF s a -> ADF s b) -> (a, a) -> (b, b)
 forwardADPlain f (x, d) = let ADF_ y d' = f (ADF_ x d) in (y, d')
 
+-- | The plain version of 'forwardADE''.
+--
+-- > forwardAD'Plain f x = snd (forwardADPlain f (x, 1))
+forwardAD'Plain :: Num a => (forall s. ADF s a -> ADF s b) -> a -> b
+forwardAD'Plain f x = snd (forwardADPlain f (x, 1))
+
+type family Dual s a = r | r -> a where
+    Dual s A.Half = ADF s A.Half
+    Dual s Float = ADF s Float
+    Dual s Double = ADF s Double
+
+    Dual s Int = Int
+    Dual s A.Int8 = A.Int8
+    Dual s A.Int16 = A.Int16
+    Dual s A.Int32 = A.Int32
+    Dual s A.Int64 = A.Int64
+    Dual s Word = Word
+    Dual s A.Word8 = A.Word8
+    Dual s A.Word16 = A.Word16
+    Dual s A.Word32 = A.Word32
+    Dual s A.Word64 = A.Word64
+
+    Dual s () = ()
+    Dual s (a, b) = (Dual s a, Dual s b)
+    Dual s A.Z = A.Z
+    Dual s (a A.:. b) = Dual s a A.:. Dual s b
+    Dual s (Array sh a) = Array sh (Dual s a)
+
+type family Tan a where
+    Tan A.Half = A.Half
+    Tan Float = Float
+    Tan Double = Double
+
+    Tan Int = ()
+    Tan A.Int8 = ()
+    Tan A.Int16 = ()
+    Tan A.Int32 = ()
+    Tan A.Int64 = ()
+    Tan Word = ()
+    Tan A.Word8 = ()
+    Tan A.Word16 = ()
+    Tan A.Word32 = ()
+    Tan A.Word64 = ()
+
+    Tan () = ()
+    Tan (a, b) = (Tan a, Tan b)
+    Tan A.Z = A.Z
+    Tan (a A.:. b) = Tan a A.:. Tan b
+    Tan (Array sh a) = Array sh (Tan a)
+
 -- | Given a function that can compute with dual numbers, an argument and the
 -- tangent (derivative) of that argument, compute the normal function output
 -- value and the tangent of that output value. This is a Jacobian-vector
 -- product.
-forwardADE :: (Elt a, Elt b) => (forall s. Exp (ADF s a) -> Exp (ADF s b)) -> Exp (a, a) -> Exp (b, b)
-forwardADE f (A.T2 x d) = let ADF y d' = f (ADF x d) in A.T2 y d'
+forwardADE :: (Elt a, Elt b) => (forall s. Proxy s -> Exp (Dual s a) -> Exp (Dual s b)) -> Exp (a, Tan a) -> Exp (b, Tan b)
+forwardADE f x =
+    let dualres = f (Proxy @()) (zipTanExp (Proxy @()) (A.typeR (A.fst x)) x)
+    in unzipTanExp (Proxy @()) (unzipTanType (Proxy @()) (A.typeR dualres)) dualres
+
+zipTanExp :: proxy s -> A.TypeR a -> Exp (a, Tan a) -> Exp (Dual s a)
+zipTanExp _ A.TupRunit _ = A.constant ()
+zipTanExp p (A.TupRpair t1 t2) (A.T2 e e') =
+    A.T2 (zipTanExp p t1 (A.T2 (A.fst e) (A.fst e')))
+         (zipTanExp p t2 (A.T2 (A.snd e) (A.snd e')))
+zipTanExp proxy1 (A.TupRsingle typ) expr = go proxy1 typ expr
+  where
+    go :: proxy s -> A.ScalarType a -> Exp (a, Tan a) -> Exp (Dual s a)
+    go p (A.SingleScalarType (A.NumSingleType (A.IntegralNumType t))) e = goI p t e
+    go p (A.SingleScalarType (A.NumSingleType (A.FloatingNumType t))) e = goF p t e
+    go _ (A.VectorScalarType _) _ = error "Vector types not yet supported for forward AD"
+
+    goI :: proxy s -> A.IntegralType a -> Exp (a, Tan a) -> Exp (Dual s a)
+    goI _ A.TypeInt e = A.fst e
+    goI _ A.TypeInt8 e = A.fst e
+    goI _ A.TypeInt16 e = A.fst e
+    goI _ A.TypeInt32 e = A.fst e
+    goI _ A.TypeInt64 e = A.fst e
+    goI _ A.TypeWord e = A.fst e
+    goI _ A.TypeWord8 e = A.fst e
+    goI _ A.TypeWord16 e = A.fst e
+    goI _ A.TypeWord32 e = A.fst e
+    goI _ A.TypeWord64 e = A.fst e
+
+    goF :: proxy s -> A.FloatingType a -> Exp (a, Tan a) -> Exp (Dual s a)
+    goF _ A.TypeHalf e = ADF (A.fst e) (A.snd e)
+    goF _ A.TypeFloat e = ADF (A.fst e) (A.snd e)
+    goF _ A.TypeDouble e = ADF (A.fst e) (A.snd e)
+
+unzipTanExp :: proxy s -> A.TypeR a -> Exp (Dual s a) -> Exp (a, Tan a)
+unzipTanExp _ A.TupRunit _ = A.T2 (A.constant ()) (A.constant ())
+unzipTanExp p (A.TupRpair t1 t2) e =
+    let A.T2 e1 e1' = unzipTanExp p t1 (A.fst e)
+        A.T2 e2 e2' = unzipTanExp p t2 (A.snd e)
+    in A.T2 (A.T2 e1 e2) (A.T2 e1' e2')
+unzipTanExp proxy1 (A.TupRsingle typ) expr = go proxy1 typ expr
+  where
+    go :: proxy s -> A.ScalarType a -> Exp (Dual s a) -> Exp (a, Tan a)
+    go p (A.SingleScalarType (A.NumSingleType (A.IntegralNumType t))) e = goI p t e
+    go p (A.SingleScalarType (A.NumSingleType (A.FloatingNumType t))) e = goF p t e
+    go _ (A.VectorScalarType _) _ = error "Vector types not yet supported for forward AD"
+
+    goI :: proxy s -> A.IntegralType a -> Exp (Dual s a) -> Exp (a, Tan a)
+    goI _ A.TypeInt e = A.T2 e (A.constant ())
+    goI _ A.TypeInt8 e = A.T2 e (A.constant ())
+    goI _ A.TypeInt16 e = A.T2 e (A.constant ())
+    goI _ A.TypeInt32 e = A.T2 e (A.constant ())
+    goI _ A.TypeInt64 e = A.T2 e (A.constant ())
+    goI _ A.TypeWord e = A.T2 e (A.constant ())
+    goI _ A.TypeWord8 e = A.T2 e (A.constant ())
+    goI _ A.TypeWord16 e = A.T2 e (A.constant ())
+    goI _ A.TypeWord32 e = A.T2 e (A.constant ())
+    goI _ A.TypeWord64 e = A.T2 e (A.constant ())
+
+    goF :: proxy s -> A.FloatingType a -> Exp (Dual s a) -> Exp (a, Tan a)
+    goF _ A.TypeHalf (ADF e e') = A.T2 e e'
+    goF _ A.TypeFloat (ADF e e') = A.T2 e e'
+    goF _ A.TypeDouble (ADF e e') = A.T2 e e'
+
+unzipTanType :: proxy s -> A.TypeR (Dual s a) -> A.TypeR a
+unzipTanType = undefined
+-- unzipTanType _ A.TupRunit = A.TupRunit
+-- unzipTanType p (A.TupRpair t1 t2) =
+--     let A.T2 e1 e1' = unzipTanType p t1
+--         A.T2 e2 e2' = unzipTanType p t2
+--     in A.T2 (A.T2 e1 e2) (A.T2 e1' e2')
+-- unzipTanType proxy1 (A.TupRsingle typ) = go proxy1 typ expr
+--   where
+--     go :: proxy s -> A.ScalarType a -> Exp (Dual s a) -> Exp (a, Tan a)
+--     go p (A.SingleScalarType (A.NumSingleType (A.IntegralNumType t))) e = goI p t e
+--     go p (A.SingleScalarType (A.NumSingleType (A.FloatingNumType t))) e = goF p t e
+--     go _ (A.VectorScalarType _) _ = error "Vector types not yet supported for forward AD"
+
+--     goI :: proxy s -> A.IntegralType a -> Exp (Dual s a) -> Exp (a, Tan a)
+--     goI _ A.TypeInt e = A.T2 e (A.constant ())
+--     goI _ A.TypeInt8 e = A.T2 e (A.constant ())
+--     goI _ A.TypeInt16 e = A.T2 e (A.constant ())
+--     goI _ A.TypeInt32 e = A.T2 e (A.constant ())
+--     goI _ A.TypeInt64 e = A.T2 e (A.constant ())
+--     goI _ A.TypeWord e = A.T2 e (A.constant ())
+--     goI _ A.TypeWord8 e = A.T2 e (A.constant ())
+--     goI _ A.TypeWord16 e = A.T2 e (A.constant ())
+--     goI _ A.TypeWord32 e = A.T2 e (A.constant ())
+--     goI _ A.TypeWord64 e = A.T2 e (A.constant ())
+
+--     goF :: proxy s -> A.FloatingType a -> Exp (Dual s a) -> Exp (a, Tan a)
+--     goF _ A.TypeHalf (ADF e e') = A.T2 e e'
+--     goF _ A.TypeFloat (ADF e e') = A.T2 e e'
+--     goF _ A.TypeDouble (ADF e e') = A.T2 e e'
 
 -- | Given a function that can compute with dual numbers, an argument and the
 -- tangent (derivative) of that argument, compute the normal function output
@@ -123,19 +276,14 @@ forwardADA f (A.T2 xs ds) =
     in A.T2 (A.map (\(ADF ys _)  -> ys) res)
             (A.map (\(ADF _ ds') -> ds') res)
 
--- | The plain version of 'forwardADE''.
---
--- > forwardAD'Plain f x = snd (forwardADPlain f (x, 1))
-forwardAD'Plain :: Num a => (forall s. ADF s a -> ADF s b) -> a -> b
-forwardAD'Plain f x = snd (forwardADPlain f (x, 1))
-
 -- | Given a single-argument function that can compute with dual numbers, and
 -- given an argument, compute the derivative of the function evaluated at that
 -- argument. Convenience wrapper of 'forwardADE'.
 --
 -- > forwardADE' f x = snd (forwardADE f (T2 x 1))
 forwardADE' :: (A.Num a, Elt a, Elt b) => (forall s. Exp (ADF s a) -> Exp (ADF s b)) -> Exp a -> Exp b
-forwardADE' f x = A.snd (forwardADE f (A.T2 x 1))
+forwardADE' _ = undefined
+-- forwardADE' f x = A.snd (forwardADE f (A.T2 x 1))
 
 -- | Given a function taking a single scalar input that can compute with dual
 -- numbers, and given an argument, compute the derivative of the function
