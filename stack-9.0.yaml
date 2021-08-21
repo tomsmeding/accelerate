@@ -7,7 +7,11 @@ resolver: nightly-2021-07-02
 packages:
 - .
 
-# extra-deps: []
+extra-deps:
+- dependent-map-0.4.0.0@sha256:ca2b131046f4340a1c35d138c5a003fe4a5be96b14efc26291ed35fd08c62221,1657
+- dependent-sum-0.7.1.0@sha256:0e419237f5b86da3659772afff9cab355c0f8d5b3fdb15a5b30e673d8dc83941,2147
+# Dependency of dependent-{sum,map}
+- constraints-extras-0.3.1.0@sha256:12016ebb91ad5ed2c82bf7e48c6bd6947d164d33c9dca5ac3965de1bb6c780c0,1777
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
