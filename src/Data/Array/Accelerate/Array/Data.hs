@@ -50,7 +50,6 @@ module Data.Array.Accelerate.Array.Data (
 
 ) where
 
--- friends
 import Data.Array.Accelerate.Array.Unique
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Type
@@ -64,24 +63,21 @@ import Data.Array.Accelerate.Debug.Internal.Flags
 import Data.Array.Accelerate.Debug.Internal.Profile
 import Data.Array.Accelerate.Debug.Internal.Trace
 
-
--- standard libraries
 import Control.Applicative
 import Control.DeepSeq
 import Control.Monad                                                ( (<=<) )
 import Data.Bits
 import Data.IORef
 import Data.Primitive                                               ( sizeOf# )
-import Data.Text.Format
 import Foreign.ForeignPtr
 import Foreign.Storable
-import Language.Haskell.TH                                          hiding ( Type )
-import System.IO.Unsafe
+import Formatting                                                   hiding ( bytes )
+import Language.Haskell.TH.Extra                                    hiding ( Type )
 import Prelude                                                      hiding ( mapM )
+import System.IO.Unsafe
 
+import GHC.Exts                                                     hiding ( build )
 import GHC.ForeignPtr
-import GHC.Prim
-import GHC.Ptr
 import GHC.Types
 
 
@@ -290,7 +286,7 @@ allocateArray !size = internalCheck "size must be >= 0" (size >= 0) $ do
            let bytes = size * sizeOf (undefined :: e)
            new <- readIORef __mallocForeignPtrBytes
            ptr <- new bytes
-           traceIO dump_gc $ build "gc: allocated new host array (size={}, ptr={})" (bytes, unsafeForeignPtrToPtr ptr)
+           traceM dump_gc ("gc: allocated new host array (size=" % int % ", ptr=" % build % ")") bytes (unsafeForeignPtrToPtr ptr)
            local_memory_alloc (unsafeForeignPtrToPtr ptr) bytes
            return (castForeignPtr ptr)
 #ifdef ACCELERATE_DEBUG
@@ -307,7 +303,7 @@ registerForeignPtrAllocator
     :: (Int -> IO (ForeignPtr Word8))
     -> IO ()
 registerForeignPtrAllocator new = do
-  traceIO dump_gc "registering new array allocator"
+  traceM dump_gc "registering new array allocator"
   atomicWriteIORef __mallocForeignPtrBytes new
 
 {-# NOINLINE __mallocForeignPtrBytes #-}
@@ -328,31 +324,31 @@ mallocPlainForeignPtrBytesAligned (I# size#) = IO $ \s0 ->
     (# s1, mbarr# #) -> (# s1, ForeignPtr (byteArrayContents# (unsafeCoerce# mbarr#)) (PlainPtr mbarr#) #)
 
 
-liftArrayData :: Int -> TypeR e -> ArrayData e -> Q (TExp (ArrayData e))
+liftArrayData :: Int -> TypeR e -> ArrayData e -> CodeQ (ArrayData e)
 liftArrayData n = tuple
   where
-    tuple :: TypeR e -> ArrayData e -> Q (TExp (ArrayData e))
+    tuple :: TypeR e -> ArrayData e -> CodeQ (ArrayData e)
     tuple TupRunit         ()       = [|| () ||]
     tuple (TupRpair t1 t2) (a1, a2) = [|| ($$(tuple t1 a1), $$(tuple t2 a2)) ||]
     tuple (TupRsingle s) adata      = scalar s adata
 
-    scalar :: ScalarType e -> ArrayData e -> Q (TExp (ArrayData e))
+    scalar :: ScalarType e -> ArrayData e -> CodeQ (ArrayData e)
     scalar (SingleScalarType t) = single t
     scalar (VectorScalarType t) = vector t
 
-    vector :: forall n e. VectorType (Vec n e) -> ArrayData (Vec n e) -> Q (TExp (ArrayData (Vec n e)))
+    vector :: forall n e. VectorType (Vec n e) -> ArrayData (Vec n e) -> CodeQ (ArrayData (Vec n e))
     vector (VectorType w t)
       | SingleArrayDict <- singleArrayDict t
       = liftArrayData (w * n) (TupRsingle (SingleScalarType t))
 
-    single :: SingleType e -> ArrayData e -> Q (TExp (ArrayData e))
+    single :: SingleType e -> ArrayData e -> CodeQ (ArrayData e)
     single (NumSingleType t) = num t
 
-    num :: NumType e -> ArrayData e -> Q (TExp (ArrayData e))
+    num :: NumType e -> ArrayData e -> CodeQ (ArrayData e)
     num (IntegralNumType t) = integral t
     num (FloatingNumType t) = floating t
 
-    integral :: IntegralType e -> ArrayData e -> Q (TExp (ArrayData e))
+    integral :: IntegralType e -> ArrayData e -> CodeQ (ArrayData e)
     integral TypeInt    = liftUniqueArray n
     integral TypeInt8   = liftUniqueArray n
     integral TypeInt16  = liftUniqueArray n
@@ -364,7 +360,7 @@ liftArrayData n = tuple
     integral TypeWord32 = liftUniqueArray n
     integral TypeWord64 = liftUniqueArray n
 
-    floating :: FloatingType e -> ArrayData e -> Q (TExp (ArrayData e))
+    floating :: FloatingType e -> ArrayData e -> CodeQ (ArrayData e)
     floating TypeHalf   = liftUniqueArray n
     floating TypeFloat  = liftUniqueArray n
     floating TypeDouble = liftUniqueArray n

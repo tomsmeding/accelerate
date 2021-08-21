@@ -76,8 +76,8 @@ import Control.Monad.ST
 import Data.Bits
 import Data.Primitive.ByteArray
 import Data.Primitive.Types
-import Data.Text.Format
 import Data.Text.Lazy.Builder
+import Formatting
 import System.IO
 import System.IO.Unsafe                                             ( unsafePerformIO )
 import Unsafe.Coerce
@@ -141,8 +141,8 @@ runN f = go
 -- Debugging
 -- ---------
 
-phase :: Builder -> (Double -> Double -> Builder) -> IO a -> IO a
-phase n fmt go = Debug.timed Debug.dump_phases (\wall cpu -> build "phase {}: {}" (n, fmt wall cpu)) go
+phase :: Builder -> Format Builder (Double -> Double -> Builder) -> IO a -> IO a
+phase n fmt go = Debug.timed Debug.dump_phases (now ("phase " <> n <> ": ") % fmt) go
 
 
 -- Delayed Arrays
@@ -885,7 +885,7 @@ atraceOp (Message show _ msg) as =
    in do
      if null str
         then T.hPutStrLn stderr msg
-        else hprint stderr "{}: {}\n" (msg, str)
+        else hprint stderr (stext % ": " % string % "\n") msg str
      hFlush stderr
 
 

@@ -33,7 +33,7 @@ module Data.Array.Accelerate.AST.Idx (
 ) where
 
 import Data.GADT.Compare
-import Language.Haskell.TH ( Q, TExp )
+import Language.Haskell.TH.Extra
 import Data.Type.Equality ((:~:)(Refl))
 
 #ifndef ACCELERATE_INTERNAL_CHECKS
@@ -57,7 +57,7 @@ rnfIdx :: Idx env t -> ()
 rnfIdx ZeroIdx      = ()
 rnfIdx (SuccIdx ix) = rnfIdx ix
 
-liftIdx :: Idx env t -> Q (TExp (Idx env t))
+liftIdx :: Idx env t -> CodeQ (Idx env t)
 liftIdx ZeroIdx      = [|| ZeroIdx ||]
 liftIdx (SuccIdx ix) = [|| SuccIdx $$(liftIdx ix) ||]
 
@@ -110,7 +110,7 @@ idxToInt = unsafeRunIdx
 rnfIdx :: Idx env t -> ()
 rnfIdx !_ = ()
 
-liftIdx :: Idx env t -> Q (TExp (Idx env t))
+liftIdx :: Idx env t -> CodeQ (Idx env t)
 liftIdx (UnsafeIdxConstructor i) = [|| UnsafeIdxConstructor i ||]
 
 instance GEq (Idx env) where

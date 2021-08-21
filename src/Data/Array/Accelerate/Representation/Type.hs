@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs             #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes        #-}
 {-# LANGUAGE TemplateHaskell   #-}
@@ -19,9 +20,9 @@ module Data.Array.Accelerate.Representation.Type
 
 import Data.Array.Accelerate.Type
 import Data.Primitive.Vec
-import Data.Text.Buildable
 
-import Language.Haskell.TH
+import Formatting
+import Language.Haskell.TH.Extra
 
 
 -- | Both arrays (Acc) and expressions (Exp) are represented as nested
@@ -47,10 +48,11 @@ instance Show (TupR ScalarType a) where
   show (TupRsingle t) = show t
   show (TupRpair a b) = "(" ++ show a ++ "," ++ show b ++ ")"
 
-instance Buildable (TupR ScalarType a) where
-  build TupRunit       = "()"
-  build (TupRsingle t) = build t
-  build (TupRpair a b) = "(" <> build a <> "," <> build b <> ")"
+formatTypeR :: Format r (TypeR a -> r)
+formatTypeR = later $ \case
+  TupRunit     -> "()"
+  TupRsingle t -> bformat formatScalarType t
+  TupRpair a b -> bformat (parenthesised (formatTypeR % "," % formatTypeR)) a b
 
 type TypeR = TupR ScalarType
 
@@ -62,12 +64,12 @@ rnfTupR f (TupRpair a b) = rnfTupR f a `seq` rnfTupR f b
 rnfTypeR :: TypeR t -> ()
 rnfTypeR = rnfTupR rnfScalarType
 
-liftTupR :: (forall b. s b -> Q (TExp (s b))) -> TupR s a -> Q (TExp (TupR s a))
+liftTupR :: (forall b. s b -> CodeQ (s b)) -> TupR s a -> CodeQ (TupR s a)
 liftTupR _ TupRunit       = [|| TupRunit ||]
 liftTupR f (TupRsingle s) = [|| TupRsingle $$(f s) ||]
 liftTupR f (TupRpair a b) = [|| TupRpair $$(liftTupR f a) $$(liftTupR f b) ||]
 
-liftTypeR :: TypeR t -> Q (TExp (TypeR t))
+liftTypeR :: TypeR t -> CodeQ (TypeR t)
 liftTypeR TupRunit         = [|| TupRunit ||]
 liftTypeR (TupRsingle t)   = [|| TupRsingle $$(liftScalarType t) ||]
 liftTypeR (TupRpair ta tb) = [|| TupRpair $$(liftTypeR ta) $$(liftTypeR tb) ||]
