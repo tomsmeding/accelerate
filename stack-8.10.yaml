@@ -2,12 +2,15 @@
 # For advanced use and comprehensive documentation of the format, please see:
 # https://docs.haskellstack.org/en/stable/yaml_configuration/
 
-resolver: lts-18.0
+resolver: lts-18.7
 
 packages:
 - .
 
-# extra-deps:
+extra-deps:
+- dependent-map-0.4.0.0@sha256:ca2b131046f4340a1c35d138c5a003fe4a5be96b14efc26291ed35fd08c62221,1657
+- dependent-sum-0.7.1.0@sha256:0e419237f5b86da3659772afff9cab355c0f8d5b3fdb15a5b30e673d8dc83941,2147
+- some-1.0.2@sha256:3d460998df32ad7b93bf55657aeae988d97070155e71718b4bc75d0997ce9d62,2244
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
