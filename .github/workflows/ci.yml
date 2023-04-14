@@ -117,11 +117,11 @@ jobs:
         if: matrix.mode == 'release'
 
       - name: Test doctest
-        run: cabal test --test-show-details=failures doctest
+        run: cabal run doctest
         if: matrix.os == 'ubuntu-latest' && matrix.mode == 'release'
 
       - name: Test nofib
-        run: cabal test --test-show-details=failures nofib-interpreter
+        run: cabal run nofib-interpreter
         # if: matrix.os != 'windows-latest'
 
   stack:
