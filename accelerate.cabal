@@ -375,6 +375,7 @@ library
         Data.Array.Accelerate
         Data.Array.Accelerate.Interpreter
         Data.Array.Accelerate.Interpreter.Simple
+        Data.Array.Accelerate.Interpreter.Simple2
 
         -- Prelude-like
         Data.Array.Accelerate.Control.Monad

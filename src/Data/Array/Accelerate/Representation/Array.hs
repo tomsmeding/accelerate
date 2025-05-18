@@ -115,14 +115,22 @@ fromFunction repr sh f = unsafePerformIO $! fromFunctionM repr sh (return . f)
 -- @since 1.2.0.0
 --
 fromFunctionM :: ArrayR (Array sh e) -> sh -> (sh -> IO e) -> IO (Array sh e)
-fromFunctionM (ArrayR shR tp) sh f = do
+fromFunctionM repr@(ArrayR shR _) sh f =
+  fromFunctionLinearM repr sh (f . fromIndex shR sh)
+
+-- | Create an array using a monadic function applied at each /linear/ index.
+--
+-- @since 1.4.0.0
+--
+fromFunctionLinearM :: ArrayR (Array sh e) -> sh -> (Int -> IO e) -> IO (Array sh e)
+fromFunctionLinearM (ArrayR shR tp) sh f = do
   let !n = size shR sh
   mbuffers <- newBuffers tp n
   --
   let write !i
         | i >= n    = return ()
         | otherwise = do
-            v <- f (fromIndex shR sh i)
+            v <- f i
             writeBuffers tp mbuffers i v
             write (i+1)
   --
