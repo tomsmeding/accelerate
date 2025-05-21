@@ -334,7 +334,7 @@ flag nofib
 
 library
   build-depends:
-          base                          >= 4.12 && < 4.21
+          base                          >= 4.12 && < 4.22
         , ansi-terminal                 >= 0.6.2
         , array                         >= 0.4
         , base-orphans                  >= 0.3
@@ -364,7 +364,7 @@ library
         , primitive                     >= 0.6.4
         , scientific                    >= 0.3.6.2
         , tasty                         >= 0.11
-        , template-haskell              < 2.23
+        , template-haskell              < 2.24
         , terminal-size                 >= 0.3
         , text                          >= 1.2.4
         , transformers                  >= 0.3
@@ -377,6 +377,8 @@ library
         Data.Array.Accelerate.Interpreter.Simple
 
         -- Prelude-like
+        Data.Array.Accelerate.AD
+        Data.Array.Accelerate.AD.Types
         Data.Array.Accelerate.Control.Monad
         Data.Array.Accelerate.Data.Bits
         Data.Array.Accelerate.Data.Complex
@@ -441,6 +443,7 @@ library
         Data.Array.Accelerate.Sugar.Shape
         Data.Array.Accelerate.Sugar.Vec
         Data.Array.Accelerate.Trafo
+        Data.Array.Accelerate.Trafo.AD
         Data.Array.Accelerate.Trafo.Config
         Data.Array.Accelerate.Trafo.Desugar
         Data.Array.Accelerate.Trafo.Exp.Shrink

@@ -55,12 +55,19 @@ avarsIn :: forall acc aenv arrs.
            InjectAcc acc
         -> ArrayVars aenv arrs
         -> acc aenv arrs
-avarsIn inject = go
+avarsIn inject = avarsIn' inject id
+
+avarsIn' :: forall acc aenv arrs s.
+            InjectAcc acc
+         -> (forall v. s v -> ArrayR v)
+         -> Vars s aenv arrs
+         -> acc aenv arrs
+avarsIn' inject getType = go
   where
-    go :: ArrayVars aenv t -> acc aenv t
-    go TupRunit       = inject Anil
-    go (TupRsingle v) = avarIn inject v
-    go (TupRpair a b) = inject (go a `Apair` go b)
+    go :: Vars s aenv t -> acc aenv t
+    go TupRunit               = inject Anil
+    go (TupRsingle (Var s t)) = avarIn inject (Var (getType s) t)
+    go (TupRpair a b)         = inject (go a `Apair` go b)
 
 avarsOut
     :: ExtractAcc acc

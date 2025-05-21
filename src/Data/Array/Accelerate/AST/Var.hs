@@ -17,7 +17,7 @@ module Data.Array.Accelerate.AST.Var
   where
 
 import Data.Array.Accelerate.Representation.Type
-    ( TupR(..), mapTupR, liftTupR, rnfTupR )
+    ( TupR(..), mapTupR, liftTupR, rnfTupR, Distributes(..) )
 import Data.Array.Accelerate.AST.Idx
 
 import Language.Haskell.TH.Extra
@@ -26,6 +26,11 @@ import Data.Typeable                                                ( (:~:)(..) 
 
 data Var  s env t = Var { varType :: s t, varIdx :: Idx env t }
 type Vars s env   = TupR (Var s env)
+
+instance Distributes s => Distributes (Var s env) where
+  reprIsSingle   = reprIsSingle   . varType
+  pairImpossible = pairImpossible . varType
+  unitImpossible = unitImpossible . varType
 
 varsType :: Vars s env t -> TupR s t
 varsType TupRunit               = TupRunit

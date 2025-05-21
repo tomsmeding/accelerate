@@ -22,7 +22,7 @@ module Data.Array.Accelerate.AST.LeftHandSide
     Exists(..),
     LeftHandSide(.., LeftHandSideUnit), leftHandSidePair,
     lhsToTupR, lhsSize, leftHandSideIsVoid,
-    rnfLeftHandSide, liftLeftHandSide, mapLeftHandSide, flattenTupR)
+    rnfLeftHandSide, liftLeftHandSide, mapLeftHandSide, traverseLeftHandSide, flattenTupR)
   where
 
 import Data.Array.Accelerate.Representation.Type
@@ -80,6 +80,11 @@ mapLeftHandSide :: (forall v. s v -> u v) -> LeftHandSide s t env env' -> LeftHa
 mapLeftHandSide f (LeftHandSideSingle s)   = LeftHandSideSingle $ f s
 mapLeftHandSide f (LeftHandSideWildcard r) = LeftHandSideWildcard $ mapTupR f r
 mapLeftHandSide f (LeftHandSidePair as bs) = LeftHandSidePair (mapLeftHandSide f as) (mapLeftHandSide f bs)
+
+traverseLeftHandSide :: Applicative f => (forall v. s v -> f (u v)) -> LeftHandSide s t env env' -> f (LeftHandSide u t env env')
+traverseLeftHandSide f (LeftHandSideSingle s)   = LeftHandSideSingle <$> f s
+traverseLeftHandSide f (LeftHandSideWildcard r) = LeftHandSideWildcard <$> traverseTupR f r
+traverseLeftHandSide f (LeftHandSidePair as bs) = LeftHandSidePair <$> traverseLeftHandSide f as <*> traverseLeftHandSide f bs
 
 leftHandSidePair :: LeftHandSide s t1 env env' -> LeftHandSide s t2 env' env'' -> LeftHandSide s (t1, t2) env env''
 leftHandSidePair (LeftHandSideWildcard t1) (LeftHandSideWildcard t2) = LeftHandSideWildcard $ TupRpair t1 t2

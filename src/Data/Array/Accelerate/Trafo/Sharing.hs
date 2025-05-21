@@ -375,6 +375,7 @@ convertSharingAcc config alyt aenv (ScopedAcc lams (AccSharing _ preAcc))
                         (cvtA acc1)
                         (convertSharingBoundary config alyt aenv' shr bndy2)
                         (cvtA acc2)
+      Avjp aR1 aR2 acc1 acc2 acc3  -> AST.Avjp aR1 aR2 (cvtAfun1 aR1 acc1) (cvtA acc2) (cvtA acc3)
       -- Collect seq -> AST.Collect (convertSharingSeq config alyt EmptyLayout aenv' [] seq)
 
 {--
@@ -1592,6 +1593,12 @@ makeOccMapSharingAcc config accOccMap = traverseAcc
                                              (acc2', h5) <- traverseAcc lvl acc2
                                              return (Stencil2 s1 s2 tp f' bnd1' acc1' bnd2' acc2',
                                                      h1 `max` h2 `max` h3 `max` h4 `max` h5 + 1)
+            Avjp aR1 aR2 acc1 acc2 acc3 -> do
+                                             (acc1', h1) <- traverseAfun1 lvl aR1 acc1
+                                             (acc2', h2) <- traverseAcc lvl acc2
+                                             (acc3', h3) <- traverseAcc lvl acc3
+                                             return (Avjp aR1 aR2 acc1' acc2' acc3',
+                                                     h1 `max` h2 `max` h3 + 1)
             -- Collect s                   -> do
             --                                  (s', h) <- traverseSeq lvl s
             --                                  return (Collect s', h + 1)
@@ -2470,6 +2477,14 @@ determineScopesSharingAcc config accOccMap = scopesAcc
                                      in
                                      reconstruct (Stencil2 s1 s2 tp st' bnd1' acc1' bnd2' acc2')
                                        (accCount1 +++ accCount2 +++ accCount3 +++ accCount4 +++ accCount5)
+          Avjp aR1 aR2 acc1 acc2 acc3
+                                  -> let
+                                       (acc1', accCount1) = scopesAfun1 acc1
+                                       (acc2', accCount2) = scopesAcc acc2
+                                       (acc3', accCount3) = scopesAcc acc3
+                                     in
+                                     reconstruct (Avjp aR1 aR2 acc1' acc2' acc3')
+                                                 (accCount1 +++ accCount2 +++ accCount3)
           -- Collect seq             -> let
           --                              (seq', accCount1) = scopesSeq seq
           --                            in

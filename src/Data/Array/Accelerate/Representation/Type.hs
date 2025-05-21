@@ -134,6 +134,10 @@ instance Distributes ScalarType where
     | IntegralNumType t <- tp = case t of {}
     | FloatingNumType t <- tp = case t of {}
 
+splitTupRpair :: Distributes s => TupR s (a, b) -> (TupR s a, TupR s b)
+splitTupRpair (TupRpair a b) = (a, b)
+splitTupRpair (TupRsingle s) = pairImpossible s
+
 rnfTupR :: (forall b. s b -> ()) -> TupR s a -> ()
 rnfTupR _ TupRunit       = ()
 rnfTupR f (TupRsingle s) = f s
@@ -228,6 +232,15 @@ traverseTupR :: Applicative f => (forall s. a s -> f (b s)) -> TupR a t -> f (Tu
 traverseTupR f (TupRsingle a)   = TupRsingle <$> f a
 traverseTupR _ TupRunit         = pure TupRunit
 traverseTupR f (TupRpair a1 a2) = TupRpair <$> traverseTupR f a1 <*> traverseTupR f a2
+
+zipTupR :: (Distributes a, Distributes b) => (forall s. a s -> b s -> c s) -> TupR a t -> TupR b t -> TupR c t
+zipTupR f (TupRsingle a)   (TupRsingle b)   = TupRsingle $ f a b
+zipTupR _ TupRunit         TupRunit         = TupRunit
+zipTupR f (TupRpair a1 a2) (TupRpair b1 b2) = zipTupR f a1 b1 `TupRpair` zipTupR f a2 b2
+zipTupR _ (TupRsingle a)   TupRunit         = unitImpossible a
+zipTupR _ (TupRsingle a)   TupRpair{}       = pairImpossible a
+zipTupR _ TupRunit         (TupRsingle b)   = unitImpossible b
+zipTupR _ TupRpair{}       (TupRsingle b)   = pairImpossible b
 
 functionImpossible :: TypeR (s -> t) -> a
 functionImpossible (TupRsingle (SingleScalarType (NumSingleType tp))) = case tp of

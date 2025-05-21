@@ -42,6 +42,7 @@ module Data.Array.Accelerate.Trafo.Substitution (
 
   -- ** Checks
   isIdentity, isIdentityIndexing, extractExpVars,
+  extractAccVars,
   bindingIsTrivial,
 
 ) where
@@ -54,6 +55,7 @@ import Data.Array.Accelerate.AST.Environment
 import Data.Array.Accelerate.Analysis.Match
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Exp.Substitution
 import qualified Data.Array.Accelerate.Debug.Internal.Stats         as Stats
 
@@ -417,6 +419,12 @@ reindexArrayInstr av arr = case arr of
     g fa = case accOut fa of
       Avar var' -> var'
       _ -> internalError "An Avar which was used in an Exp was mapped to an array term other than Avar. This mapping is invalid as an Exp can only contain array variables."
+
+extractAccVars :: OpenAcc aenv a -> Maybe (ArrayVars aenv a)
+extractAccVars (OpenAcc Anil)          = Just TupRunit
+extractAccVars (OpenAcc (Apair e1 e2)) = TupRpair <$> extractAccVars e1 <*> extractAccVars e2
+extractAccVars (OpenAcc (Avar v))      = Just $ TupRsingle v
+extractAccVars _                       = Nothing
 
 {--
 {-# INLINEABLE rebuildSeq #-}

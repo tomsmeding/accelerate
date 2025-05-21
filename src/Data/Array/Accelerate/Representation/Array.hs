@@ -32,6 +32,7 @@ import Data.Array.Accelerate.Representation.Type
 
 import Data.List                                                    ( intersperse )
 import Data.Maybe                                                   ( isJust )
+import Data.Type.Equality
 import Formatting
 import Language.Haskell.TH.Extra
 import System.IO.Unsafe
@@ -73,6 +74,11 @@ type ArraysR = TupR ArrayR
 
 instance Show (ArrayR a) where
   show (ArrayR shR tp) = "Array DIM" ++ show (rank shR) ++ " " ++ show tp
+
+instance Distributes ArrayR where
+  reprIsSingle ArrayR{} = Refl
+  pairImpossible = \case {}
+  unitImpossible = \case {}
 
 formatArrayR :: Format r (ArrayR a -> r)
 formatArrayR = later $ \case

@@ -82,7 +82,7 @@ module Data.Array.Accelerate.Smart (
 
 ) where
 
-
+import Data.Array.Accelerate.AD.Types
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Array
@@ -459,6 +459,13 @@ data PreSmartAcc acc exp as where
                 -> PreBoundary acc exp (Array sh b)
                 -> acc (Array sh b)
                 -> PreSmartAcc acc exp (Array sh c)
+
+  Avjp          :: ArraysR arrs1
+                -> ArraysR arrs2
+                -> (SmartAcc arrs1 -> acc arrs2)
+                -> acc arrs1
+                -> acc (Ctg arrs2)
+                -> PreSmartAcc acc aenv (Ctg arrs1)
 
 
 -- Embedded expressions of the surface language
@@ -861,6 +868,7 @@ instance HasArraysR acc => HasArraysR (PreSmartAcc acc exp) where
                                  in  TupRsingle (ArrayR shr tp)
     Stencil s tp _ _ _        -> TupRsingle $ ArrayR (stencilShapeR s) tp
     Stencil2 s _ tp _ _ _ _ _ -> TupRsingle $ ArrayR (stencilShapeR s) tp
+    Avjp aR _ _ _ _           -> ctgR aR
 
 
 class HasTypeR f where
@@ -1369,6 +1377,7 @@ formatPreAccOp = later $ \case
   Stencil{}           -> "Stencil"
   Stencil2{}          -> "Stencil2"
   Aforeign{}          -> "Aforeign"
+  Avjp{}              -> "Avjp"
 
 formatPreExpOp :: Format r (PreSmartExp acc exp t -> r)
 formatPreExpOp = later $ \case

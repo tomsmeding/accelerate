@@ -136,6 +136,7 @@ module Data.Array.Accelerate.AST (
 
 ) where
 
+import Data.Array.Accelerate.AD.Types
 import Data.Array.Accelerate.AST.Idx
 import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Var
@@ -455,6 +456,13 @@ data PreOpenAcc (acc :: Type -> Type -> Type) aenv a where
               -> acc             aenv (Array sh b)                -- source array #2
               -> PreOpenAcc acc  aenv (Array sh c)
 
+  Avjp        :: ArraysR arrs1
+              -> ArraysR arrs2
+              -> PreOpenAfun acc aenv (arrs1 -> arrs2)
+              -> acc aenv arrs1
+              -> acc aenv (Ctg arrs2)
+              -> PreOpenAcc acc aenv (Ctg arrs1)
+
 -- | Vanilla boundary condition specification for stencil operations
 --
 data Boundary aenv t where
@@ -587,6 +595,7 @@ instance HasArraysR acc => HasArraysR (PreOpenAcc acc) where
                                          in arraysRarray sh tR
   arraysR (Stencil2 _ _ tR _ _ a _ _) = let ArrayR sh _ = arrayR a
                                          in arraysRarray sh tR
+  arraysR (Avjp aR _ _ _ _)           = ctgR aR
 
 -- Normal form data
 -- ================
@@ -670,6 +679,7 @@ rnfPreOpenAcc rnfA pacc =
         repr1 = ArrayR shr $ stencilEltR sr1
         repr2 = ArrayR shr $ stencilEltR sr2
       in rnfStencilR sr1 `seq` rnfStencilR sr2 `seq` rnfTupR rnfScalarType tp `seq` rnfF f `seq` rnfB repr1 b1 `seq` rnfB repr2 b2 `seq` rnfA a1 `seq` rnfA a2
+    Avjp t1 t2 a b c          -> rnfArraysR t1 `seq` rnfArraysR t2 `seq` rnfAF a `seq` rnfA b `seq` rnfA c
 
 rnfArrayVar :: ArrayVar aenv a -> ()
 rnfArrayVar = rnfVar rnfArrayR
@@ -751,6 +761,7 @@ liftPreOpenAcc liftA pacc =
           repr1 = ArrayR shr $ stencilEltR sr1
           repr2 = ArrayR shr $ stencilEltR sr2
        in [|| Stencil2 $$(liftStencilR sr1) $$(liftStencilR sr2) $$(liftTypeR tp) $$(liftF f) $$(liftB repr1 b1) $$(liftA a1) $$(liftB repr2 b2) $$(liftA a2) ||]
+    Avjp t1 t2 a b c          -> [|| Avjp $$(liftArraysR t1) $$(liftArraysR t2) $$(liftAF a) $$(liftA b) $$(liftA c) ||]
 
 
 liftALeftHandSide :: ALeftHandSide arrs aenv aenv' -> CodeQ (ALeftHandSide arrs aenv aenv')
@@ -820,3 +831,4 @@ formatPreAccOp = later $ \case
   Backpermute{}     -> "Backpermute"
   Stencil{}         -> "Stencil"
   Stencil2{}        -> "Stencil2"
+  Avjp{}            -> "Avjp"
