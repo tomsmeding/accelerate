@@ -1,23 +1,20 @@
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Array.Accelerate.AD.Types where
 
-import Data.Kind (Type)
-
 import Data.Array.Accelerate.Representation.Array
-import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Type
 import qualified Data.Array.Accelerate.Sugar.Array as Sugar
-import Data.Array.Accelerate.Sugar.Elt (Elt)
-import Data.Array.Accelerate.Sugar.Shape
 import Data.Array.Accelerate.Sugar.Vec ()
 import Data.Array.Accelerate.Type
 import Data.Primitive.Vec
+
+import Data.Kind (Type)
 
 
 type family Ctg a where

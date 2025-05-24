@@ -1,14 +1,16 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneKindSignatures #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE PolyKinds #-}
-{-# LANGUAGE StandaloneKindSignatures #-}
 
 
 ------------ TODO REMOVE ------------
@@ -23,10 +25,13 @@ import Data.Array.Accelerate.AST.LeftHandSide
 import Data.Array.Accelerate.AST.Var
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Representation.Array
+import Data.Array.Accelerate.Representation.Shape
 import Data.Array.Accelerate.Representation.Type
 import Data.Array.Accelerate.Trafo.Exp.Substitution
 import Data.Array.Accelerate.Trafo.Substitution
 import Data.Array.Accelerate.Trafo.Var
+import Data.Array.Accelerate.Type
+import Data.Primitive.Vec (Vec)
 
 import Control.Monad.Identity
 import Control.Monad.State
@@ -36,6 +41,8 @@ import qualified Data.Functor.Const as Fun
 import Data.Functor.Product hiding (Pair)
 import qualified Data.Functor.Product as Fun
 import Data.Type.Equality
+import Data.Proxy
+import GHC.TypeLits (KnownNat)
 
 
 convertAcc :: OpenAcc aenv a -> OpenAcc aenv a
@@ -297,6 +304,240 @@ travPreOpenAcc transf = transf $ \case
     recAfun (Alam lhs fun) = Alam lhs <$> recAfun fun
     recAfun (Abody acc) = Abody <$> rec acc
 
+-- env' is a subset of env; the data type describes which entries are kept. The
+-- @f@ values optionally allow subsetting of the entries too.
+data Subenv' f env env' where
+  SEYes :: Subenv' f env env' -> f t t' -> Subenv' f (env, t) (env', t')
+  SENo :: Subenv' f env env' -> Subenv' f (env, t) env'
+  SENone :: Subenv' f env ()
+
+-- t' contains only some of the values from t
+data Sparse t t' where
+  SPYes :: Sparse t t
+  SPNo :: Sparse t ()
+  SPPair :: Sparse t1 t1' -> Sparse t2 t2' -> Sparse (t1, t2) (t1', t2')
+
+type Subenv = Subenv' (:~:)  -- normal sub-environment
+type SSubenv = Subenv' Sparse  -- sparse sub-environment
+
+subenvPopLHS
+  :: IsArrayInstr arr => SSubenv (Ctg env') denv -> ELeftHandSide t env env'
+  -> (forall denv' t'. SSubenv (Ctg env) denv'
+                    -> Sparse (Ctg t) t'
+                    -> (forall e. PreOpenExp arr e denv -> PreOpenExp arr e (denv', t'))
+                    -> r)
+  -> r
+subenvPopLHS (SEYes sub SPYes) LeftHandSideSingle{} k = k sub SPYes id
+subenvPopLHS (SEYes sub SPNo) LeftHandSideSingle{} k = k sub SPNo id
+subenvPopLHS (SEYes _   SPPair{}) LeftHandSideSingle{} _ = error "impossible"
+subenvPopLHS (SENo sub) LeftHandSideSingle{} k = k sub SPNo (`Pair` Nil)
+subenvPopLHS SENone LeftHandSideSingle{} k = k SENone SPNo (\_ -> Pair Nil Nil)
+subenvPopLHS sub LeftHandSideWildcard{} k = k sub SPNo (`Pair` Nil)
+subenvPopLHS sub (LeftHandSidePair lhs1 lhs2) k =
+  subenvPopLHS sub lhs2 $ \sub2 sp2 split2 ->
+  subenvPopLHS sub2 lhs1 $ \sub1 sp1 split1 ->
+    k sub1 (SPPair sp1 sp2)
+      (\e -> splitLet (split2 e) $ \_ wrap2 eD1 e2 ->
+             wrap2 $
+             splitLet (split1 eD1) $ \w wrap1 eD e1 ->
+             wrap1 $
+               Pair eD (Pair e1 (weakenE w e2)))
+
+subenvPlus
+  :: IsArrayInstr arr
+  => TupR SCtgE env
+  -> (forall t t1 t2 e.
+          TupR SCtgE t
+       -> f t t1 -> PreOpenExp arr e t1
+       -> f t t2 -> PreOpenExp arr e t2
+       -> (forall t3. f t t3 -> PreOpenExp arr e t3 -> r)
+       -> r)
+  -> Subenv' f env env1 -> PreOpenExp arr env' env1
+  -> Subenv' f env env2 -> PreOpenExp arr env' env2
+  -> (forall env3. Subenv' f env env3 -> PreOpenExp arr env' env3 -> r) -> r
+subenvPlus ctgty f (SEYes sub1 x) e1 (SEYes sub2 y) e2 k =
+  let (ctgty1, ctgty2) = splitTupRpair ctgty in
+  splitLet e1 $ \w1 wrap1 e1E e1T ->
+  splitLet (weakenE w1 e2) $ \w2 wrap2 e2E e2T ->
+  subenvPlus ctgty1 f sub1 (weakenE w2 e1E) sub2 e2E $ \sub3 e3E ->
+  f ctgty2 x (weakenE w2 e1T) y e2T $ \z e3T ->
+  k (SEYes sub3 z) (wrap1 $ wrap2 $ Pair e3E e3T)
+subenvPlus ctgty f (SEYes sub1 x) e1 (SENo sub2) e2 k =
+  splitLet e1 $ \w1 wrap1 e1E e1T ->
+  subenvPlus (fst (splitTupRpair ctgty)) f sub1 e1E sub2 (weakenE w1 e2) $ \sub3 e3 ->
+    k (SEYes sub3 x) (wrap1 $ Pair e3 e1T)
+subenvPlus ctgty f (SENo sub1) e1 (SEYes sub2 y) e2 k =
+  splitLet e2 $ \w2 wrap2 e2E e2T ->
+  subenvPlus (fst (splitTupRpair ctgty)) f sub1 (weakenE w2 e1) sub2 e2E $ \sub3 e3 ->
+    k (SEYes sub3 y) (wrap2 $ Pair e3 e2T)
+subenvPlus ctgty f (SENo sub1) e1 (SENo sub2) e2 k =
+  subenvPlus (fst (splitTupRpair ctgty)) f sub1 e1 sub2 e2 $ \sub3 e3 ->
+    k (SENo sub3) e3
+subenvPlus _ _ SENone _ sub2 e2 k = k sub2 e2
+subenvPlus _ _ sub1 e1 SENone _ k = k sub1 e1
+
+sparsePlus
+  :: IsArrayInstr arr
+  => TupR SCtgE t
+  -> Sparse t t1 -> PreOpenExp arr env t1
+  -> Sparse t t2 -> PreOpenExp arr env t2
+  -> (forall t3. Sparse t t3 -> PreOpenExp arr env t3 -> r)
+  -> r
+sparsePlus ctgty (SPPair s11 s12) e1 (SPPair s21 s22) e2 k =
+  let (ctgty1, ctgty2) = splitTupRpair ctgty in
+  splitLet e1 $ \w1 wrap1 e11 e12 ->
+  splitLet (weakenE w1 e2) $ \w2 wrap2 e21 e22 ->
+  sparsePlus ctgty1 s11 (weakenE w2 e11) s21 e21 $ \s31 e31 ->
+  sparsePlus ctgty2 s12 (weakenE w2 e12) s22 e22 $ \s32 e32 ->
+    k (SPPair s31 s32) (wrap1 $ wrap2 $ Pair e31 e32)
+sparsePlus ctgty SPYes e1 (SPPair s21 s22) e2 k = sparsePlus ctgty (SPPair SPYes SPYes) e1 (SPPair s21 s22) e2 k
+sparsePlus ctgty (SPPair s11 s12) e1 SPYes e2 k = sparsePlus ctgty (SPPair s11 s12) e1 (SPPair SPYes SPYes) e2 k
+
+sparsePlus ctgty SPYes e1 SPYes e2 k = k SPYes (densePlus ctgty e1 e2)
+sparsePlus _     SPNo _ SPNo _ k = k SPNo Nil
+sparsePlus _     s1 e1 SPNo _ k = k s1 e1
+sparsePlus _     SPNo _ s2 e2 k = k s2 e2
+
+densePlus :: IsArrayInstr arr => TupR SCtgE t -> PreOpenExp arr env t -> PreOpenExp arr env t -> PreOpenExp arr env t
+densePlus TupRunit _ _ = Nil
+densePlus (TupRsingle (SCEFloat t)) e1 e2 = PrimApp (PrimAdd (FloatingNumType t)) (Pair e1 e2)
+densePlus (TupRsingle (SCEVector _ _)) _ _ = error "AD: vectors not yet supported"
+densePlus (TupRpair a b) e1 e2 =
+  splitLet e1 $ \w1 wrap1 e1a e1b ->
+  splitLet (weakenE w1 e2) $ \w2 wrap2 e2a e2b ->
+  wrap1 $ wrap2 $
+    Pair (densePlus a (weakenE w2 e1a) e2a) (densePlus b (weakenE w2 e1b) e2b)
+
+onehotSubenv
+  :: Idx env a
+  -> (forall denv. SSubenv (Ctg env) denv -> (PreOpenExp arr env' (Ctg a) -> PreOpenExp arr env' denv) -> r)
+  -> r
+onehotSubenv ZeroIdx k = k (SEYes SENone SPYes) (Nil `Pair`)
+onehotSubenv (SuccIdx idx) k = onehotSubenv idx $ \sub f -> k (SENo sub) f
+
+chadExp
+  :: IsArrayInstr arr
+  => TypeR env
+  -> PreOpenExp arr env a
+  -> (forall tape.
+          PreOpenExp arr env (a, tape)  -- primal
+       -> (forall env' sctg r'.
+               ExpVars env' tape  -- reconstruction of the tape
+            -> Sparse (Ctg a) sctg  -- incoming cotangent structure
+            -> PreOpenExp arr env' sctg  -- incoming cotangent
+            -> (forall denv.
+                    SSubenv (Ctg env) denv  -- outgoing environment cotangent structure
+                 -> PreOpenExp arr env' denv  -- outgoing environment cotangent
+                 -> r')
+            -> r')
+       -> r)
+  -> r
+chadExp envtyp topexp k = case topexp of
+  Let lhs rhs body ->
+    chadExp envtyp rhs $ \rhs1 rhsk2 ->
+    chadExp (extendLHSenvType envtyp lhs) body $ \body1 bodyk2 ->
+    let primal =
+          splitLet rhs1 $ \wwrap1 wrap1 rhs1p rhs1t ->
+          wrap1 $
+          rebuildLHSCPS lhs $ \lhs' wlhs' ->
+          Let lhs' rhs1p $
+          splitLet (weakenE (sinkWithLHS lhs lhs' wwrap1) body1) $ \wwrap2 wrap2 body1p body1t ->
+          wrap2 $
+            Pair body1p
+                 (Pair (weakenE (wwrap2 .> wlhs') rhs1t) body1t)
+    in
+    k primal $ \tapevars bodyctgsparsity bodyctg k' ->
+    let (tapevars1, tapevars2) = splitTupRpair tapevars in
+    bodyk2 tapevars2 bodyctgsparsity bodyctg $ \bodyretse bodyenvctg ->
+    subenvPopLHS bodyretse lhs $ \bodyupse rhsctgsparsity split ->
+    splitLet (split bodyenvctg) $ \w wrap envctg1 rhsctg ->
+    rhsk2 (weakenVars w tapevars1) rhsctgsparsity rhsctg $ \rhsupse rhsenvctg ->
+    subenvPlus (ctgTypeE envtyp) sparsePlus bodyupse envctg1 rhsupse rhsenvctg $ \upse envctg ->
+    k' upse (wrap envctg)
+
+  Evar var ->
+    k (Pair (Evar var) Nil) $ \_ sparsity ctg k' ->
+    case sparsity of
+      SPYes -> onehotSubenv (varIdx var) $ \sub f -> k' sub (f ctg)
+      SPNo -> k' SENone Nil
+      SPPair _ _ -> error "impossible"
+
+  Foreign{} ->
+    internalError "foreign calls not supported in AD"
+
+  Pair eA eB ->
+    chadExp envtyp eA $ \eA1 eAk2 ->
+    chadExp envtyp eB $ \eB1 eBk2 ->
+    let primal =
+          splitLet eA1 $ \wwrap1 wrap1 eA1p eA1t ->
+          splitLet (weakenE wwrap1 eB1) $ \wwrap2 wrap2 eB1p eB1t ->
+          wrap1 $ wrap2 $
+            Pair (Pair (weakenE wwrap2 eA1p) eB1p)
+                 (Pair (weakenE wwrap2 eA1t) eB1t)
+    in
+    k primal $ \tapevars (ctgsparsity :: Sparse (a, b) c) ctg k' ->
+    let ctgsparsity' :: Sparse (a, b) c
+        ctgsparsity' = case ctgsparsity of
+                         SPNo -> SPNo
+                         SPPair s1 s2 -> SPPair s1 s2
+                         SPYes -> SPPair SPYes SPYes
+    in
+    case ctgsparsity' of
+      SPNo -> k' SENone Nil
+      SPPair sparsity1 sparsity2 ->
+        splitLet ctg $ \w wrap ctg1 ctg2 ->
+        eAk2 (weakenVars w (fst (splitTupRpair tapevars))) sparsity1 ctg1 $ \se1 envctg1 ->
+        eBk2 (weakenVars w (snd (splitTupRpair tapevars))) sparsity2 ctg2 $ \se2 envctg2 ->
+        subenvPlus (ctgTypeE envtyp) sparsePlus se1 envctg1 se2 envctg2 $ \upse envctg ->
+          k' upse (wrap envctg)
+      SPYes -> error "impossible"
+
+  Nil -> k (Pair Nil Nil) (\_ _ _ k' -> k' SENone Nil)
+
+  _ -> _
+
+splitLet
+  :: IsArrayInstr arr
+  => PreOpenExp arr env (a, b)
+  -> (forall env'. env :> env'
+                -> (forall c. PreOpenExp arr env' c -> PreOpenExp arr env c)
+                -> PreOpenExp arr env' a
+                -> PreOpenExp arr env' b
+                -> r)
+  -> r
+splitLet (Pair e1 e2) k = k weakenId id e1 e2
+splitLet e k =
+  declareVarsCPS (expType e) $ \lhs w vars ->
+  let (vars1, vars2) = splitTupRpair (vars weakenId) in
+    k w (Let lhs e) (returnExpVars vars1) (returnExpVars vars2)
+
+-- travPreOpenExp
+--   :: forall m arr env a.
+--      Applicative m
+--   => (forall arr' env' a'.
+--             (PreOpenExp arr' env' a' -> m (PreOpenExp arr' env' a'))
+--          -> (forall b1 b2. arr' (b1 -> b2) -> PreOpenExp arr' env' b1 -> m (PreOpenExp arr' env' b2))
+--          -> PreOpenExp arr' env' a' -> m (PreOpenExp arr' env' a'))
+--   -> (forall env' a' b'. arr (a' -> b') -> PreOpenExp arr env' a' -> m (PreOpenExp arr env' b'))
+--   -> PreOpenExp arr env a -> m (PreOpenExp arr env a)
+-- travPreOpenExp transf transAI = transf trav transAI
+--   where
+--     trav = \case
+--       Let lhs bnd body  -> Let lhs <$> rec bnd <*> rec body
+--       Evar var -> pure $ Evar var
+--       Foreign repr asm fun a -> Foreign repr asm <$> recFunNAI fun <*> rec a
+
+--     rec :: PreOpenExp arr env' a' -> m (PreOpenExp arr env' a')
+--     rec = travPreOpenExp transf transAI
+
+--     recFun :: PreOpenFun arr env' a' -> m (PreOpenFun arr env' a')
+--     recFun (Lam lhs fun) = Lam lhs <$> recFun fun
+--     recFun (Body acc) = Body <$> travPreOpenExp transf transAI acc
+
+--     recFunNAI :: PreOpenFun NoArrayInstr env' a' -> m (PreOpenFun NoArrayInstr env' a')
+--     recFunNAI (Lam lhs fun) = Lam lhs <$> recFunNAI fun
+--     recFunNAI (Body acc) = Body <$> travPreOpenExp transf (\case {}) acc
+
 -- recursePreOpenAcc
 --   :: forall f g m aenv aenv' a.
 --      (Applicative m, HasArraysR f)
@@ -341,6 +582,48 @@ travPreOpenAcc transf = transf $ \case
 --   Abody' :: acc aenv t -> PreOpenAfun' acc aenv '[] t
 --   Alam' :: ALeftHandSide s aenv aenv' -> PreOpenAfun' acc aenv' args t -> PreOpenAfun' acc aenv (s ': args) t
 
+data SCtgA t where
+  SCAArray :: ShapeR sh -> SCtgE t -> SCtgA (Array sh t)
+  SCANil :: SCtgA ()
+  SCAPair :: SCtgA a -> SCtgA b -> SCtgA (a, b)
+
+data SCtgE t where
+  SCEFloat :: FloatingType t -> SCtgE t
+  SCEVector :: KnownNat n => Int -> FloatingType t -> SCtgE (Vec n t)
+
+instance Distributes SCtgE where
+  reprIsSingle (SCEFloat t) = reprIsSingle (SingleScalarType (NumSingleType (FloatingNumType t)))
+  reprIsSingle (SCEVector n t) = reprIsSingle (VectorScalarType (VectorType n (NumSingleType (FloatingNumType t))))
+  pairImpossible (SCEFloat t) = pairImpossible (SingleScalarType (NumSingleType (FloatingNumType t)))
+  unitImpossible (SCEFloat t) = unitImpossible (SingleScalarType (NumSingleType (FloatingNumType t)))
+
+ctgTypeE :: TypeR t -> TupR SCtgE (Ctg t)
+ctgTypeE = \case
+  TupRunit -> TupRunit
+  TupRpair t1 t2 -> TupRpair (ctgTypeE t1) (ctgTypeE t2)
+  TupRsingle (SingleScalarType s) -> case s of
+    NumSingleType (IntegralNumType t) -> goInt (Proxy @0) t TupRunit
+    NumSingleType (FloatingNumType t@TypeHalf) -> TupRsingle (SCEFloat t)
+    NumSingleType (FloatingNumType t@TypeFloat) -> TupRsingle (SCEFloat t)
+    NumSingleType (FloatingNumType t@TypeDouble) -> TupRsingle (SCEFloat t)
+  TupRsingle (VectorScalarType v) -> case v of
+    (VectorType _ (NumSingleType (IntegralNumType t)) :: VectorType (Vec n a)) -> goInt (Proxy @n) t TupRunit
+    VectorType n (NumSingleType (FloatingNumType t@TypeHalf)) -> TupRsingle (SCEVector n t)
+    VectorType n (NumSingleType (FloatingNumType t@TypeFloat)) -> TupRsingle (SCEVector n t)
+    VectorType n (NumSingleType (FloatingNumType t@TypeDouble)) -> TupRsingle (SCEVector n t)
+  where
+    goInt :: Proxy n -> IntegralType t -> ((Ctg t ~ (), Ctg (Vec n t) ~ ()) => r) -> r
+    goInt _ TypeInt k = k
+    goInt _ TypeInt8 k = k
+    goInt _ TypeInt16 k = k
+    goInt _ TypeInt32 k = k
+    goInt _ TypeInt64 k = k
+    goInt _ TypeWord k = k
+    goInt _ TypeWord8 k = k
+    goInt _ TypeWord16 k = k
+    goInt _ TypeWord32 k = k
+    goInt _ TypeWord64 k = k
+
 declareVarsCPS :: TupR s t
                -> (forall env'. LeftHandSide s t env env'
                              -> env :> env'
@@ -360,6 +643,11 @@ rebuildLHSCPS
 rebuildLHSCPS lhs k
   | Exists lhs' <- rebuildLHS lhs
   = k lhs' (weakenWithLHS lhs')
+
+extendLHSenvType :: TupR s env -> LeftHandSide s t env env' -> TupR s env'
+extendLHSenvType t (LeftHandSideSingle s) = TupRpair t (TupRsingle s)
+extendLHSenvType t LeftHandSideWildcard{} = t
+extendLHSenvType t (LeftHandSidePair lhs1 lhs2) = extendLHSenvType (extendLHSenvType t lhs1) lhs2
 
 data LLHS l s t env env' where
   LLHSSingle :: l t -> s t -> LLHS l s t env (env, t)
@@ -468,3 +756,7 @@ llhsToTupR :: LLHS l s t env env' -> TupR (Product (Maybe1 l) s) t
 llhsToTupR (LLHSSingle l t) = TupRsingle (Fun.Pair (Just1 l) t)
 llhsToTupR (LLHSWild t) = mapTupR (Fun.Pair Nothing1) t
 llhsToTupR (LLHSPair lhs1 lhs2) = llhsToTupR lhs1 `TupRpair` llhsToTupR lhs2
+
+-- Naming consistency please
+evars :: ExpVars env a -> PreOpenExp arr env a
+evars = returnExpVars
